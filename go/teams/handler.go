@@ -259,13 +259,27 @@ func HandleOpenTeamAccessRequest(ctx context.Context, g *libkb.GlobalContext, ms
 		var req keybase1.TeamChangeReq
 		joinAsRole := team.chain().inner.OpenTeamJoinAs
 
-		var needPost bool
+		var keybaseInvites []keybase1.UserVersion
+		var needPostMembership bool
 
 		for _, tar := range msg.Tars {
-			uv := NewUserVersion(tar.Uid, tar.EldestSeqno)
+			uv, err := loadUserVersionByUID(ctx, g, tar.Uid)
+			if err != nil {
+				if err == errInviteRequired {
+					keybaseInvites = append(keybaseInvites, uv)
+					g.Log.CDebugf(ctx, "Invite required for %+v", uv)
+				}
+
+				continue
+			}
+
+			//uv := NewUserVersion(tar.Uid, tar.EldestSeqno)
 			currentRole, err := team.MemberRole(ctx, uv)
 			if err != nil {
-				return err
+				// MemberRole never errors out right now, but it may
+				// in the future.
+				g.Log.CDebugf(ctx, "team.MemberRole(%+v) failed with %+v", uv, err)
+				continue
 			}
 
 			if currentRole.IsOrAbove(joinAsRole) {
@@ -274,7 +288,7 @@ func HandleOpenTeamAccessRequest(ctx context.Context, g *libkb.GlobalContext, ms
 				continue
 			}
 
-			needPost = true
+			needPostMembership = true
 
 			switch joinAsRole {
 			case keybase1.TeamRole_READER:
@@ -286,10 +300,50 @@ func HandleOpenTeamAccessRequest(ctx context.Context, g *libkb.GlobalContext, ms
 			}
 		}
 
-		if !needPost {
-			return nil
+		if needPostMembership {
+			err = team.ChangeMembership(ctx, req)
+			if err != nil {
+				return err
+			}
 		}
-		return team.ChangeMembership(ctx, req)
+
+		if len(keybaseInvites) > 0 {
+			if needPostMembership {
+				// Reload team after posting previous link.
+				team, err = Load(ctx, g, keybase1.LoadTeamArg{
+					ID:          msg.TeamID,
+					Public:      msg.TeamID.IsPublic(),
+					ForceRepoll: true,
+				})
+				if err != nil {
+					return err
+				}
+			}
+
+			var invList []SCTeamInvite
+			var inviteSection SCTeamInvites
+			for _, uv := range keybaseInvites {
+				invList = append(invList, SCTeamInvite{
+					Type: "keybase",
+					Name: uv.TeamInviteName(),
+					ID:   NewInviteID(),
+				})
+
+			}
+
+			switch joinAsRole {
+			case keybase1.TeamRole_READER:
+				inviteSection.Readers = &invList
+			case keybase1.TeamRole_WRITER:
+				inviteSection.Readers = &invList
+			default:
+				return fmt.Errorf("Unexpected role to add to open team: %v", joinAsRole)
+			}
+
+			return team.postTeamInvites(ctx, inviteSection)
+		}
+
+		return nil
 	})
 }
 
