@@ -158,7 +158,8 @@ func queryAPIServerForRekeyInfo(g *libkb.GlobalContext) (keybase1.ProblemSet, er
 	}
 
 	var tmp rekeyQueryResult
-	err := g.API.PostDecode(libkb.APIArg{
+	mctx := libkb.NewMetaContextBackground(g)
+	err := g.API.PostDecode(mctx, libkb.APIArg{
 		Endpoint:    "kbfs/problem_sets",
 		SessionType: libkb.APISessionTypeREQUIRED,
 		Args:        args,
@@ -359,7 +360,7 @@ func (r *rekeyMaster) hasGregorTLFRekeyMessages() (ret bool, err error) {
 func (r *rekeyMaster) computeProblems() (nextWait time.Duration, problemsAndDevices *keybase1.ProblemSetDevices, event keybase1.RekeyEvent, err error) {
 	defer r.G().Trace("rekeyMaster#computeProblems", func() error { return err })()
 
-	if loggedIn, _, _ := libkb.IsLoggedIn(r.G(), nil); !loggedIn {
+	if !r.G().ActiveDevice.Valid() {
 		r.G().Log.Debug("| not logged in")
 		nextWait = rekeyTimeoutBackground
 		return nextWait, nil, keybase1.RekeyEvent{EventType: keybase1.RekeyEventType_NOT_LOGGED_IN}, err
@@ -446,14 +447,20 @@ func (r *rekeyMaster) currentDeviceSolvesProblemSet(me *libkb.User, ps keybase1.
 		return ret
 	}
 
-	err = r.G().LoginState().Account(func(a *libkb.Account) {
-		paperKey = a.GetUnlockedPaperEncKey()
-	}, "currentDeviceSolvesProblemSet")
+	m := libkb.NewMetaContextBackground(r.G())
+	if d := m.ActiveDevice().ProvisioningKey(m); d != nil {
+		paperKey = d.EncryptionKey()
+	}
 
 	// We can continue though, so no need to error out
-	if err != nil {
-		r.G().Log.Info("| Error getting paper key: %s\n", err)
-		err = nil
+	if paperKey == nil {
+		m.Debug("| No cached paper key")
+	}
+	if deviceKey != nil {
+		r.G().Log.Debug("| currentDeviceSolvesProblemSet: checking device key: %s", deviceKey.GetKID())
+	}
+	if paperKey != nil {
+		r.G().Log.Debug("| currentDeviceSolvesProblemSet: checking paper key: %s", paperKey.GetKID())
 	}
 
 	for _, tlf := range ps.Tlfs {
@@ -593,14 +600,15 @@ func (u *unkeyedTLFsQueryResult) GetAppStatus() *libkb.AppStatus {
 	return &u.Status
 }
 
-func (r *RekeyHandler2) GetRevokeWarning(_ context.Context, arg keybase1.GetRevokeWarningArg) (res keybase1.RevokeWarning, err error) {
+func (r *RekeyHandler2) GetRevokeWarning(ctx context.Context, arg keybase1.GetRevokeWarningArg) (res keybase1.RevokeWarning, err error) {
 	var u unkeyedTLFsQueryResult
 	actingDevice := arg.ActingDevice
 	if actingDevice.IsNil() {
 		actingDevice = r.G().Env.GetDeviceID()
 	}
+	mctx := libkb.NewMetaContext(ctx, r.G())
 
-	err = r.G().API.GetDecode(libkb.APIArg{
+	err = r.G().API.GetDecode(mctx, libkb.APIArg{
 		Endpoint:    "kbfs/unkeyed_tlfs_from_pair",
 		SessionType: libkb.APISessionTypeREQUIRED,
 		Args: libkb.HTTPArgs{

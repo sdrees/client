@@ -4,20 +4,21 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/keybase/client/go/kbcrypto"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/context"
 )
 
 func getActiveDevicesAndKeys(tc libkb.TestContext, u *FakeUser) ([]*libkb.Device, []libkb.GenericKey) {
 	arg := libkb.NewLoadUserByNameArg(tc.G, u.Username).WithPublicKeyOptional()
 	user, err := libkb.LoadUser(arg)
-	if err != nil {
-		tc.T.Fatal(err)
-	}
+	require.NoError(tc.T, err)
+
 	sibkeys := user.GetComputedKeyFamily().GetAllActiveSibkeys()
 	subkeys := user.GetComputedKeyFamily().GetAllActiveSubkeys()
 
@@ -31,22 +32,35 @@ func getActiveDevicesAndKeys(tc libkb.TestContext, u *FakeUser) ([]*libkb.Device
 }
 
 func doRevokeKey(tc libkb.TestContext, u *FakeUser, kid keybase1.KID) error {
-	revokeEngine := NewRevokeKeyEngine(kid, tc.G)
-	ctx := &Context{
+	revokeEngine := NewRevokeKeyEngine(tc.G, kid)
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: u.NewSecretUI(),
 	}
-	err := RunEngine(revokeEngine, ctx)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, revokeEngine)
+	return err
+}
+
+func doRevokeSig(tc libkb.TestContext, u *FakeUser, sig keybase1.SigID) error {
+	revokeEngine := NewRevokeSigsEngine(tc.G, []string{sig.String()})
+	uis := libkb.UIs{
+		LogUI:    tc.G.UI.GetLogUI(),
+		SecretUI: u.NewSecretUI(),
+	}
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, revokeEngine)
 	return err
 }
 
 func doRevokeDevice(tc libkb.TestContext, u *FakeUser, id keybase1.DeviceID, forceSelf, forceLast bool) error {
-	revokeEngine := NewRevokeDeviceEngine(RevokeDeviceEngineArgs{ID: id, ForceSelf: forceSelf, ForceLast: forceLast}, tc.G)
-	ctx := &Context{
+	revokeEngine := NewRevokeDeviceEngine(tc.G, RevokeDeviceEngineArgs{ID: id, ForceSelf: forceSelf, ForceLast: forceLast})
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: u.NewSecretUI(),
 	}
-	err := RunEngine(revokeEngine, ctx)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, revokeEngine)
 	return err
 }
 
@@ -56,13 +70,13 @@ func assertNumDevicesAndKeys(tc libkb.TestContext, u *FakeUser, numDevices, numK
 		for i, d := range devices {
 			tc.T.Logf("device %d: %+v", i, d)
 		}
-		tc.T.Fatalf("Expected to find %d devices. Found %d.", numDevices, len(devices))
+		require.Fail(tc.T, fmt.Sprintf("Expected to find %d devices. Found %d.", numDevices, len(devices)))
 	}
 	if len(keys) != numKeys {
 		for i, k := range keys {
 			tc.T.Logf("key %d: %+v", i, k)
 		}
-		tc.T.Fatalf("Expected to find %d keys. Found %d.", numKeys, len(keys))
+		require.Fail(tc.T, fmt.Sprintf("Expected to find %d keys. Found %d.", numKeys, len(keys)))
 	}
 }
 
@@ -138,6 +152,24 @@ func testRevokePaperDevice(t *testing.T, upgradePerUserKey bool) {
 	} else {
 		checkPerUserKeyring(t, tc.G, 0)
 	}
+
+	arg := libkb.NewLoadUserByNameArg(tc.G, u.Username)
+	user, err := libkb.LoadUser(arg)
+	require.NoError(t, err)
+
+	var nextSeqno int
+	var postedSeqno int
+	if upgradePerUserKey {
+		nextSeqno = 7
+		postedSeqno = 4
+	} else {
+		nextSeqno = 5
+		postedSeqno = 3
+	}
+	nextExpected, err := user.GetExpectedNextHighSkip(libkb.NewMetaContextForTest(tc))
+	require.NoError(t, err)
+	require.Equal(t, nextExpected.Seqno, keybase1.Seqno(nextSeqno))
+	assertPostedHighSkipSeqno(t, tc, user.GetName(), postedSeqno)
 }
 
 func TestRevokerPaperDeviceTwice(t *testing.T) {
@@ -159,13 +191,14 @@ func testRevokerPaperDeviceTwice(t *testing.T, upgradePerUserKey bool) {
 
 	t.Logf("generate second paper key")
 	{
-		ctx := &Context{
+		uis := libkb.UIs{
 			LogUI:    tc.G.UI.GetLogUI(),
 			LoginUI:  &libkb.TestLoginUI{},
 			SecretUI: &libkb.TestSecretUI{},
 		}
 		eng := NewPaperKey(tc.G)
-		err := RunEngine(eng, ctx)
+		m := NewMetaContextForTest(tc).WithUIs(uis)
+		err := RunEngine2(m, eng)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, len(eng.Passphrase()), "empty passphrase")
 	}
@@ -188,7 +221,7 @@ func testRevokerPaperDeviceTwice(t *testing.T, upgradePerUserKey bool) {
 }
 
 func checkPerUserKeyring(t *testing.T, g *libkb.GlobalContext, expectedCurrentGeneration int) {
-	pukring, err := g.GetPerUserKeyring()
+	pukring, err := g.GetPerUserKeyring(context.Background())
 	require.NoError(t, err)
 	// Weakly check. If the keyring was not initialized, don't worry about it.
 	if pukring.HasAnyKeys() == (expectedCurrentGeneration > 0) {
@@ -198,9 +231,9 @@ func checkPerUserKeyring(t *testing.T, g *libkb.GlobalContext, expectedCurrentGe
 
 	// double check that the per-user-keyring is correct
 	g.ClearPerUserKeyring()
-	pukring, err = g.GetPerUserKeyring()
+	pukring, err = g.GetPerUserKeyring(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, pukring.Sync(context.TODO()))
+	require.NoError(t, pukring.Sync(libkb.NewMetaContextTODO(g)))
 	require.Equal(t, keybase1.PerUserKeyGeneration(expectedCurrentGeneration), pukring.CurrentGeneration())
 }
 
@@ -236,6 +269,12 @@ func TestRevokeKey(t *testing.T) {
 
 // See issue #370.
 func TestTrackAfterRevoke(t *testing.T) {
+	doWithSigChainVersions(func(sigVersion libkb.SigVersion) {
+		_testTrackAfterRevoke(t, sigVersion)
+	})
+}
+
+func _testTrackAfterRevoke(t *testing.T, sigVersion libkb.SigVersion) {
 	tc1 := SetupEngineTest(t, "rev")
 	defer tc1.Cleanup()
 
@@ -246,12 +285,13 @@ func TestTrackAfterRevoke(t *testing.T) {
 
 	t.Logf("create a paperkey")
 	beng := NewPaperKey(tc1.G)
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc1.G.UI.GetLogUI(),
 		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &libkb.TestSecretUI{},
 	}
-	err := RunEngine(beng, ctx)
+	m := NewMetaContextForTest(tc1).WithUIs(uis)
+	err := RunEngine2(m, beng)
 	require.NoError(t, err)
 	paperkey := beng.Passphrase()
 
@@ -265,7 +305,7 @@ func TestTrackAfterRevoke(t *testing.T) {
 	secUI.Passphrase = paperkey
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: u.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -273,7 +313,8 @@ func TestTrackAfterRevoke(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err = RunEngine(eng, ctx)
+	m = NewMetaContextForTest(tc2).WithUIs(uis)
+	err = RunEngine2(m, eng)
 	require.NoError(t, err)
 
 	t.Logf("tc2 revokes tc1 device:")
@@ -282,12 +323,12 @@ func TestTrackAfterRevoke(t *testing.T) {
 
 	// Still logged in on tc1.  Try to use it to track someone.  It should fail
 	// with a KeyRevokedError.
-	_, _, err = runTrack(tc1, u, "t_alice")
+	_, _, err = runTrack(tc1, u, "t_alice", sigVersion)
 	if err == nil {
 		t.Fatal("expected runTrack to return an error")
 	}
-	if _, ok := err.(libkb.KeyRevokedError); !ok {
-		t.Errorf("expected libkb.KeyRevokedError, got %T", err)
+	if _, ok := err.(libkb.BadSessionError); !ok {
+		t.Errorf("expected libkb.BadSessionError, got %T", err)
 	}
 }
 
@@ -302,12 +343,13 @@ func TestSignAfterRevoke(t *testing.T) {
 
 	t.Logf("create a paperkey")
 	beng := NewPaperKey(tc1.G)
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc1.G.UI.GetLogUI(),
 		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &libkb.TestSecretUI{},
 	}
-	err := RunEngine(beng, ctx)
+	m := NewMetaContextForTest(tc1).WithUIs(uis)
+	err := RunEngine2(m, beng)
 	require.NoError(t, err)
 	paperkey := beng.Passphrase()
 
@@ -321,7 +363,7 @@ func TestSignAfterRevoke(t *testing.T) {
 	secUI.Passphrase = paperkey
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: u.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -329,7 +371,8 @@ func TestSignAfterRevoke(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err = RunEngine(eng, ctx)
+	m = NewMetaContextForTest(tc2).WithUIs(uis)
+	err = RunEngine2(m, eng)
 	require.NoError(t, err)
 
 	t.Logf("tc2 revokes tc1 device:")
@@ -349,13 +392,13 @@ func TestSignAfterRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey := libkb.NaclSigningKeyPublic(ret.PublicKey)
-	if !publicKey.Verify(msg, (*libkb.NaclSignature)(&ret.Sig)) {
-		t.Error(libkb.VerificationError{})
+	publicKey := kbcrypto.NaclSigningKeyPublic(ret.PublicKey)
+	if !publicKey.Verify(msg, kbcrypto.NaclSignature(ret.Sig)) {
+		t.Error(kbcrypto.VerificationError{})
 	}
 
 	// This should log out tc1:
-	if err := tc1.G.LogoutIfRevoked(); err != nil {
+	if err := NewMetaContextForTest(tc1).LogoutAndDeprovisionIfRevoked(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -366,15 +409,15 @@ func TestSignAfterRevoke(t *testing.T) {
 		Msg: msg,
 	})
 	if err == nil {
-		t.Fatal("nil error signing after LogoutIfRevoked")
+		t.Fatal("nil error signing after LogoutAndDeprovisionIfRevoked")
 	}
 	if _, ok := err.(libkb.LoginRequiredError); !ok {
 		t.Errorf("error type: %T, expected libkb.LoginRequiredError", err)
 	}
 }
 
-// Check that if not on a revoked device that LogoutIfRevoked doesn't do anything.
-func TestLogoutIfRevokedNoop(t *testing.T) {
+// Check that if not on a revoked device that LogoutAndDeprovisionIfRevoked doesn't do anything.
+func TestLogoutAndDeprovisionIfRevokedNoop(t *testing.T) {
 	tc := SetupEngineTest(t, "rev")
 	defer tc.Cleanup()
 
@@ -382,7 +425,7 @@ func TestLogoutIfRevokedNoop(t *testing.T) {
 
 	AssertLoggedIn(tc)
 
-	if err := tc.G.LogoutIfRevoked(); err != nil {
+	if err := NewMetaContextForTest(tc).LogoutAndDeprovisionIfRevoked(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -399,9 +442,9 @@ func TestLogoutIfRevokedNoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey := libkb.NaclSigningKeyPublic(ret.PublicKey)
-	if !publicKey.Verify(msg, (*libkb.NaclSignature)(&ret.Sig)) {
-		t.Error(libkb.VerificationError{})
+	publicKey := kbcrypto.NaclSigningKeyPublic(ret.PublicKey)
+	if !publicKey.Verify(msg, kbcrypto.NaclSignature(ret.Sig)) {
+		t.Error(kbcrypto.VerificationError{})
 	}
 }
 
@@ -456,4 +499,69 @@ func TestRevokeLastDevice(t *testing.T) {
 	}
 
 	assertNumDevicesAndKeys(tc, u, 0, 0)
+}
+
+func TestRevokeLastDevicePGP(t *testing.T) {
+	tc := SetupEngineTest(t, "rev")
+	u1 := createFakeUserWithPGPOnly(t, tc)
+	assertNumDevicesAndKeys(tc, u1, 0, 1)
+	Logout(tc)
+	tc.Cleanup()
+
+	tc = SetupEngineTest(t, "rev")
+	defer tc.Cleanup()
+
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUIPassphrase(),
+		LoginUI:     &libkb.TestLoginUI{Username: u1.Username},
+		LogUI:       tc.G.UI.GetLogUI(),
+		SecretUI:    u1.NewSecretUI(),
+		GPGUI:       &gpgtestui{},
+	}
+	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
+		t.Fatal(err)
+	}
+	testUserHasDeviceKey(tc)
+	hasZeroPaperDev(tc, u1)
+	if err := AssertProvisioned(tc); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, _ := getActiveDevicesAndKeys(tc, u1)
+	thisDevice := devices[0]
+
+	// Revoking the current device should fail.
+	err := doRevokeDevice(tc, u1, thisDevice.ID, false, false)
+	if err == nil {
+		t.Fatal("Expected revoking the current device to fail.")
+	}
+	if _, ok := err.(libkb.RevokeLastDevicePGPError); !ok {
+		t.Fatalf("expected libkb.RevokeLastDevicePGPError, got %T", err)
+	}
+
+	assertNumDevicesAndKeys(tc, u1, 1, 3)
+
+	// Since this is the last device, it should fail with `force` too:
+	err = doRevokeDevice(tc, u1, thisDevice.ID, true, false)
+	if err == nil {
+		t.Fatal("Expected revoking the current last device to fail.")
+	}
+	if _, ok := err.(libkb.RevokeLastDevicePGPError); !ok {
+		t.Fatalf("expected libkb.RevokeLastDevicePGPError, got %T", err)
+	}
+
+	assertNumDevicesAndKeys(tc, u1, 1, 3)
+
+	// With `force` and `forceLast`, the revoke should also fail because of pgp key
+	err = doRevokeDevice(tc, u1, thisDevice.ID, true, true)
+	if err == nil {
+		t.Fatal("Expected revoking current last device with forceLast to fail")
+	}
+	if _, ok := err.(libkb.RevokeLastDevicePGPError); !ok {
+		t.Fatalf("expected libkb.RevokeLastDevicePGPError, got %T", err)
+	}
+
+	assertNumDevicesAndKeys(tc, u1, 1, 3)
 }

@@ -28,10 +28,7 @@ func TestBootstrap(t *testing.T) {
 
 	// Simulate restarting the service by wiping out the
 	// passphrase stream cache and cached secret keys
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-	}, "account - clear")
+	clearCaches(tc.G)
 	tc.G.GetUPAKLoader().ClearMemory()
 
 	// set server uri to nonexistent ip so api calls will fail
@@ -42,14 +39,13 @@ func TestBootstrap(t *testing.T) {
 	tc.G.ConnectivityMonitor = OfflineConnectivityMonitor{}
 
 	eng := NewLoginOffline(tc.G)
-	ctx := &Context{NetContext: context.Background()}
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
 	beng := NewBootstrap(tc.G)
-	bctx := &Context{NetContext: context.Background()}
-	if err := RunEngine(beng, bctx); err != nil {
+	if err := RunEngine2(m, beng); err != nil {
 		t.Fatal(err)
 	}
 	status := beng.Status()
@@ -87,8 +83,8 @@ func TestBootstrapAfterSignup(t *testing.T) {
 	u1 := CreateAndSignupFakeUser(tc, "login")
 
 	beng := NewBootstrap(tc.G)
-	bctx := &Context{NetContext: context.Background()}
-	if err := RunEngine(beng, bctx); err != nil {
+	m := NewMetaContextForTest(tc)
+	if err := RunEngine2(m, beng); err != nil {
 		t.Fatal(err)
 	}
 	status := beng.Status()

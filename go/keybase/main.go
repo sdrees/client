@@ -10,11 +10,10 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"syscall"
 	"time"
-
-	"golang.org/x/net/context"
 
 	"github.com/keybase/client/go/client"
 	"github.com/keybase/client/go/externals"
@@ -26,6 +25,7 @@ import (
 	"github.com/keybase/client/go/service"
 	"github.com/keybase/client/go/uidmap"
 	"github.com/keybase/go-framed-msgpack-rpc/rpc"
+	"golang.org/x/net/context"
 )
 
 var cmd libcmdline.Command
@@ -40,28 +40,35 @@ func handleQuickVersion() bool {
 	return false
 }
 
+func keybaseExit(exitCode int) {
+	logger.Shutdown()
+	logger.RestoreConsoleMode()
+	os.Exit(exitCode)
+}
+
 func main() {
-	err := libkb.SaferDLLLoading()
+	// Preserve non-critical errors that happen very early during
+	// startup, where logging is not set up yet, to be printed later
+	// when logging is functioning.
+	var startupErrors []error
+
+	if err := libkb.SaferDLLLoading(); err != nil {
+		// Don't abort here. This should not happen on any known
+		// version of Windows, but new MS platforms may create
+		// regressions.
+		startupErrors = append(startupErrors,
+			fmt.Errorf("SaferDLLLoading error: %v", err.Error()))
+	}
 
 	// handle a Quick version query
 	if handleQuickVersion() {
 		return
 	}
 
-	g := libkb.NewGlobalContext()
-	g.Init()
-
-	// Don't abort here. This should not happen on any known version of Windows, but
-	// new MS platforms may create regressions.
-	if err != nil {
-		g.Log.Errorf("SaferDLLLoading error: %v", err.Error())
-	}
-
-	// Set our panel of external services.
-	g.SetServices(externals.GetServices())
+	g := externals.NewGlobalContextInit()
 
 	go HandleSignals(g)
-	err = mainInner(g)
+	err := mainInner(g, startupErrors)
 
 	if g.Env.GetDebug() {
 		// hack to wait a little bit to receive all the log messages from the
@@ -74,12 +81,6 @@ func main() {
 		err = e2
 	}
 	if err != nil {
-		// Note that logger.Error and logger.Errorf are the same, which causes problems
-		// trying to print percent signs, which are used in environment variables
-		// in Windows.
-		// Had to change from Error to Errorf because of go vet because of:
-		// https://github.com/golang/go/issues/6407
-
 		// if errParseArgs, the error was already output (along with usage)
 		if err != errParseArgs {
 			g.Log.Errorf("%s", stripFieldsFromAppStatusError(err).Error())
@@ -89,7 +90,33 @@ func main() {
 		}
 	}
 	if g.ExitCode != keybase1.ExitCode_OK {
-		os.Exit(int(g.ExitCode))
+		keybaseExit(int(g.ExitCode))
+	}
+}
+
+func tryToDisableProcessTracing(log logger.Logger, e *libkb.Env) {
+	if e.GetRunMode() != libkb.ProductionRunMode || e.AllowPTrace() {
+		return
+	}
+
+	if !e.GetFeatureFlags().Admin(e.GetUID()) {
+		// Admin only for now
+		return
+	}
+
+	// We do our best but if it's not possible on some systems or
+	// configurations, it's not a fatal error. Also see documentation
+	// in ptrace_*.go files.
+	if err := libkb.DisableProcessTracing(); err != nil {
+		log.Debug("Unable to disable process tracing: %v", err.Error())
+	} else {
+		log.Debug("DisableProcessTracing call succeeded")
+	}
+}
+
+func logStartupIssues(errors []error, log logger.Logger) {
+	for _, err := range errors {
+		log.Warning(err.Error())
 	}
 }
 
@@ -103,11 +130,63 @@ func warnNonProd(log logger.Logger, e *libkb.Env) {
 func checkSystemUser(log logger.Logger) {
 	if isAdminUser, match, _ := libkb.IsSystemAdminUser(); isAdminUser {
 		log.Errorf("Oops, you are trying to run as an admin user (%s). This isn't supported.", match)
-		os.Exit(int(keybase1.ExitCode_NOTOK))
+		keybaseExit(int(keybase1.ExitCode_NOTOK))
 	}
 }
 
-func mainInner(g *libkb.GlobalContext) error {
+func osPreconfigure(g *libkb.GlobalContext) {
+	switch libkb.RuntimeGroup() {
+	case keybase1.RuntimeGroup_LINUXLIKE:
+		// On Linux, we used to put the mountdir in a different location, and
+		// then we changed it, and also added a default mountdir config var so
+		// we'll know if the user has changed it.
+		// Update the mountdir to the new location, but only if they're still
+		// using the old mountpoint *and* they haven't changed it since we
+		// added a default. This functionality was originally in the
+		// run_keybase script.
+
+		configReader := g.Env.GetConfig()
+		if configReader == nil {
+			// some commands don't configure config.
+			return
+		}
+
+		userMountdir := configReader.GetMountDir()
+		userMountdirDefault := configReader.GetMountDirDefault()
+		oldMountdirDefault := g.Env.GetOldMountDirDefault()
+		mountdirDefault := g.Env.GetMountDirDefault()
+
+		// User has not set a mountdir yet; e.g., on initial install.
+		nonexistentMountdir := userMountdir == ""
+
+		// User does not have a mountdirdefault; e.g., if last used Keybase
+		// before the change mentioned above.
+		nonexistentMountdirDefault := userMountdirDefault == ""
+
+		usingOldMountdirByDefault := userMountdir == oldMountdirDefault && (userMountdirDefault == oldMountdirDefault || nonexistentMountdirDefault)
+
+		shouldResetMountdir := nonexistentMountdir || usingOldMountdirByDefault
+
+		if nonexistentMountdirDefault || shouldResetMountdir {
+			configWriter := g.Env.GetConfigWriter()
+			if configWriter == nil {
+				// some commands don't configure config.
+				return
+			}
+
+			// Set the user's mountdirdefault to the current one if it's
+			// currently empty.
+			_ = configWriter.SetStringAtPath("mountdirdefault", mountdirDefault)
+
+			if shouldResetMountdir {
+				_ = configWriter.SetStringAtPath("mountdir", mountdirDefault)
+			}
+		}
+	default:
+	}
+}
+
+func mainInner(g *libkb.GlobalContext, startupErrors []error) error {
 	cl := libcmdline.NewCommandLine(true, client.GetExtraFlags())
 	cl.AddCommands(client.GetCommands(cl, g))
 	cl.AddCommands(service.GetCommands(cl, g))
@@ -119,7 +198,7 @@ func mainInner(g *libkb.GlobalContext) error {
 		g.Log.Errorf("Error parsing command line arguments: %s\n\n", err)
 		if _, isHelp := cmd.(*libcmdline.CmdSpecificHelp); isHelp {
 			// Parse returned the help command for this command, so run it:
-			cmd.Run()
+			_ = cmd.Run()
 		}
 		return errParseArgs
 	}
@@ -128,7 +207,9 @@ func mainInner(g *libkb.GlobalContext) error {
 		return nil
 	}
 
-	checkSystemUser(g.Log)
+	if !cmd.GetUsage().AllowRoot && !g.Env.GetAllowRoot() {
+		checkSystemUser(g.Log)
+	}
 
 	if cl.IsService() {
 		startProfile(g)
@@ -147,6 +228,13 @@ func mainInner(g *libkb.GlobalContext) error {
 	g.StartupMessage()
 
 	warnNonProd(g.Log, g.Env)
+	logStartupIssues(startupErrors, g.Log)
+	tryToDisableProcessTracing(g.Log, g.Env)
+
+	// Don't configure mountdir on a nofork command like nix configure redirector.
+	if cl.GetForkCmd() != libcmdline.NoFork {
+		osPreconfigure(g)
+	}
 
 	if err := configOtherLibraries(g); err != nil {
 		return err
@@ -161,6 +249,12 @@ func mainInner(g *libkb.GlobalContext) error {
 		// Errors that come up in printing this warning are logged but ignored.
 		client.PrintOutOfDateWarnings(g)
 	}
+
+	// Warn the user if there is an account reset in progress
+	if !cl.IsService() && !cl.SkipAccountResetCheck() {
+		// Errors that come up in printing this warning are logged but ignored.
+		client.PrintAccountResetWarning(g)
+	}
 	return err
 }
 
@@ -173,7 +267,6 @@ func configOtherLibraries(g *libkb.GlobalContext) error {
 // AutoFork? Standalone? ClientServer? Brew service?  This function deals with the
 // various run configurations that we can run in.
 func configureProcesses(g *libkb.GlobalContext, cl *libcmdline.CommandLine, cmd *libcmdline.Command) (err error) {
-
 	g.Log.Debug("+ configureProcesses")
 	defer func() {
 		g.Log.Debug("- configureProcesses -> %v", err)
@@ -184,7 +277,7 @@ func configureProcesses(g *libkb.GlobalContext, cl *libcmdline.CommandLine, cmd 
 	if cl.IsService() {
 		g.Log.Debug("| in configureProcesses, is service")
 		if runtime.GOOS == "linux" {
-			g.Log.Debug("| calling AutoInstall")
+			g.Log.Debug("| calling AutoInstall for Linux")
 			_, err := install.AutoInstall(g, "", false, 10*time.Second, g.Log)
 			if err != nil {
 				return err
@@ -245,13 +338,11 @@ func configureProcesses(g *libkb.GlobalContext, cl *libcmdline.CommandLine, cmd 
 		if err != nil {
 			return err
 		}
-	} else {
+	} else if fc == libcmdline.ForceFork || g.Env.GetAutoFork() {
 		// If this command warrants an autofork, do it now.
-		if fc == libcmdline.ForceFork || g.Env.GetAutoFork() {
-			newProc, err = client.AutoForkServer(g, cl)
-			if err != nil {
-				return err
-			}
+		newProc, err = client.AutoForkServer(g, cl)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -263,6 +354,11 @@ func configureProcesses(g *libkb.GlobalContext, cl *libcmdline.CommandLine, cmd 
 		if err = client.FixVersionClash(g, cl); err != nil {
 			return err
 		}
+	}
+
+	// Ignore error
+	if err = client.WarnOutdatedKBFS(g, cl); err != nil {
+		g.Log.Debug("| Could not do kbfs versioncheck: %s", err)
 	}
 
 	g.Log.Debug("| After forks; newProc=%v", newProc)
@@ -334,7 +430,8 @@ func configurePath(g *libkb.GlobalContext, cl *libcmdline.CommandLine) error {
 
 func HandleSignals(g *libkb.GlobalContext) {
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, os.Kill)
+	// Note: os.Kill can't be trapped.
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	for {
 		s := <-c
 		if s != nil {
@@ -358,9 +455,9 @@ func HandleSignals(g *libkb.GlobalContext) {
 			}
 
 			g.Log.Debug("calling shutdown")
-			g.Shutdown()
+			_ = g.Shutdown()
 			g.Log.Error("interrupted")
-			os.Exit(3)
+			keybaseExit(3)
 		}
 	}
 }
@@ -399,6 +496,8 @@ func startProfile(g *libkb.GlobalContext) {
 				g.Log.Debug("could not create memory profile: ", err)
 				continue
 			}
+
+			debug.FreeOSMemory()
 			runtime.GC() // get up-to-date statistics
 			if err := pprof.WriteHeapProfile(f); err != nil {
 				g.Log.Debug("could not write memory profile: ", err)
@@ -406,6 +505,13 @@ func startProfile(g *libkb.GlobalContext) {
 			}
 			f.Close()
 			g.Log.Debug("wrote periodic memory profile to %s", f.Name())
+
+			var mems runtime.MemStats
+			runtime.ReadMemStats(&mems)
+			g.Log.Debug("runtime mem alloc:   %v", mems.Alloc)
+			g.Log.Debug("runtime total alloc: %v", mems.TotalAlloc)
+			g.Log.Debug("runtime heap alloc:  %v", mems.HeapAlloc)
+			g.Log.Debug("runtime heap sys:    %v", mems.HeapSys)
 		}
 	}()
 }

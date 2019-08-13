@@ -1,8 +1,5 @@
 {
-  "prelude": [
-    "import * as Constants from '../constants/entities'",
-    "import * as I from 'immutable'"
-  ],
+  "prelude": [],
   "actions": {
     "deleteEntity": {
       "keyPath": "Array<string>",
@@ -10,11 +7,11 @@
     },
     "mergeEntity": {
       "keyPath": "Array<string>",
-      "entities": "I.Map<any, any> | I.List<any>"
+      "entities": ["I.Map<any, any>", "I.List<any>"]
     },
     "replaceEntity": {
       "keyPath": "Array<string>",
-      "entities": "I.Map<any, any> | I.List<any>"
+      "entities": ["I.Map<any, any>", "I.List<any>"]
     },
     "subtractEntity": {
       "keyPath": "Array<string>",

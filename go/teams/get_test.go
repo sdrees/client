@@ -115,6 +115,30 @@ func TestTeamGetConcurrent(t *testing.T) {
 	}
 }
 
+// Test TeamGet on a team that you implicitly admin but
+// are not an explicit member of.
+func TestTeamDetailsAsImplicitAdmin(t *testing.T) {
+	_, tcs, cleanup := setupNTests(t, 1)
+	defer cleanup()
+
+	t.Logf("creates a team")
+	teamName, _ := createTeam2(*tcs[0])
+
+	t.Logf("creates a subteam")
+	_, err := CreateSubteam(context.Background(), tcs[0].G, "bbb", teamName, keybase1.TeamRole_NONE /* addSelfAs */)
+	require.NoError(t, err)
+
+	t.Logf("loads the subteam")
+	team, err := Details(context.Background(), tcs[0].G, teamName.String()+".bbb")
+	require.NoError(t, err)
+	require.Len(t, team.Members.Owners, 0, "should be no team members in subteam")
+	require.Len(t, team.Members.Admins, 0, "should be no team members in subteam")
+	require.Len(t, team.Members.Writers, 0, "should be no team members in subteam")
+	require.Len(t, team.Members.Readers, 0, "should be no team members in subteam")
+	require.Len(t, team.Members.Bots, 0, "should be no team members in subteam")
+	require.Len(t, team.Members.RestrictedBots, 0, "should be no team members in subteam")
+}
+
 // Test loading when you have become an admin after
 // having already cached the team as a non-admin.
 func TestGetMaybeAdminByStringName(t *testing.T) {
@@ -125,11 +149,11 @@ func TestGetMaybeAdminByStringName(t *testing.T) {
 	teamName, _ := createTeam2(*tcs[0])
 
 	t.Logf("U0 creates a subteam")
-	_, err := CreateSubteam(context.TODO(), tcs[0].G, "abc", teamName)
+	_, err := CreateSubteam(context.TODO(), tcs[0].G, "abc", teamName, keybase1.TeamRole_NONE /* addSelfAs */)
 	require.NoError(t, err)
 
 	t.Logf("U0 adds U1 as a reader")
-	_, err = AddMember(context.TODO(), tcs[0].G, teamName.String(), fus[1].Username, keybase1.TeamRole_READER)
+	_, err = AddMember(context.TODO(), tcs[0].G, teamName.String(), fus[1].Username, keybase1.TeamRole_READER, nil)
 	require.NoError(t, err)
 
 	t.Logf("U1 loads and is a reader")
@@ -165,6 +189,44 @@ func TestGetMaybeAdminByStringName(t *testing.T) {
 	require.Equal(t, 1, len(team.chain().inner.SubteamLog), "has loaded previously-stubbed admin links")
 }
 
+func TestGetTeamIDByName(t *testing.T) {
+	fus, tcs, cleanup := setupNTests(t, 2)
+	defer cleanup()
+
+	teamName, teamID := createTeam2(*tcs[0])
+	subteamName, subteamID := createSubteam(tcs[0], teamName, "hello")
+
+	// Test as owner of team and subteam
+	mctx := libkb.NewMetaContextForTest(*tcs[0])
+	res, err := GetTeamIDByNameRPC(mctx, teamName.String())
+	require.NoError(t, err)
+	require.Equal(t, teamID, res)
+
+	res, err = GetTeamIDByNameRPC(mctx, subteamName.String())
+	require.NoError(t, err)
+	require.Equal(t, subteamID, res)
+
+	// Test as unrelated user
+	mctx = libkb.NewMetaContextForTest(*tcs[1])
+	res, err = GetTeamIDByNameRPC(mctx, teamName.String())
+	require.Error(t, err)
+
+	res, err = GetTeamIDByNameRPC(mctx, subteamName.String())
+	require.Error(t, err)
+
+	// Add user 1 as a reader to root team
+	_, err = AddMember(context.Background(), tcs[0].G, teamName.String(), fus[1].Username, keybase1.TeamRole_READER, nil)
+	require.NoError(t, err)
+
+	res, err = GetTeamIDByNameRPC(mctx, teamName.String())
+	require.NoError(t, err)
+	require.Equal(t, teamID, res)
+
+	// Try to get subteam id, should still fail.
+	res, err = GetTeamIDByNameRPC(mctx, subteamName.String())
+	require.Error(t, err)
+}
+
 func teamGet(t *testing.T) {
 	tc := SetupTest(t, "team", 1)
 	defer tc.Cleanup()
@@ -181,14 +243,12 @@ func teamGet(t *testing.T) {
 
 func createTeam(tc libkb.TestContext) string {
 	b, err := libkb.RandBytes(4)
-	if err != nil {
-		tc.T.Fatal(err)
-	}
+	require.NoError(tc.T, err)
+
 	name := hex.EncodeToString(b)
-	err = CreateRootTeam(context.TODO(), tc.G, name, keybase1.TeamSettings{})
-	if err != nil {
-		tc.T.Fatal(err)
-	}
+	_, err = CreateRootTeam(context.TODO(), tc.G, name, keybase1.TeamSettings{})
+	require.NoError(tc.T, err)
+
 	return name
 }
 
@@ -196,13 +256,15 @@ func createTeam2(tc libkb.TestContext) (keybase1.TeamName, keybase1.TeamID) {
 	teamNameS := createTeam(tc)
 	teamName, err := keybase1.TeamNameFromString(teamNameS)
 	require.NoError(tc.T, err)
-	return teamName, teamName.ToPrivateTeamID()
+	id := teamName.ToPrivateTeamID()
+	tc.T.Logf("created team %s: %s", id, teamName)
+	return teamName, id
 }
 
 func createSubteam(tc *libkb.TestContext, parent keybase1.TeamName, subteamNamePart string) (keybase1.TeamName, keybase1.TeamID) {
 	subteamName, err := parent.Append(subteamNamePart)
 	require.NoError(tc.T, err)
-	subteamID, err := CreateSubteam(context.TODO(), tc.G, subteamNamePart, parent)
+	subteamID, err := CreateSubteam(context.TODO(), tc.G, subteamNamePart, parent, keybase1.TeamRole_NONE /* addSelfAs */)
 	require.NoError(tc.T, err)
 	return subteamName, *subteamID
 }

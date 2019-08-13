@@ -19,6 +19,17 @@ func (o ObjFactory) MakeBody(b []byte) (gregor.Body, error)         { return Bod
 func (o ObjFactory) MakeSystem(s string) (gregor.System, error)     { return System(s), nil }
 func (o ObjFactory) MakeCategory(s string) (gregor.Category, error) { return Category(s), nil }
 
+func castMsgID(msgid gregor.MsgID) (ret MsgID, err error) {
+	if msgid == nil {
+		return nil, nil
+	}
+	ret, ok := msgid.(MsgID)
+	if !ok {
+		return nil, errors.New("bad Msg ID; wrong type")
+	}
+	return ret, nil
+}
+
 func castUID(uid gregor.UID) (ret UID, err error) {
 	if uid == nil {
 		return
@@ -114,18 +125,23 @@ func (o ObjFactory) MakeReminder(i gregor.Item, seqno int, t time.Time) (gregor.
 	}, nil
 }
 
-func (o ObjFactory) MakeDismissalByRange(uid gregor.UID, msgid gregor.MsgID, devid gregor.DeviceID, ctime time.Time, c gregor.Category, d time.Time) (gregor.InBandMessage, error) {
+func (o ObjFactory) MakeDismissalByRange(uid gregor.UID, msgid gregor.MsgID, devid gregor.DeviceID, ctime time.Time, c gregor.Category, d time.Time, skipMsgIDs []gregor.MsgID) (gregor.InBandMessage, error) {
 	md, err := o.makeMetadata(uid, msgid, devid, ctime, gregor.InBandMsgTypeUpdate)
 	if err != nil {
 		return nil, err
+	}
+	var skips []MsgID
+	for _, s := range skipMsgIDs {
+		skips = append(skips, MsgID(s.Bytes()))
 	}
 	return InBandMessage{
 		StateUpdate_: &StateUpdateMessage{
 			Md_: md,
 			Dismissal_: &Dismissal{
 				Ranges_: []MsgRange{{
-					EndTime_:  timeToTimeOrOffset(&d),
-					Category_: Category(c.String()),
+					EndTime_:    timeToTimeOrOffset(&d),
+					Category_:   Category(c.String()),
+					SkipMsgIDs_: skips,
 				}},
 			},
 		},
@@ -240,12 +256,42 @@ func (o ObjFactory) UnmarshalState(b []byte) (gregor.State, error) {
 	return state, nil
 }
 
+func (o ObjFactory) UnmarshalMessage(b []byte) (gregor.Message, error) {
+	var message Message
+	err := codec.NewDecoderBytes(b, &codec.MsgpackHandle{WriteExt: true}).Decode(&message)
+	if err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
 func (o ObjFactory) MakeTimeOrOffsetFromTime(t time.Time) (gregor.TimeOrOffset, error) {
 	return timeToTimeOrOffset(&t), nil
 }
 
 func (o ObjFactory) MakeTimeOrOffsetFromOffset(d time.Duration) (gregor.TimeOrOffset, error) {
 	return TimeOrOffset{Offset_: DurationMsec(d / time.Millisecond)}, nil
+}
+
+func (o ObjFactory) ExportTimeOrOffset(t gregor.TimeOrOffset) TimeOrOffset {
+	if t.Time() != nil {
+		return TimeOrOffset{
+			Time_: ToTime(*t.Time()),
+		}
+	}
+	if t.Offset() != nil {
+		return TimeOrOffset{
+			Offset_: DurationMsec(*t.Offset() / time.Millisecond),
+		}
+	}
+	return TimeOrOffset{}
+}
+
+func (o ObjFactory) ExportTimeOrOffsets(ts []gregor.TimeOrOffset) (res []TimeOrOffset) {
+	for _, t := range ts {
+		res = append(res, o.ExportTimeOrOffset(t))
+	}
+	return res
 }
 
 func (o ObjFactory) MakeReminderID(u gregor.UID, msgid gregor.MsgID, seqno int) (gregor.ReminderID, error) {

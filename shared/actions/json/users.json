@@ -1,0 +1,15 @@
+{
+  "prelude": [],
+  "actions": {
+    "blockUser": {
+      "username": "string"
+    },
+    "updateBrokenState": {
+      "newlyBroken": "Array<string>",
+      "newlyFixed": "Array<string>"
+    },
+    "updateFullnames": {
+      "usernameToFullname": "{[username: string]: string}"
+    }
+  }
+}

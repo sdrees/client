@@ -6,6 +6,7 @@ package engine
 import (
 	"sync"
 
+	"github.com/keybase/client/go/kbcrypto"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 	"golang.org/x/crypto/nacl/box"
@@ -50,7 +51,7 @@ func SignED25519(ctx context.Context, g *libkb.GlobalContext, getSecretUI func()
 		return
 	}
 
-	sig := *kp.Private.Sign(arg.Msg)
+	sig := kp.Private.Sign(arg.Msg)
 	publicKey := kp.Public
 	ret = keybase1.ED25519SignatureInfo{
 		Sig:       keybase1.ED25519Signature(sig),
@@ -74,8 +75,8 @@ func SignED25519ForKBFS(ctx context.Context, g *libkb.GlobalContext, getSecretUI
 		return
 	}
 
-	var sigInfo *libkb.NaclSigInfo
-	sigInfo, err = kp.SignV2(arg.Msg, libkb.SignaturePrefixKBFS)
+	var sigInfo kbcrypto.NaclSigInfo
+	sigInfo, err = kp.SignV2(arg.Msg, kbcrypto.SignaturePrefixKBFS)
 	if err != nil {
 		return
 	}
@@ -120,11 +121,11 @@ func UnboxBytes32(ctx context.Context, g *libkb.GlobalContext, getSecretUI func(
 // bundles in arg.Bundles.  Key preference order:  cached device keys,
 // cached paper keys, local device key, user-entered paper key.
 // It returns the KID and bundle index along with the plaintext.
-func UnboxBytes32Any(ctx context.Context, g *libkb.GlobalContext, getSecretUI func() libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg) (res keybase1.UnboxAnyRes, err error) {
-	defer g.CTrace(ctx, "UnboxBytes32Any", func() error { return err })()
+func UnboxBytes32Any(m libkb.MetaContext, getSecretUI func() libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg) (res keybase1.UnboxAnyRes, err error) {
+	defer m.Trace("UnboxBytes32Any", func() error { return err })()
 
 	// find a matching secret key for a bundle in arg.Bundles
-	key, index, err := getMatchingSecretKey(g, getSecretUI, arg)
+	key, index, err := getMatchingSecretKey(m, getSecretUI, arg)
 	if err != nil {
 		return res, err
 	}
@@ -170,9 +171,9 @@ func unboxBytes32(encryptionKey libkb.GenericKey, ciphertext keybase1.EncryptedB
 
 }
 
-func getMatchingSecretKey(g *libkb.GlobalContext, getSecretUI func() libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg) (key libkb.GenericKey, index int, err error) {
+func getMatchingSecretKey(m libkb.MetaContext, getSecretUI func() libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg) (key libkb.GenericKey, index int, err error) {
 	// first check cached keys
-	key, index, err = matchingCachedKey(g, arg)
+	key, index, err = matchingCachedKey(m, arg)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -180,26 +181,26 @@ func getMatchingSecretKey(g *libkb.GlobalContext, getSecretUI func() libkb.Secre
 		return key, index, nil
 	}
 
-	g.Log.Debug("getMatchingSecretKey: acquiring lock")
+	m.Debug("getMatchingSecretKey: acquiring lock")
 	getKeyMu.Lock()
 	defer func() {
 		getKeyMu.Unlock()
-		g.Log.Debug("getMatchingSecretKey: lock released")
+		m.Debug("getMatchingSecretKey: lock released")
 	}()
-	g.Log.Debug("getMatchingSecretKey: lock acquired")
+	m.Debug("getMatchingSecretKey: lock acquired")
 
 	// check cache after acquiring lock
-	key, index, err = matchingCachedKey(g, arg)
+	key, index, err = matchingCachedKey(m, arg)
 	if err != nil {
 		return nil, 0, err
 	}
 	if key != nil {
 		return key, index, nil
 	}
-	g.Log.Debug("getMatchingSecretKey: no matching cached device key found")
+	m.Debug("getMatchingSecretKey: no matching cached device key found")
 
 	// load the user
-	me, err := libkb.LoadMe(libkb.NewLoadUserArg(g))
+	me, err := libkb.LoadMe(libkb.NewLoadUserArgWithMetaContext(m))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -208,22 +209,22 @@ func getMatchingSecretKey(g *libkb.GlobalContext, getSecretUI func() libkb.Secre
 	secretUI := getSecretUI()
 
 	// check the device key for this user
-	key, index, err = matchingDeviceKey(g, secretUI, arg, me)
+	key, index, err = matchingDeviceKey(m, secretUI, arg, me)
 	if err != nil {
 		return nil, 0, err
 	}
 	if key != nil {
 		return key, index, nil
 	}
-	g.Log.Debug("getMatchingSecretKey: no matching device key found")
+	m.Debug("getMatchingSecretKey: no matching device key found")
 
 	if !arg.PromptPaper {
-		g.Log.Debug("UnboxBytes32Any/getMatchingSecretKey: not checking paper keys (promptPaper == false)")
+		m.Debug("UnboxBytes32Any/getMatchingSecretKey: not checking paper keys (promptPaper == false)")
 		return nil, 0, libkb.NoSecretKeyError{}
 	}
 
 	// check the paper keys for this user
-	key, index, err = matchingPaperKey(g, secretUI, arg, me)
+	key, index, err = matchingPaperKey(m, secretUI, arg, me)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -235,36 +236,27 @@ func getMatchingSecretKey(g *libkb.GlobalContext, getSecretUI func() libkb.Secre
 }
 
 // check cached keys for arg.Bundles match.
-func matchingCachedKey(g *libkb.GlobalContext, arg keybase1.UnboxBytes32AnyArg) (key libkb.GenericKey, index int, err error) {
+func matchingCachedKey(m libkb.MetaContext, arg keybase1.UnboxBytes32AnyArg) (key libkb.GenericKey, index int, err error) {
 	// check device key first
-	dkey, err := g.ActiveDevice.EncryptionKey()
+	dkey, err := m.ActiveDevice().EncryptionKey()
 	if err == nil && dkey != nil {
 		if n, ok := kidMatch(dkey, arg.Bundles); ok {
 			return dkey, n, nil
 		}
 	}
 
-	err = g.LoginState().Account(func(a *libkb.Account) {
-		// check paper key
-		pkey := a.GetUnlockedPaperEncKey()
+	device := m.ActiveDevice().ProvisioningKey(m)
+	if device != nil {
+		pkey := device.EncryptionKey()
 		if n, ok := kidMatch(pkey, arg.Bundles); ok {
-			key = pkey
-			index = n
-			return
+			return pkey, n, nil
 		}
-	}, "UnboxBytes32Any")
-	if err != nil {
-		return nil, 0, err
 	}
-	if key != nil {
-		return key, index, nil
-	}
-
 	return nil, 0, nil
 }
 
 // check device key for arg.Bundles match.
-func matchingDeviceKey(g *libkb.GlobalContext, secretUI libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg, me *libkb.User) (key libkb.GenericKey, index int, err error) {
+func matchingDeviceKey(m libkb.MetaContext, secretUI libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg, me *libkb.User) (key libkb.GenericKey, index int, err error) {
 	ekey, err := me.GetDeviceSubkey()
 	if err == nil {
 		if n, ok := kidMatch(ekey, arg.Bundles); ok {
@@ -278,24 +270,24 @@ func matchingDeviceKey(g *libkb.GlobalContext, secretUI libkb.SecretUI, arg keyb
 				Reason:         arg.Reason,
 				UseCancelCache: true,
 			}
-			key, err := g.Keyrings.GetSecretKeyWithPrompt(parg)
+			key, err := m.G().Keyrings.GetSecretKeyWithPrompt(m, parg)
 			if err != nil {
 				return nil, 0, err
 			}
 			return key, n, nil
 		}
 
-		g.Log.Debug("matchingDeviceKey: no match found for ekey in arg.Bundles")
-		logNoMatch(g, ekey, arg.Bundles)
+		m.Debug("matchingDeviceKey: no match found for ekey in arg.Bundles")
+		logNoMatch(m, ekey, arg.Bundles)
 	} else {
-		g.Log.Debug("matchingDeviceKey: ignoring error getting device subkey: %s", err)
+		m.Debug("matchingDeviceKey: ignoring error getting device subkey: %s", err)
 	}
 
 	return nil, 0, nil
 }
 
 // check all the user's paper keys for arg.Bundles match
-func matchingPaperKey(g *libkb.GlobalContext, secretUI libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg, me *libkb.User) (key libkb.GenericKey, index int, err error) {
+func matchingPaperKey(m libkb.MetaContext, secretUI libkb.SecretUI, arg keybase1.UnboxBytes32AnyArg, me *libkb.User) (key libkb.GenericKey, index int, err error) {
 	cki := me.GetComputedKeyInfos()
 	if cki == nil {
 		return nil, 0, nil
@@ -307,20 +299,20 @@ func matchingPaperKey(g *libkb.GlobalContext, secretUI libkb.SecretUI, arg keyba
 			return nil, 0, err
 		}
 		if _, ok := kidMatch(enckey, arg.Bundles); ok {
-			g.Log.Debug("matching paper key: %s", *pdev.Description)
+			m.Debug("matching paper key: %s", *pdev.Description)
 			matchingPaper = append(matchingPaper, pdev)
 		}
 	}
 	if len(matchingPaper) == 0 {
-		g.Log.Debug("no matching paper keys found")
+		m.Debug("no matching paper keys found")
 		return nil, 0, nil
 	}
 
-	phrase, err := libkb.GetPaperKeyForCryptoPassphrase(g, secretUI, arg.Reason, matchingPaper)
+	phrase, err := libkb.GetPaperKeyForCryptoPassphrase(m, secretUI, arg.Reason, matchingPaper)
 	if err != nil {
 		return nil, 0, err
 	}
-	paperPhrase, err := libkb.NewPaperKeyPhraseCheckVersion(g, phrase)
+	paperPhrase, err := libkb.NewPaperKeyPhraseCheckVersion(m, phrase)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -329,21 +321,14 @@ func matchingPaperKey(g *libkb.GlobalContext, secretUI libkb.SecretUI, arg keyba
 		Passphrase: paperPhrase,
 		SkipPush:   true,
 	}
-	bkeng := NewPaperKeyGen(bkarg, g)
-	if err := RunEngine(bkeng, &Context{}); err != nil {
+	bkeng := NewPaperKeyGen(m.G(), bkarg)
+	if err := RunEngine2(m, bkeng); err != nil {
 		return nil, 0, err
 	}
 
 	// find the index for the key they entered (and make sure the key they entered matches)
 	if n, ok := kidMatch(bkeng.EncKey(), arg.Bundles); ok {
-
-		// this key matches, so cache this paper key
-		if err := g.LoginState().Account(func(a *libkb.Account) {
-			a.SetUnlockedPaperKey(bkeng.SigKey(), bkeng.EncKey())
-		}, "UnboxBytes32Any - cache paper key"); err != nil {
-			return nil, 0, err
-		}
-
+		m.ActiveDevice().CacheProvisioningKey(m, bkeng.DeviceWithKeys())
 		return bkeng.EncKey(), n, nil
 	}
 
@@ -363,14 +348,14 @@ func kidMatch(key libkb.GenericKey, bundles []keybase1.CiphertextBundle) (int, b
 	return -1, false
 }
 
-func logNoMatch(g *libkb.GlobalContext, key libkb.GenericKey, bundles []keybase1.CiphertextBundle) {
+func logNoMatch(m libkb.MetaContext, key libkb.GenericKey, bundles []keybase1.CiphertextBundle) {
 	if key == nil {
-		g.Log.Debug("logNoMatch: key is nil")
+		m.Debug("logNoMatch: key is nil")
 		return
 	}
 	kid := key.GetKID()
-	g.Log.Debug("logNoMatch: desired kid: %s", kid)
+	m.Debug("logNoMatch: desired kid: %s", kid)
 	for i, bundle := range bundles {
-		g.Log.Debug("logNoMatch: kid %d: %s (%v)", i, bundle.Kid, kid.Equal(bundle.Kid))
+		m.Debug("logNoMatch: kid %d: %s (%v)", i, bundle.Kid, kid.Equal(bundle.Kid))
 	}
 }

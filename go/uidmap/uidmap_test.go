@@ -186,6 +186,7 @@ func TestRanOutOfTime(t *testing.T) {
 	require.Equal(t, results[0].NormalizedUsername, libkb.NewNormalizedUsername("t_kb"))
 	require.Equal(t, results[0].FullName.FullName, keybase1.FullName("Joe Keybaser"))
 	require.Equal(t, results[0].FullName.EldestSeqno, keybase1.Seqno(1))
+	require.Equal(t, results[0].FullName.Status, keybase1.StatusCode_SCOk)
 	cachedAt = fakeClock.Now()
 
 	// Now we're going to simulate that the fullname resolution became expired, and there
@@ -201,6 +202,7 @@ func TestRanOutOfTime(t *testing.T) {
 	require.Equal(t, results[0].FullName.FullName, keybase1.FullName("Joe Keybaser"))
 	require.Equal(t, results[0].FullName.EldestSeqno, keybase1.Seqno(1))
 	require.Equal(t, results[0].FullName.CachedAt, keybase1.ToTime(cachedAt))
+	require.Equal(t, results[0].FullName.Status, keybase1.StatusCode_SCOk)
 
 	// Same as above, but give enough time to refresh the name from the server
 	hit = false
@@ -212,6 +214,7 @@ func TestRanOutOfTime(t *testing.T) {
 	require.Equal(t, results[0].FullName.FullName, keybase1.FullName("Joe Keybaser"))
 	require.Equal(t, results[0].FullName.EldestSeqno, keybase1.Seqno(1))
 	require.Equal(t, results[0].FullName.CachedAt, keybase1.ToTime(cachedAt))
+	require.Equal(t, results[0].FullName.Status, keybase1.StatusCode_SCOk)
 
 	// In this case, there's not enough time to make any fetches, but it doesn't matter, since our
 	// previous fetch is fresh enough. We should never even hit testBatchIterHook
@@ -225,6 +228,7 @@ func TestRanOutOfTime(t *testing.T) {
 	require.Equal(t, results[0].FullName.FullName, keybase1.FullName("Joe Keybaser"))
 	require.Equal(t, results[0].FullName.EldestSeqno, keybase1.Seqno(1))
 	require.Equal(t, results[0].FullName.CachedAt, keybase1.ToTime(cachedAt))
+	require.Equal(t, results[0].FullName.Status, keybase1.StatusCode_SCOk)
 
 	// Do a happy path for several users:
 	uids = []keybase1.UID{mikem, tKB, max}
@@ -241,5 +245,37 @@ func TestRanOutOfTime(t *testing.T) {
 	require.Equal(t, results[1].FullName.FullName, keybase1.FullName("Joe Keybaser"))
 	require.Equal(t, results[1].FullName.CachedAt, keybase1.ToTime(cachedAt))
 	require.Equal(t, results[1].FullName.EldestSeqno, keybase1.Seqno(1))
+	require.Equal(t, results[1].FullName.Status, keybase1.StatusCode_SCOk)
 	require.Nil(t, results[2].FullName)
+
+	// We should get same results from offline call
+	uidMap.testBatchIterHook = func() {
+		require.Fail(t, "unexpected network activity during offline uidmap call")
+	}
+
+	resultsCached, err := uidMap.MapUIDsToUsernamePackagesOffline(context.TODO(), tc.G, uids, 0)
+	require.NoError(t, err)
+	require.Equal(t, results, resultsCached)
+}
+
+func TestOfflineUIDMapNoCache(t *testing.T) {
+	tc := libkb.SetupTest(t, "TestOfflineUIDMapNoCache", 1)
+	defer tc.Cleanup()
+
+	uidMap := NewUIDMap(10)
+	uids := []keybase1.UID{mikem, max, tKB}
+
+	uidMap.testBatchIterHook = func() {
+		require.Fail(t, "unexpected network activity during offline uidmap call")
+	}
+
+	resultsCached, err := uidMap.MapUIDsToUsernamePackagesOffline(context.TODO(), tc.G, uids, 0)
+	require.NoError(t, err)
+	require.Len(t, resultsCached, 3)
+	require.EqualValues(t, "mikem", resultsCached[0].NormalizedUsername)
+	require.EqualValues(t, "max", resultsCached[1].NormalizedUsername)
+	require.True(t, resultsCached[2].NormalizedUsername.IsNil())
+	for _, v := range resultsCached {
+		require.Nil(t, v.FullName)
+	}
 }

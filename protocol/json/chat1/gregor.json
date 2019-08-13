@@ -29,6 +29,17 @@
         {
           "type": "ConversationID",
           "name": "convID"
+        },
+        {
+          "type": "TopicType",
+          "name": "topicType"
+        },
+        {
+          "type": [
+            null,
+            "UnreadUpdate"
+          ],
+          "name": "unreadUpdate"
         }
       ]
     },
@@ -48,6 +59,10 @@
         {
           "type": "InboxVers",
           "name": "inboxVers"
+        },
+        {
+          "type": "TopicType",
+          "name": "topicType"
         },
         {
           "type": [
@@ -80,11 +95,22 @@
           "name": "inboxVers"
         },
         {
+          "type": "TopicType",
+          "name": "topicType"
+        },
+        {
           "type": [
             null,
             "UnreadUpdate"
           ],
           "name": "unreadUpdate"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "MessageSummary"
+          },
+          "name": "maxMsgs"
         }
       ]
     },
@@ -108,6 +134,10 @@
         {
           "type": "InboxVers",
           "name": "inboxVers"
+        },
+        {
+          "type": "TopicType",
+          "name": "topicType"
         },
         {
           "type": [
@@ -140,6 +170,10 @@
           "name": "inboxVers"
         },
         {
+          "type": "TopicType",
+          "name": "topicType"
+        },
+        {
           "type": [
             null,
             "UnreadUpdate"
@@ -170,6 +204,10 @@
           "name": "inboxVers"
         },
         {
+          "type": "TopicType",
+          "name": "topicType"
+        },
+        {
           "type": [
             null,
             "UnreadUpdate"
@@ -198,6 +236,58 @@
         {
           "type": "ConversationNotificationInfo",
           "name": "settings"
+        },
+        {
+          "type": "TopicType",
+          "name": "topicType"
+        },
+        {
+          "type": [
+            null,
+            "UnreadUpdate"
+          ],
+          "name": "unreadUpdate"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "ExpungePayload",
+      "fields": [
+        {
+          "type": "string",
+          "name": "Action",
+          "lint": "ignore"
+        },
+        {
+          "type": "ConversationID",
+          "name": "convID"
+        },
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
+        },
+        {
+          "type": "Expunge",
+          "name": "expunge"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "MessageSummary"
+          },
+          "name": "maxMsgs"
+        },
+        {
+          "type": "TopicType",
+          "name": "topicType"
+        },
+        {
+          "type": [
+            null,
+            "UnreadUpdate"
+          ],
+          "name": "unreadUpdate"
         }
       ]
     },
@@ -220,6 +310,16 @@
             "keys": "keybase1.DeviceType"
           },
           "name": "unreadNotifyingMessages"
+        },
+        {
+          "type": "int",
+          "name": "compatUnreadMessages",
+          "mpackkey": "UnreadMessages",
+          "jsonkey": "UnreadMessages"
+        },
+        {
+          "type": "boolean",
+          "name": "diff"
         }
       ]
     },
@@ -310,6 +410,13 @@
           "name": "reset"
         },
         {
+          "type": {
+            "type": "array",
+            "items": "ConversationID"
+          },
+          "name": "previewed"
+        },
+        {
           "type": [
             null,
             "UnreadUpdate"
@@ -327,11 +434,134 @@
     },
     {
       "type": "record",
+      "name": "ConversationUpdate",
+      "fields": [
+        {
+          "type": "ConversationID",
+          "name": "convID"
+        },
+        {
+          "type": "ConversationExistence",
+          "name": "existence"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "UpdateConversations",
+      "fields": [
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "ConversationUpdate"
+          },
+          "name": "convUpdates"
+        }
+      ]
+    },
+    {
+      "type": "record",
       "name": "TeamChannelUpdate",
       "fields": [
         {
           "type": "TLFID",
           "name": "teamID"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "SetConvRetentionUpdate",
+      "fields": [
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
+        },
+        {
+          "type": "ConversationID",
+          "name": "convID"
+        },
+        {
+          "type": "RetentionPolicy",
+          "name": "policy"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "SetTeamRetentionUpdate",
+      "fields": [
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
+        },
+        {
+          "type": "keybase1.TeamID",
+          "name": "teamID"
+        },
+        {
+          "type": "RetentionPolicy",
+          "name": "policy"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "SetConvSettingsUpdate",
+      "fields": [
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
+        },
+        {
+          "type": "ConversationID",
+          "name": "convID"
+        },
+        {
+          "type": [
+            null,
+            "ConversationSettings"
+          ],
+          "name": "convSettings"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "KBFSImpteamUpgradeUpdate",
+      "fields": [
+        {
+          "type": "ConversationID",
+          "name": "convID"
+        },
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
+        },
+        {
+          "type": "TopicType",
+          "name": "topicType"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "SubteamRenameUpdate",
+      "fields": [
+        {
+          "type": {
+            "type": "array",
+            "items": "ConversationID"
+          },
+          "name": "convIDs"
+        },
+        {
+          "type": "InboxVers",
+          "name": "inboxVers"
         }
       ]
     }

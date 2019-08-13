@@ -15,7 +15,6 @@ import (
 	jsonw "github.com/keybase/go-jsonw"
 	testvectors "github.com/keybase/keybase-test-vectors/go"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/context"
 )
 
 // Returns a map from error name strings to sets of Go error types. If a test
@@ -69,6 +68,12 @@ func getErrorTypesMap() map[string]map[reflect.Type]bool {
 		"WRONG_PREV": {
 			reflect.TypeOf(ChainLinkPrevHashMismatchError{}): true,
 		},
+		"BAD_CHAIN_LINK": {
+			reflect.TypeOf(ChainLinkError{}): true,
+		},
+		"CHAIN_LINK_STUBBED_UNSUPPORTED": {
+			reflect.TypeOf(ChainLinkStubbedUnsupportedError{}): true,
+		},
 		"SIGCHAIN_V2_STUBBED_SIGNATURE_NEEDED": {
 			reflect.TypeOf(SigchainV2StubbedSignatureNeededError{}): true,
 		},
@@ -111,7 +116,7 @@ type TestList struct {
 	ErrorTypes []string            `json:"error_types"`
 }
 
-// The input data for a single test. Each tests has its own input JSON file.
+// The input data for a single test. Each test has its own input JSON file.
 type TestInput struct {
 	// We omit the "chain" member here, because we need it in blob form.
 	Username  string            `json:"username"`
@@ -193,6 +198,7 @@ func doChainTest(t *testing.T, tc TestContext, testCase TestCase) {
 	// Run the actual sigchain parsing and verification. This is most of the
 	// code that's actually being tested.
 	var sigchainErr error
+	m := NewMetaContextForTest(tc)
 	ckf := ComputedKeyFamily{Contextified: NewContextified(tc.G), kf: keyFamily}
 	sigchain := SigChain{
 		username:          NewNormalizedUsername(input.Username),
@@ -202,7 +208,12 @@ func doChainTest(t *testing.T, tc TestContext, testCase TestCase) {
 	}
 	for i := 0; i < chainLen; i++ {
 		linkBlob := inputBlob.AtKey("chain").AtIndex(i)
-		link, err := ImportLinkFromServer(tc.G, &sigchain, linkBlob, uid)
+		rawLinkBlob, err := linkBlob.Marshal()
+		if err != nil {
+			sigchainErr = err
+			break
+		}
+		link, err := ImportLinkFromServer(m, &sigchain, rawLinkBlob, uid)
 		if err != nil {
 			sigchainErr = err
 			break
@@ -214,7 +225,7 @@ func doChainTest(t *testing.T, tc TestContext, testCase TestCase) {
 		sigchain.chainLinks = append(sigchain.chainLinks, link)
 	}
 	if sigchainErr == nil {
-		_, sigchainErr = sigchain.VerifySigsAndComputeKeys(nil, eldestKID, &ckf)
+		_, sigchainErr = sigchain.VerifySigsAndComputeKeys(NewMetaContextForTest(tc), eldestKID, &ckf, uid)
 	}
 
 	// Some tests expect an error. If we get one, make sure it's the right
@@ -254,7 +265,7 @@ func doChainTest(t *testing.T, tc TestContext, testCase TestCase) {
 	// Check the expected results: total unrevoked links, sibkeys, and subkeys.
 	unrevokedCount := 0
 
-	idtable, err := NewIdentityTable(tc.G, eldestKID, &sigchain, nil)
+	idtable, err := NewIdentityTable(NewMetaContextForTest(tc), eldestKID, &sigchain, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +327,7 @@ func doChainTest(t *testing.T, tc TestContext, testCase TestCase) {
 }
 
 func storeAndLoad(t *testing.T, tc TestContext, chain *SigChain) {
-	err := chain.Store(context.Background())
+	err := chain.Store(NewMetaContextForTest(tc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,9 +341,8 @@ func storeAndLoad(t *testing.T, tc TestContext, chain *SigChain) {
 			public: chain.GetCurrentTailTriple(),
 			uid:    chain.uid,
 		},
-		chainType:    PublicChain,
-		Contextified: NewContextified(tc.G),
-		ctx:          context.Background(),
+		chainType:        PublicChain,
+		MetaContextified: NewMetaContextified(NewMetaContextForTest(tc)),
 	}
 	sgl.chain = chain
 	sgl.dirtyTail = chain.GetCurrentTailTriple()
@@ -343,6 +353,10 @@ func storeAndLoad(t *testing.T, tc TestContext, chain *SigChain) {
 	sgl.chain = nil
 	sgl.dirtyTail = nil
 	var sc2 *SigChain
+	// Reset the link cache so that we're sure our loads hits storage.
+	tc.G.cacheMu.Lock()
+	tc.G.linkCache = NewLinkCache(1000, time.Hour)
+	tc.G.cacheMu.Unlock()
 	sc2, err = sgl.Load()
 	if err != nil {
 		t.Fatal(err)

@@ -11,11 +11,11 @@ import (
 )
 
 type TrackEngineArg struct {
-	UserAssertion     string
-	Me                *libkb.User
-	Options           keybase1.TrackOptions
-	ForceRemoteCheck  bool
-	AllowSelfIdentify bool
+	UserAssertion    string
+	Me               *libkb.User
+	Options          keybase1.TrackOptions
+	ForceRemoteCheck bool
+	SigVersion       libkb.SigVersion
 }
 
 type TrackEngine struct {
@@ -26,7 +26,7 @@ type TrackEngine struct {
 }
 
 // NewTrackEngine creates a default TrackEngine for tracking theirName.
-func NewTrackEngine(arg *TrackEngineArg, g *libkb.GlobalContext) *TrackEngine {
+func NewTrackEngine(g *libkb.GlobalContext, arg *TrackEngineArg) *TrackEngine {
 	return &TrackEngine{
 		arg:          arg,
 		Contextified: libkb.NewContextified(g),
@@ -56,9 +56,9 @@ func (e *TrackEngine) SubConsumers() []libkb.UIConsumer {
 	}
 }
 
-func (e *TrackEngine) Run(ctx *Context) error {
-	e.G().LocalSigchainGuard().Set(ctx.GetNetContext(), "TrackEngine")
-	defer e.G().LocalSigchainGuard().Clear(ctx.GetNetContext(), "TrackEngine")
+func (e *TrackEngine) Run(m libkb.MetaContext) error {
+	m.G().LocalSigchainGuard().Set(m.Ctx(), "TrackEngine")
+	defer m.G().LocalSigchainGuard().Clear(m.Ctx(), "TrackEngine")
 
 	arg := &keybase1.Identify2Arg{
 		UserAssertion:         e.arg.UserAssertion,
@@ -68,14 +68,28 @@ func (e *TrackEngine) Run(ctx *Context) error {
 		AlwaysBlock:           true,
 	}
 
-	ieng := NewResolveThenIdentify2WithTrack(e.G(), arg, e.arg.Options)
-	if err := RunEngine(ieng, ctx); err != nil {
+	if m.UIs().SessionID != 0 {
+		arg.IdentifyBehavior = keybase1.TLFIdentifyBehavior_GUI
+	} else {
+		arg.IdentifyBehavior = keybase1.TLFIdentifyBehavior_CLI
+	}
+
+	ieng := NewResolveThenIdentify2WithTrack(m.G(), arg, e.arg.Options)
+	if err := RunEngine2(m, ieng); err != nil {
 		return err
 	}
 
-	upk := ieng.Result().Upk
-	var err error
-	loadarg := libkb.NewLoadUserArg(e.G()).WithNetContext(ctx.NetContext).WithUID(upk.Uid).WithPublicKeyOptional()
+	res, err := ieng.Result(m)
+	if err != nil {
+		return err
+	}
+	upk := res.Upk
+
+	if _, uid, _ := libkb.BootstrapActiveDeviceWithMetaContext(m); uid.Equal(upk.GetUID()) {
+		return errors.New("You can't follow yourself.")
+	}
+
+	loadarg := libkb.NewLoadUserArgWithMetaContext(m).WithUID(upk.GetUID()).WithPublicKeyOptional()
 	e.them, err = libkb.LoadUser(loadarg)
 	if err != nil {
 		return err
@@ -83,7 +97,7 @@ func (e *TrackEngine) Run(ctx *Context) error {
 
 	e.confirmResult = ieng.ConfirmResult()
 	if !e.confirmResult.IdentityConfirmed {
-		e.G().Log.Debug("confirmResult: %+v", e.confirmResult)
+		m.Debug("confirmResult: %+v", e.confirmResult)
 		return errors.New("Follow not confirmed")
 	}
 
@@ -94,7 +108,7 @@ func (e *TrackEngine) Run(ctx *Context) error {
 	}
 
 	if !e.arg.Options.ExpiringLocal && e.confirmResult.ExpiringLocal {
-		e.G().Log.Debug("-ExpiringLocal-")
+		m.Debug("-ExpiringLocal-")
 		e.arg.Options.ExpiringLocal = true
 	}
 
@@ -103,8 +117,8 @@ func (e *TrackEngine) Run(ctx *Context) error {
 		Me:      e.arg.Me,
 		Options: e.arg.Options,
 	}
-	teng := NewTrackToken(targ, e.G())
-	return RunEngine(teng, ctx)
+	teng := NewTrackToken(m.G(), targ)
+	return RunEngine2(m, teng)
 }
 
 func (e *TrackEngine) User() *libkb.User {

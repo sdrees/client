@@ -49,7 +49,7 @@ func (c *CmdHome) doSkipTodo(ctx context.Context, cli keybase1.HomeClient) error
 }
 
 func (c *CmdHome) getHome(ctx context.Context, cli keybase1.HomeClient) error {
-	screen, err := cli.HomeGetScreen(ctx, c.markViewed)
+	screen, err := cli.HomeGetScreen(ctx, keybase1.HomeGetScreenArg{MarkViewed: c.markViewed, NumFollowSuggestionsWanted: 10})
 	if err != nil {
 		return err
 	}
@@ -66,8 +66,9 @@ func NewCmdHomeRunner(g *libkb.GlobalContext) *CmdHome {
 
 func NewCmdHome(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
 	return cli.Command{
-		Name:  "home",
-		Usage: "Get and set the 'home' screen",
+		Name: "home",
+		// hide
+		// Usage: "Get and set the 'home' screen",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(NewCmdHomeRunner(g), "home", c)
 		},

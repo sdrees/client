@@ -1,9 +1,0 @@
-// @flow
-import {Component} from 'react'
-
-export type Props = {
-  style?: Object,
-  vertical?: boolean,
-}
-
-declare export default class Divider extends Component<Props> {}

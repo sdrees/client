@@ -10,24 +10,56 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/keybase/client/go/client"
+	"github.com/keybase/client/go/gregor"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/protocol/gregor1"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
-	"github.com/keybase/client/go/service"
+	service "github.com/keybase/client/go/service"
 	"github.com/keybase/client/go/teams"
 	"github.com/keybase/go-framed-msgpack-rpc/rpc"
 	"github.com/stretchr/testify/require"
 	context "golang.org/x/net/context"
 )
 
+type fakeConnectivityMonitor struct {
+	sync.Mutex
+	res libkb.ConnectivityMonitorResult
+}
+
+func (f *fakeConnectivityMonitor) IsConnected(ctx context.Context) libkb.ConnectivityMonitorResult {
+	f.Lock()
+	defer f.Unlock()
+	return f.res
+}
+
+func (f *fakeConnectivityMonitor) Set(r libkb.ConnectivityMonitorResult) {
+	f.Lock()
+	defer f.Unlock()
+	f.res = r
+}
+
+func (f *fakeConnectivityMonitor) CheckReachability(ctx context.Context) error {
+	return nil
+}
+
 func TestRPCs(t *testing.T) {
 	tc := setupTest(t, "rpcs")
-	tc2 := cloneContext(tc)
-
 	defer tc.Cleanup()
+
+	tc2 := cloneContext(tc)
+	defer tc2.Cleanup()
+
+	// Set a connectivity manager we can control, and set NoGregor so that
+	// way it's not overwritten when we startup gregor.
+	fcm := fakeConnectivityMonitor{}
+	fcm.Set(libkb.ConnectivityMonitorYes)
+	tc.G.ConnectivityMonitor = &fcm
+	tc.G.Env.Test.NoGregor = true
 
 	stopCh := make(chan error)
 	svc := service.NewService(tc.G, false)
@@ -54,6 +86,8 @@ func TestRPCs(t *testing.T) {
 	testLoadAllPublicKeysUnverified(t, tc2.G)
 	stage("testLoadUserWithNoKeys")
 	testLoadUserWithNoKeys(t, tc2.G)
+	stage("test LoadUserPlusKeysV2")
+	testLoadUserPlusKeysV2(t, tc2.G)
 	stage("testCheckDevicesForUser")
 	testCheckDevicesForUser(t, tc2.G)
 	stage("testIdentify2")
@@ -62,8 +96,14 @@ func TestRPCs(t *testing.T) {
 	testMerkle(t, tc2.G)
 	stage("testConfig")
 	testConfig(t, tc2.G)
+	stage("testResolve3Offline")
+	testResolve3Offline(t, tc2.G, &fcm)
+	stage("testLoadUserPlusKeysV2Offline")
+	testLoadUserPlusKeysV2Offline(t, tc2.G, &fcm)
+	stage("testGetUpdateInfo2")
+	testGetUpdateInfo2(t, tc2.G)
 
-	if err := client.CtlServiceStop(tc2.G); err != nil {
+	if err := CtlStop(tc2.G); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,6 +111,31 @@ func TestRPCs(t *testing.T) {
 	if err := <-stopCh; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func testResolve3Offline(t *testing.T, g *libkb.GlobalContext, fcm *fakeConnectivityMonitor) {
+	cli, err := client.GetIdentifyClient(g)
+	require.NoError(t, err)
+	fetch := func() {
+		arg := keybase1.Resolve3Arg{Assertion: "uid:eb72f49f2dde6429e5d78003dae0c919", Oa: keybase1.OfflineAvailability_BEST_EFFORT}
+		res, err := cli.Resolve3(context.TODO(), arg)
+		require.NoError(t, err)
+		require.Equal(t, "t_tracy", res.Name)
+	}
+	fetchFail := func(expectedError error) {
+		arg := keybase1.Resolve3Arg{Assertion: "no_such_user_yo", Oa: keybase1.OfflineAvailability_BEST_EFFORT}
+		_, err = cli.Resolve3(context.TODO(), arg)
+		require.Error(t, err)
+		require.IsType(t, expectedError, err)
+	}
+
+	fetch()
+	fcm.Set(libkb.ConnectivityMonitorNo)
+	fetch()
+	fetchFail(libkb.OfflineError{})
+	fcm.Set(libkb.ConnectivityMonitorYes)
+	fetch()
+	fetchFail(libkb.NotFoundError{})
 }
 
 func testIdentifyResolve3(t *testing.T, g *libkb.GlobalContext) {
@@ -83,13 +148,13 @@ func testIdentifyResolve3(t *testing.T, g *libkb.GlobalContext) {
 	// We don't want to hit the cache, since the previous lookup never hit the
 	// server.  For Resolve3, we have to, since we need a username.  So test that
 	// here.
-	if res, err := cli.Resolve3(context.TODO(), "uid:eb72f49f2dde6429e5d78003dae0c919"); err != nil {
+	if res, err := cli.Resolve3(context.TODO(), keybase1.Resolve3Arg{Assertion: "uid:eb72f49f2dde6429e5d78003dae0c919"}); err != nil {
 		t.Fatalf("Resolve failed: %v\n", err)
 	} else if res.Name != "t_tracy" {
 		t.Fatalf("Wrong username: %s != 't_tracy", res.Name)
 	}
 
-	if res, err := cli.Resolve3(context.TODO(), "t_tracy@rooter"); err != nil {
+	if res, err := cli.Resolve3(context.TODO(), keybase1.Resolve3Arg{Assertion: "t_tracy@rooter"}); err != nil {
 		t.Fatalf("Resolve3 failed: %v\n", err)
 	} else if res.Name != "t_tracy" {
 		t.Fatalf("Wrong name: %s != 't_tracy", res.Name)
@@ -97,13 +162,13 @@ func testIdentifyResolve3(t *testing.T, g *libkb.GlobalContext) {
 		t.Fatalf("Wrong uid for tracy: %s\n", res.Id)
 	}
 
-	if _, err := cli.Resolve3(context.TODO(), "foobag@rooter"); err == nil {
+	if _, err := cli.Resolve3(context.TODO(), keybase1.Resolve3Arg{Assertion: "foobag@rooter"}); err == nil {
 		t.Fatalf("expected an error on a bad resolve, but got none")
 	} else if _, ok := err.(libkb.ResolutionError); !ok {
 		t.Fatalf("Wrong error: wanted type %T but got (%v, %T)", libkb.ResolutionError{}, err, err)
 	}
 
-	if res, err := cli.Resolve3(context.TODO(), "t_tracy"); err != nil {
+	if res, err := cli.Resolve3(context.TODO(), keybase1.Resolve3Arg{Assertion: "t_tracy"}); err != nil {
 		t.Fatalf("Resolve3 failed: %v\n", err)
 	} else if res.Name != "t_tracy" {
 		t.Fatalf("Wrong name: %s != 't_tracy", res.Name)
@@ -157,6 +222,66 @@ func testLoadAllPublicKeysUnverified(t *testing.T, g *libkb.GlobalContext) {
 			t.Fatalf("unknown key in response: %s", key.KID)
 		}
 	}
+}
+
+func testLoadUserPlusKeysV2Offline(t *testing.T, g *libkb.GlobalContext, fcm *fakeConnectivityMonitor) {
+	cli, err := client.GetUserClient(g)
+	require.NoError(t, err)
+
+	kid := keybase1.KID("012012a40a6b77a9de5e48922262870565900f5689e179761ea8c8debaa586bfd0090a")
+	uid := keybase1.UID("359c7644857203be38bfd3bf79bf1819")
+
+	fetch := func() {
+		arg := keybase1.LoadUserPlusKeysV2Arg{
+			Uid:        uid,
+			PollForKID: kid,
+			Oa:         keybase1.OfflineAvailability_BEST_EFFORT,
+		}
+		frank, err := cli.LoadUserPlusKeysV2(context.TODO(), arg)
+		require.NoError(t, err)
+		require.NotNil(t, frank)
+		require.Equal(t, len(frank.PastIncarnations), 0)
+		require.Equal(t, frank.Current.Username, "t_frank")
+		_, found := frank.Current.DeviceKeys[kid]
+		require.True(t, found)
+		require.Nil(t, frank.Current.Reset)
+	}
+	fetchFail := func(expectedError error) {
+		arg := keybase1.LoadUserPlusKeysV2Arg{
+			Uid: "00000000000000000000000000000000",
+			Oa:  keybase1.OfflineAvailability_BEST_EFFORT,
+		}
+		_, err := cli.LoadUserPlusKeysV2(context.TODO(), arg)
+		require.Error(t, err)
+		require.IsType(t, expectedError, err)
+	}
+
+	fetch()
+	fcm.Set(libkb.ConnectivityMonitorNo)
+	fetch()
+	fetchFail(libkb.OfflineError{})
+	fcm.Set(libkb.ConnectivityMonitorYes)
+	fetch()
+	fetchFail(libkb.NotFoundError{})
+}
+
+func testLoadUserPlusKeysV2(t *testing.T, g *libkb.GlobalContext) {
+	cli, err := client.GetUserClient(g)
+	if err != nil {
+		t.Fatalf("failed to get a user client: %v", err)
+	}
+
+	kid := keybase1.KID("012012a40a6b77a9de5e48922262870565900f5689e179761ea8c8debaa586bfd0090a")
+	uid := keybase1.UID("359c7644857203be38bfd3bf79bf1819")
+
+	frank, err := cli.LoadUserPlusKeysV2(context.TODO(), keybase1.LoadUserPlusKeysV2Arg{Uid: uid, PollForKID: kid})
+	require.NoError(t, err)
+	require.NotNil(t, frank)
+	require.Equal(t, len(frank.PastIncarnations), 0)
+	require.Equal(t, frank.Current.Username, "t_frank")
+	_, found := frank.Current.DeviceKeys[kid]
+	require.True(t, found)
+	require.Nil(t, frank.Current.Reset)
 }
 
 func testLoadUserWithNoKeys(t *testing.T, g *libkb.GlobalContext) {
@@ -266,6 +391,89 @@ func testConfig(t *testing.T, g *libkb.GlobalContext) {
 	}
 }
 
+func testGetUpdateInfo2(t *testing.T, g *libkb.GlobalContext) {
+	cli, err := client.GetConfigClient(g)
+	require.NoError(t, err)
+	res, err := cli.GetUpdateInfo2(context.TODO(), keybase1.GetUpdateInfo2Arg{})
+	require.NoError(t, err)
+	status, err := res.Status()
+	require.NoError(t, err)
+	require.Equal(t, keybase1.UpdateInfoStatus2_OK, status)
+	platform := "ios"
+	version := "0.0.1"
+	res, err = cli.GetUpdateInfo2(context.TODO(), keybase1.GetUpdateInfo2Arg{Platform: &platform, Version: &version})
+	require.NoError(t, err)
+	status, err = res.Status()
+	require.NoError(t, err)
+	require.Equal(t, keybase1.UpdateInfoStatus2_CRITICAL, status)
+	require.IsType(t, "foo", res.Critical().Message)
+	require.True(t, len(res.Critical().Message) > 10)
+}
+
+type FakeGregorState struct {
+	items []gregor.Item
+}
+
+func (s FakeGregorState) Items() ([]gregor.Item, error) {
+	return s.items, nil
+}
+func (s FakeGregorState) GetItem(msgID gregor.MsgID) (i gregor.Item, r bool) { return }
+func (s FakeGregorState) ItemsInCategory(c gregor.Category) (i []gregor.Item, e error) {
+	return
+}
+func (s FakeGregorState) ItemsWithCategoryPrefix(c gregor.Category) (i []gregor.Item, r error) {
+	return
+}
+func (s FakeGregorState) Marshal() (b []byte, e error)              { return }
+func (s FakeGregorState) Hash() (b []byte, e error)                 { return }
+func (s FakeGregorState) Export() (p gregor.ProtocolState, e error) { return }
+
+func buildGregorItem(category, deviceID, msgID string) gregor.Item {
+	imd := gregor1.ItemAndMetadata{
+		Md_: &gregor1.Metadata{
+			MsgID_: gregor1.MsgID([]byte(msgID)),
+		},
+		Item_: &gregor1.Item{
+			Category_: gregor1.Category(category),
+			Body_:     gregor1.Body(fmt.Sprintf(`{"device_id": "%s"}`, deviceID)),
+		},
+	}
+	return gregor.Item(imd)
+}
+
+func TestDismissDeviceChangeNotifications(t *testing.T) {
+	tc := setupTest(t, "ddcn")
+	mctx := libkb.NewMetaContextForTest(*tc)
+
+	dismisser := &libkb.FakeGregorState{}
+	exceptedDeviceID := "active-device-id"
+	state := &FakeGregorState{
+		items: []gregor.Item{
+			buildGregorItem("anything.else", "a-device-id", "not-dismissable-1"),
+			buildGregorItem("device.new", exceptedDeviceID, "not-dismissable-2"),
+			buildGregorItem("device.new", "a-device-id", "dismissable-1"),
+			buildGregorItem("device.revoked", "another-device-id", "dismissable-2"),
+		},
+	}
+	expectedDismissedIDs := []gregor.MsgID{
+		gregor1.MsgID("dismissable-1"),
+		gregor1.MsgID("dismissable-2"),
+	}
+	require.Equal(t, []gregor.MsgID(nil), dismisser.PeekDismissedIDs())
+	err := service.LoopAndDismissForDeviceChangeNotifications(mctx, dismisser,
+		state, exceptedDeviceID)
+	require.NoError(t, err)
+	require.Equal(t, expectedDismissedIDs, dismisser.PeekDismissedIDs())
+}
+
+func idLiteArg(id keybase1.UserOrTeamID, assertion string) keybase1.IdentifyLiteArg {
+	return keybase1.IdentifyLiteArg{
+		Id:               id,
+		Assertion:        assertion,
+		IdentifyBehavior: keybase1.TLFIdentifyBehavior_CHAT_CLI,
+	}
+}
+
 func TestIdentifyLite(t *testing.T) {
 	tt := newTeamTester(t)
 	defer tt.cleanup()
@@ -288,9 +496,9 @@ func TestIdentifyLite(t *testing.T) {
 
 	t.Logf("make an implicit team")
 	iTeamCreateName := strings.Join([]string{tt.users[0].username, "bob@github"}, ",")
-	iTeamID, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamCreateName, false /*isPublic*/)
+	iTeam, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamCreateName, false /*isPublic*/)
 	require.NoError(t, err)
-	iTeamImpName := getTeamName(iTeamID)
+	iTeamImpName := getTeamName(iTeam.ID)
 	require.True(t, iTeamImpName.IsImplicit())
 	require.NoError(t, err)
 
@@ -317,7 +525,7 @@ func TestIdentifyLite(t *testing.T) {
 		},
 	}
 	for _, unit := range units {
-		res, err := cli.IdentifyLite(context.Background(), keybase1.IdentifyLiteArg{Assertion: unit.assertion})
+		res, err := cli.IdentifyLite(context.Background(), idLiteArg("", unit.assertion))
 		require.NoError(t, err, "IdentifyLite (%s) failed", unit.assertion)
 
 		if len(unit.resID) > 0 {
@@ -332,23 +540,23 @@ func TestIdentifyLite(t *testing.T) {
 	// test identify by assertion and id
 	assertions := []string{"team:" + teamName, "tid:" + team.ID.String()}
 	for _, assertion := range assertions {
-		_, err := cli.IdentifyLite(context.Background(), keybase1.IdentifyLiteArg{Id: team.ID.AsUserOrTeam(), Assertion: assertion})
+		_, err := cli.IdentifyLite(context.Background(), idLiteArg(team.ID.AsUserOrTeam(), assertion))
 		require.NoError(t, err, "IdentifyLite by assertion and id (%s)", assertion)
 	}
 
 	// test identify by id only
-	_, err = cli.IdentifyLite(context.Background(), keybase1.IdentifyLiteArg{Id: team.ID.AsUserOrTeam()})
+	_, err = cli.IdentifyLite(context.Background(), idLiteArg(team.ID.AsUserOrTeam(), ""))
 	require.NoError(t, err, "IdentifyLite id only")
 
 	// test invalid user format
-	_, err = cli.IdentifyLite(context.Background(), keybase1.IdentifyLiteArg{Assertion: "__t_alice"})
+	_, err = cli.IdentifyLite(context.Background(), idLiteArg("", "__t_alice"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad keybase username")
 
 	// test team read error
 	assertions = []string{"team:jwkj22111z"}
 	for _, assertion := range assertions {
-		_, err := cli.IdentifyLite(context.Background(), keybase1.IdentifyLiteArg{Assertion: assertion})
+		_, err := cli.IdentifyLite(context.Background(), idLiteArg("", assertion))
 		aerr, ok := err.(libkb.AppStatusError)
 		if ok {
 			if aerr.Code != libkb.SCTeamNotFound {
@@ -363,7 +571,7 @@ func TestIdentifyLite(t *testing.T) {
 	// test not found assertions
 	assertions = []string{"t_weriojweroi"}
 	for _, assertion := range assertions {
-		_, err := cli.IdentifyLite(context.Background(), keybase1.IdentifyLiteArg{Assertion: assertion})
+		_, err := cli.IdentifyLite(context.Background(), idLiteArg("", assertion))
 		if _, ok := err.(libkb.NotFoundError); !ok {
 			t.Fatalf("assertion %s, error: %s (%T), expected libkb.NotFoundError", assertion, err, err)
 		}
@@ -397,9 +605,9 @@ func TestResolveIdentifyImplicitTeamWithSocial(t *testing.T) {
 	iTeamNameSorted := strings.Join([]string{tt.users[0].username, "bob@github", wong.username}, ",")
 
 	t.Logf("make an implicit team")
-	iTeamID, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
+	iTeam, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
 	require.NoError(t, err)
-	iTeamImpName := getTeamName(iTeamID)
+	iTeamImpName := getTeamName(iTeam.ID)
 	require.True(t, iTeamImpName.IsImplicit())
 
 	cli, err := client.GetIdentifyClient(g)
@@ -415,7 +623,7 @@ func TestResolveIdentifyImplicitTeamWithSocial(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, res.DisplayName, iTeamNameSorted)
-	require.Equal(t, res.TeamID, iTeamID)
+	require.Equal(t, res.TeamID, iTeam.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	require.Nil(t, res.TrackBreaks, "track breaks")
 }
@@ -437,7 +645,7 @@ func TestResolveIdentifyImplicitTeamWithReaders(t *testing.T) {
 	iTeamNameLookup := tt.users[0].username + "#" + strings.Join([]string{"bob@github", wong.username + "@rooter"}, ",")
 
 	t.Logf("make an implicit team")
-	iTeamID, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
+	iTeam, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
 	require.NoError(t, err)
 
 	cli, err := client.GetIdentifyClient(g)
@@ -454,7 +662,7 @@ func TestResolveIdentifyImplicitTeamWithReaders(t *testing.T) {
 	})
 	require.NoError(t, err, "%v %v", err, spew.Sdump(res))
 	require.Equal(t, res.DisplayName, iTeamNameCreate)
-	require.Equal(t, res.TeamID, iTeamID)
+	require.Equal(t, res.TeamID, iTeam.ID)
 	require.Equal(t, []keybase1.UserVersion{tt.users[0].userVersion()}, res.Writers)
 	require.Nil(t, res.TrackBreaks, "track breaks")
 
@@ -490,7 +698,7 @@ func TestResolveIdentifyImplicitTeamWithDuplicates(t *testing.T) {
 	iTeamNameLookup3 := strings.Join([]string{alice.username, bob.username + "@rooter"}, ",") + "#" + bob.username
 
 	t.Logf("make an implicit team")
-	iTeamID, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
+	iTeam, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
 	require.NoError(t, err)
 
 	bob.proveRooter()
@@ -509,11 +717,104 @@ func TestResolveIdentifyImplicitTeamWithDuplicates(t *testing.T) {
 			IdentifyBehavior: keybase1.TLFIdentifyBehavior_DEFAULT_KBFS,
 		})
 		require.NoError(t, err, "%v %v", err, spew.Sdump(res))
-		require.Equal(t, res.TeamID, iTeamID)
+		require.Equal(t, res.TeamID, iTeam.ID)
 		require.Equal(t, res.DisplayName, iTeamNameCreate)
 		require.True(t, compareUserVersionSets([]keybase1.UserVersion{alice.userVersion(), bob.userVersion()}, res.Writers))
 		require.Nil(t, res.TrackBreaks, "track breaks")
 	}
+}
+
+// test ResolveIdentifyImplicitTeam in offline mode
+func TestResolveIdentifyImplicitTeamOffline(t *testing.T) {
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	tt.addUser("abc")
+	g := tt.users[0].tc.G
+	tt.addUser("wong")
+	wong := tt.users[1]
+	wong.proveRooter()
+
+	// Set the ConnectivityMonitor in our test context
+	fcm := fakeConnectivityMonitor{}
+	fcm.Set(libkb.ConnectivityMonitorYes)
+	g.ConnectivityMonitor = &fcm
+	g.Env.Test.NoGregor = true
+
+	iTeamNameCreate := tt.users[0].username + "#" + strings.Join([]string{"bob@github", wong.username}, ",")
+	iTeamNameLookup := tt.users[0].username + "#" + strings.Join([]string{"bob@github", wong.username + "@rooter"}, ",")
+
+	t.Logf("make an implicit team")
+	iTeam, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
+	require.NoError(t, err)
+
+	cli, err := client.GetIdentifyClient(g)
+	require.NoError(t, err, "failed to get new identifyclient")
+	attachIdentifyUI(t, g, newSimpleIdentifyUI())
+
+	fetch := func() {
+		res, err := cli.ResolveIdentifyImplicitTeam(context.Background(), keybase1.ResolveIdentifyImplicitTeamArg{
+			Assertions:       iTeamNameLookup,
+			Suffix:           "",
+			IsPublic:         false,
+			DoIdentifies:     true,
+			Create:           false,
+			IdentifyBehavior: keybase1.TLFIdentifyBehavior_DEFAULT_KBFS,
+			Oa:               keybase1.OfflineAvailability_BEST_EFFORT,
+		})
+		require.NoError(t, err, "%v %v", err, spew.Sdump(res))
+		require.Equal(t, res.DisplayName, iTeamNameCreate)
+		require.Equal(t, res.TeamID, iTeam.ID)
+		require.Equal(t, []keybase1.UserVersion{tt.users[0].userVersion()}, res.Writers)
+		require.Nil(t, res.TrackBreaks, "track breaks")
+	}
+
+	fetchFail := func(expectedError error, matchRegexp string) {
+		_, err := cli.ResolveIdentifyImplicitTeam(context.Background(), keybase1.ResolveIdentifyImplicitTeamArg{
+			Assertions:       iTeamNameCreate,
+			Suffix:           "",
+			IsPublic:         true,
+			DoIdentifies:     false,
+			Create:           false,
+			IdentifyBehavior: keybase1.TLFIdentifyBehavior_DEFAULT_KBFS,
+			Oa:               keybase1.OfflineAvailability_BEST_EFFORT,
+		})
+		require.Error(t, err)
+		if expectedError != nil {
+			require.IsType(t, expectedError, err)
+		} else {
+			require.Regexp(t, matchRegexp, err.Error())
+		}
+	}
+
+	fetch()
+	fcm.Set(libkb.ConnectivityMonitorNo)
+	fetch()
+	fetchFail(libkb.OfflineError{}, "")
+	fcm.Set(libkb.ConnectivityMonitorYes)
+	fetch()
+	fetchFail(nil, `^Team.*does not exist$`)
+}
+
+func testResolveImplicitTeam(t *testing.T, g *libkb.GlobalContext, id keybase1.TeamID, isPublic bool, gen keybase1.Seqno) {
+	cli, err := client.GetIdentifyClient(g)
+	require.NoError(t, err, "failed to get new Identify client")
+	arg := keybase1.ResolveImplicitTeamArg{Id: id}
+	res, err := cli.ResolveImplicitTeam(context.Background(), arg)
+	require.NoError(t, err, "resolve Implicit team worked")
+	if gen == keybase1.Seqno(0) {
+		require.False(t, strings.Contains(res.Name, "conflicted"), "no conflicts")
+	} else {
+		require.True(t, strings.Contains(res.Name, "conflicted"), "found conflicted")
+		require.True(t, strings.Contains(res.Name, fmt.Sprintf("#%d", int(gen))), "found conflict gen #")
+	}
+}
+
+// doubleTestResolveImplicitTeam calls testResolveImplicitTeam twice, to make sure it
+// it works when we hit the cache (which we will do the second time through).
+func doubleTestResolveImplicitTeam(t *testing.T, g *libkb.GlobalContext, id keybase1.TeamID, isPublic bool, gen keybase1.Seqno) {
+	testResolveImplicitTeam(t, g, id, isPublic, gen)
+	testResolveImplicitTeam(t, g, id, isPublic, gen)
 }
 
 func TestResolveIdentifyImplicitTeamWithConflict(t *testing.T) {
@@ -530,24 +831,16 @@ func TestResolveIdentifyImplicitTeamWithConflict(t *testing.T) {
 	iTeamNameCreate2 := strings.Join([]string{tt.users[0].username, wong.username + "@rooter"}, ",")
 
 	t.Logf("make the teams")
-	iTeamID1, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate1, false /*isPublic*/)
+	iTeam1, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate1, false /*isPublic*/)
 	require.NoError(t, err)
-	iTeamID2, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate2, false /*isPublic*/)
+	iTeam2, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate2, false /*isPublic*/)
 	require.NoError(t, err)
-	require.NotEqual(t, iTeamID1, iTeamID2)
-	t.Logf("t1: %v", iTeamID1)
-	t.Logf("t2: %v", iTeamID2)
+	require.NotEqual(t, iTeam1.ID, iTeam2.ID)
+	t.Logf("t1: %v", iTeam1.ID)
+	t.Logf("t2: %v", iTeam2.ID)
 
-	t.Logf("prove to create the conflict")
-	wong.proveRooter()
-
-	getTeamName := func(teamID keybase1.TeamID) keybase1.TeamName {
-		team, err := teams.Load(context.Background(), g, keybase1.LoadTeamArg{
-			ID: teamID,
-		})
-		require.NoError(t, err)
-		return team.Name()
-	}
+	doubleTestResolveImplicitTeam(t, g, iTeam1.ID, false, keybase1.Seqno(0))
+	doubleTestResolveImplicitTeam(t, g, iTeam2.ID, false, keybase1.Seqno(0))
 
 	getTeamSeqno := func(teamID keybase1.TeamID) keybase1.Seqno {
 		team, err := teams.Load(context.Background(), g, keybase1.LoadTeamArg{
@@ -557,7 +850,12 @@ func TestResolveIdentifyImplicitTeamWithConflict(t *testing.T) {
 		return team.CurrentSeqno()
 	}
 
-	tt.users[0].waitForTeamChangedGregor(getTeamName(iTeamID2).String(), getTeamSeqno(iTeamID2)+1)
+	expectedSeqno := getTeamSeqno(iTeam2.ID) + 1
+
+	t.Logf("prove to create the conflict")
+	wong.proveRooter()
+
+	tt.users[0].waitForTeamChangedGregor(iTeam2.ID, expectedSeqno)
 
 	cli, err := client.GetIdentifyClient(g)
 	require.NoError(t, err, "failed to get new identifyclient")
@@ -575,7 +873,7 @@ func TestResolveIdentifyImplicitTeamWithConflict(t *testing.T) {
 	})
 	require.NoError(t, err, "%v %v", err, spew.Sdump(res))
 	require.Equal(t, res.DisplayName, iTeamNameCreate1)
-	require.Equal(t, res.TeamID, iTeamID1)
+	require.Equal(t, res.TeamID, iTeam1.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	require.Nil(t, res.TrackBreaks, "track breaks")
 
@@ -590,14 +888,14 @@ func TestResolveIdentifyImplicitTeamWithConflict(t *testing.T) {
 	})
 	require.NoError(t, err, "%v %v", err, spew.Sdump(res))
 	require.Equal(t, res.DisplayName, iTeamNameCreate1)
-	require.Equal(t, res.TeamID, iTeamID1)
+	require.Equal(t, res.TeamID, iTeam1.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	require.Nil(t, res.TrackBreaks, "track breaks")
 
 	t.Logf("find out the conflict suffix")
-	iTeamIDxx, _, _, conflicts, err := teams.LookupImplicitTeamAndConflicts(context.TODO(), g, iTeamNameCreate1, false /*isPublic*/)
+	iTeamxx, _, _, conflicts, err := teams.LookupImplicitTeamAndConflicts(context.TODO(), g, iTeamNameCreate1, false /*isPublic*/, teams.ImplicitTeamOptions{})
 	require.NoError(t, err)
-	require.Equal(t, iTeamIDxx, iTeamID1)
+	require.Equal(t, iTeamxx.ID, iTeam1.ID)
 	require.Len(t, conflicts, 1)
 
 	t.Logf("get the conflict loser")
@@ -611,9 +909,13 @@ func TestResolveIdentifyImplicitTeamWithConflict(t *testing.T) {
 	})
 	require.NoError(t, err, "%v %v", err, spew.Sdump(res))
 	require.Equal(t, res.DisplayName, iTeamNameCreate1+" "+libkb.FormatImplicitTeamDisplayNameSuffix(conflicts[0]))
-	require.Equal(t, res.TeamID, iTeamID2)
+	require.Equal(t, res.TeamID, iTeam2.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	require.Nil(t, res.TrackBreaks, "track breaks")
+
+	testResolveImplicitTeam(t, g, iTeam1.ID, false, keybase1.Seqno(0))
+	testResolveImplicitTeam(t, g, iTeam2.ID, false, keybase1.Seqno(1))
+
 }
 
 func TestResolveIdentifyImplicitTeamWithIdentifyFailures(t *testing.T) {
@@ -629,7 +931,7 @@ func TestResolveIdentifyImplicitTeamWithIdentifyFailures(t *testing.T) {
 	iTeamNameCreate := strings.Join([]string{tt.users[0].username, wong.username}, ",")
 
 	t.Logf("make an implicit team")
-	iTeamID, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
+	iTeam, _, _, err := teams.LookupOrCreateImplicitTeam(context.TODO(), g, iTeamNameCreate, false /*isPublic*/)
 	require.NoError(t, err)
 
 	cli, err := client.GetIdentifyClient(g)
@@ -650,7 +952,7 @@ func TestResolveIdentifyImplicitTeamWithIdentifyFailures(t *testing.T) {
 	require.Error(t, err)
 	require.IsType(t, libkb.IdentifiesFailedError{}, err, "%v", err)
 	require.Equal(t, res.DisplayName, iTeamNameCreate)
-	require.Equal(t, res.TeamID, iTeamID)
+	require.Equal(t, res.TeamID, iTeam.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	require.Nil(t, res.TrackBreaks, "expect no track breaks")
 
@@ -678,7 +980,7 @@ func TestResolveIdentifyImplicitTeamWithIdentifyFailures(t *testing.T) {
 	require.Error(t, err)
 	require.IsType(t, libkb.IdentifiesFailedError{}, err, "%v", err)
 	require.Equal(t, res.DisplayName, iTeamNameCreate)
-	require.Equal(t, res.TeamID, iTeamID)
+	require.Equal(t, res.TeamID, iTeam.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	require.Nil(t, res.TrackBreaks) // counter-intuitively, there are no track breaks when the error is fatal in this mode.
 
@@ -695,7 +997,7 @@ func TestResolveIdentifyImplicitTeamWithIdentifyFailures(t *testing.T) {
 	require.Error(t, err)
 	require.IsType(t, libkb.IdentifiesFailedError{}, err, "%v", err)
 	require.Equal(t, res.DisplayName, iTeamNameCreate)
-	require.Equal(t, res.TeamID, iTeamID)
+	require.Equal(t, res.TeamID, iTeam.ID)
 	require.True(t, compareUserVersionSets([]keybase1.UserVersion{tt.users[0].userVersion(), wong.userVersion()}, res.Writers))
 	// In this mode, in addition to the error TrackBreaks is filled.
 	require.NotNil(t, res.TrackBreaks)
@@ -835,6 +1137,9 @@ func (p *simpleIdentifyUI) FinishSocialProofCheck(_ context.Context, arg keybase
 func (p *simpleIdentifyUI) DisplayCryptocurrency(context.Context, keybase1.DisplayCryptocurrencyArg) error {
 	return simpleIdentifyUIError("DisplayCryptocurrency")
 }
+func (p *simpleIdentifyUI) DisplayStellarAccount(context.Context, keybase1.DisplayStellarAccountArg) error {
+	return simpleIdentifyUIError("DisplayStellarAccount")
+}
 func (p *simpleIdentifyUI) DisplayUserCard(context.Context, keybase1.DisplayUserCardArg) error {
 	return nil
 }
@@ -868,13 +1173,13 @@ func newFlakeyRooterAPI(x libkb.ExternalAPI) *flakeyRooterAPI {
 	}
 }
 
-func (e *flakeyRooterAPI) GetText(arg libkb.APIArg) (*libkb.ExternalTextRes, error) {
-	e.G.Log.Debug("| flakeyRooterAPI.GetText, hard = %v, flake = %v", e.hardFail, e.flakeOut)
-	return e.orig.GetText(arg)
+func (e *flakeyRooterAPI) GetText(m libkb.MetaContext, arg libkb.APIArg) (*libkb.ExternalTextRes, error) {
+	m.Debug("| flakeyRooterAPI.GetText, hard = %v, flake = %v", e.hardFail, e.flakeOut)
+	return e.orig.GetText(m, arg)
 }
 
-func (e *flakeyRooterAPI) Get(arg libkb.APIArg) (res *libkb.ExternalAPIRes, err error) {
-	e.G.Log.Debug("| flakeyRooterAPI.Get, hard = %v, flake = %v", e.hardFail, e.flakeOut)
+func (e *flakeyRooterAPI) Get(m libkb.MetaContext, arg libkb.APIArg) (res *libkb.ExternalAPIRes, err error) {
+	m.Debug("| flakeyRooterAPI.Get, hard = %v, flake = %v", e.hardFail, e.flakeOut)
 	// Show an error if we're in flakey mode
 	if strings.Contains(arg.Endpoint, "rooter") {
 		if e.hardFail {
@@ -885,18 +1190,18 @@ func (e *flakeyRooterAPI) Get(arg libkb.APIArg) (res *libkb.ExternalAPIRes, err 
 		}
 	}
 
-	return e.orig.Get(arg)
+	return e.orig.Get(m, arg)
 }
 
-func (e *flakeyRooterAPI) GetHTML(arg libkb.APIArg) (res *libkb.ExternalHTMLRes, err error) {
-	e.G.Log.Debug("| flakeyRooterAPI.GetHTML, hard = %v, flake = %v", e.hardFail, e.flakeOut)
-	return e.orig.GetHTML(arg)
+func (e *flakeyRooterAPI) GetHTML(m libkb.MetaContext, arg libkb.APIArg) (res *libkb.ExternalHTMLRes, err error) {
+	m.Debug("| flakeyRooterAPI.GetHTML, hard = %v, flake = %v", e.hardFail, e.flakeOut)
+	return e.orig.GetHTML(m, arg)
 }
 
-func (e *flakeyRooterAPI) Post(arg libkb.APIArg) (res *libkb.ExternalAPIRes, err error) {
-	return e.orig.Post(arg)
+func (e *flakeyRooterAPI) Post(m libkb.MetaContext, arg libkb.APIArg) (res *libkb.ExternalAPIRes, err error) {
+	return e.orig.Post(m, arg)
 }
 
-func (e *flakeyRooterAPI) PostHTML(arg libkb.APIArg) (res *libkb.ExternalHTMLRes, err error) {
-	return e.orig.PostHTML(arg)
+func (e *flakeyRooterAPI) PostHTML(m libkb.MetaContext, arg libkb.APIArg) (res *libkb.ExternalHTMLRes, err error) {
+	return e.orig.PostHTML(m, arg)
 }

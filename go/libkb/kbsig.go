@@ -8,16 +8,16 @@
 package libkb
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"encoding/base64"
+	"errors"
 	"fmt"
 
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
+	stellar1 "github.com/keybase/client/go/protocol/stellar1"
 	jsonw "github.com/keybase/go-jsonw"
-	triplesec "github.com/keybase/go-triplesec"
 )
 
-func clientInfo(g *GlobalContext) *jsonw.Wrapper {
+func clientInfo(m MetaContext) *jsonw.Wrapper {
 	ret := jsonw.NewDictionary()
 	ret.SetKey("version", jsonw.NewString(Version))
 	ret.SetKey("name", jsonw.NewString(GoClientID))
@@ -33,6 +33,14 @@ type KeySection struct {
 	SigningUser          UserBasic
 	IncludePGPHash       bool
 	PerUserKeyGeneration keybase1.PerUserKeyGeneration
+}
+
+func LinkEntropy() (string, error) {
+	entropyBytes, err := RandBytes(18)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate entropy bytes: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(entropyBytes), nil
 }
 
 func (arg KeySection) ToJSON() (*jsonw.Wrapper, error) {
@@ -163,11 +171,17 @@ func (u *User) ToTrackingStatement(w *jsonw.Wrapper, outcome *IdentifyOutcome) (
 	track.SetKey("remote_proofs", outcome.TrackingStatement())
 
 	if err != nil {
-		return
+		return err
 	}
 
+	entropy, err := LinkEntropy()
+	if err != nil {
+		return err
+	}
+	track.SetKey("entropy", jsonw.NewString(entropy))
+
 	w.SetKey("track", track)
-	return
+	return err
 }
 
 func (u *User) ToUntrackingStatementBasics() *jsonw.Wrapper {
@@ -180,18 +194,15 @@ func (u *User) ToUntrackingStatement(w *jsonw.Wrapper) (err error) {
 	untrack := jsonw.NewDictionary()
 	untrack.SetKey("basics", u.ToUntrackingStatementBasics())
 	untrack.SetKey("id", UIDWrapper(u.GetUID()))
-	w.SetKey("untrack", untrack)
-	return
-}
 
-func (s *SocialProofChainLink) ToTrackingStatement(state keybase1.ProofState) (*jsonw.Wrapper, error) {
-	ret := s.BaseToTrackingStatement(state)
-	err := remoteProofToTrackingStatement(s, ret)
+	entropy, err := LinkEntropy()
 	if err != nil {
-		ret = nil
+		return err
 	}
+	untrack.SetKey("entropy", jsonw.NewString(entropy))
 
-	return ret, err
+	w.SetKey("untrack", untrack)
+	return err
 }
 
 func (g *GenericChainLink) BaseToTrackingStatement(state keybase1.ProofState) *jsonw.Wrapper {
@@ -217,46 +228,83 @@ func (g *GenericChainLink) BaseToTrackingStatement(state keybase1.ProofState) *j
 	return ret
 }
 
-func remoteProofToTrackingStatement(s RemoteProofChainLink, base *jsonw.Wrapper) error {
-	typS := s.TableKey()
-	i, found := RemoteServiceTypes[typS]
-	if !found {
-		return fmt.Errorf("No service type found for %q in proof %d", typS, s.GetSeqno())
-	}
-
-	base.AtKey("remote_key_proof").SetKey("proof_type", jsonw.NewInt(int(i)))
+func remoteProofToTrackingStatement(s RemoteProofChainLink, base *jsonw.Wrapper) {
+	proofType := s.GetProofType()
+	base.AtKey("remote_key_proof").SetKey("proof_type", jsonw.NewInt(int(proofType)))
 	base.AtKey("remote_key_proof").SetKey("check_data_json", s.CheckDataJSON())
 	base.SetKey("sig_type", jsonw.NewInt(SigTypeRemoteProof))
+}
+
+type HighSkip struct {
+	Seqno keybase1.Seqno
+	Hash  LinkID
+}
+
+func NewHighSkip(highSkipSeqno keybase1.Seqno, highSkipHash LinkID) HighSkip {
+	return HighSkip{
+		Seqno: highSkipSeqno,
+		Hash:  highSkipHash,
+	}
+}
+
+func NewInitialHighSkip() HighSkip {
+	return NewHighSkip(keybase1.Seqno(0), nil)
+}
+
+func (h HighSkip) AssertEqualsExpected(expected HighSkip) error {
+	if expected.Seqno != h.Seqno {
+		return fmt.Errorf("Expected highSkip.Seqno %d, got %d.", expected.Seqno, h.Seqno)
+	}
+	if !expected.Hash.Eq(h.Hash) {
+		return fmt.Errorf("Expected highSkip.Hash %s, got %s.", expected.Hash.String(), h.Hash.String())
+	}
 	return nil
 }
 
 type ProofMetadata struct {
-	Me             *User
-	SigningUser    UserBasic
-	Seqno          keybase1.Seqno
-	PrevLinkID     LinkID
-	LinkType       LinkType
-	SigningKey     GenericKey
-	Eldest         keybase1.KID
-	CreationTime   int64
-	ExpireIn       int
-	IncludePGPHash bool
-	SigVersion     SigVersion
-	SeqType        keybase1.SeqType
-	MerkleRoot     *MerkleRoot
+	Me                  *User
+	SigningUser         UserBasic
+	Seqno               keybase1.Seqno
+	PrevLinkID          LinkID
+	LinkType            LinkType
+	SigningKey          GenericKey
+	Eldest              keybase1.KID
+	CreationTime        int64
+	ExpireIn            int
+	IncludePGPHash      bool
+	SigVersion          SigVersion
+	SeqType             keybase1.SeqType
+	MerkleRoot          *MerkleRoot
+	IgnoreIfUnsupported SigIgnoreIfUnsupported
+	// HighSkipFallback is used for teams to provide for a KEX-provisisonee to
+	// provide the provisioner's information as the latest high link.
+	HighSkipFallback *HighSkip
 }
 
-func (arg ProofMetadata) merkleRootInfo(g *GlobalContext) (ret *jsonw.Wrapper) {
+type ProofMetadataRes struct {
+	J     *jsonw.Wrapper
+	Seqno keybase1.Seqno
+}
+
+func (arg ProofMetadata) merkleRootInfo(m MetaContext) (ret *jsonw.Wrapper) {
 	if mr := arg.MerkleRoot; mr != nil {
 		return mr.ToSigJSON()
 	}
-	if mc := g.MerkleClient; mc != nil {
-		ret, _ = mc.LastRootToSigJSON()
+	if mc := m.G().MerkleClient; mc != nil {
+		ret, _ = mc.LastRootToSigJSON(m)
 	}
 	return ret
 }
 
-func (arg ProofMetadata) ToJSON(g *GlobalContext) (ret *jsonw.Wrapper, err error) {
+func (arg ProofMetadata) ToJSON(m MetaContext) (*jsonw.Wrapper, error) {
+	res, err := arg.ToJSON2(m)
+	if err != nil {
+		return nil, err
+	}
+	return res.J, nil
+}
+
+func (arg ProofMetadata) ToJSON2(m MetaContext) (ret *ProofMetadataRes, err error) {
 	// if only Me exists, then that is the signing user too
 	if arg.SigningUser == nil && arg.Me != nil {
 		arg.SigningUser = arg.Me
@@ -278,6 +326,9 @@ func (arg ProofMetadata) ToJSON(g *GlobalContext) (ret *jsonw.Wrapper, err error
 			prev = jsonw.NewString(arg.PrevLinkID.String())
 		}
 	} else {
+		if arg.Me == nil {
+			return nil, fmt.Errorf("missing self user object while signing")
+		}
 		lastSeqno := arg.Me.sigChain().GetLastKnownSeqno()
 		lastLink := arg.Me.sigChain().GetLastKnownID()
 		if lastLink == nil {
@@ -291,7 +342,7 @@ func (arg ProofMetadata) ToJSON(g *GlobalContext) (ret *jsonw.Wrapper, err error
 
 	ctime := arg.CreationTime
 	if ctime == 0 {
-		ctime = g.Clock().Now().Unix()
+		ctime = m.G().Clock().Now().Unix()
 	}
 
 	ei := arg.ExpireIn
@@ -299,15 +350,48 @@ func (arg ProofMetadata) ToJSON(g *GlobalContext) (ret *jsonw.Wrapper, err error
 		ei = SigExpireIn
 	}
 
-	ret = jsonw.NewDictionary()
-	ret.SetKey("tag", jsonw.NewString("signature"))
-	ret.SetKey("ctime", jsonw.NewInt64(ctime))
-	ret.SetKey("expire_in", jsonw.NewInt(ei))
-	ret.SetKey("seqno", jsonw.NewInt64(int64(seqno)))
-	ret.SetKey("prev", prev)
+	j := jsonw.NewDictionary()
+	j.SetKey("tag", jsonw.NewString("signature"))
+	j.SetKey("ctime", jsonw.NewInt64(ctime))
+	j.SetKey("expire_in", jsonw.NewInt(ei))
+	j.SetKey("seqno", jsonw.NewInt64(int64(seqno)))
+	j.SetKey("prev", prev)
 
+	var highSkip *HighSkip
+	allowHighSkips := m.G().Env.GetFeatureFlags().HasFeature(EnvironmentFeatureAllowHighSkips)
+	if allowHighSkips {
+		if (arg.Me != nil) && (arg.HighSkipFallback != nil) {
+			return nil, fmt.Errorf("arg.Me and arg.HighSkipFallback can't both be non-nil.")
+		} else if arg.Me != nil {
+			highSkipPre, err := arg.Me.GetExpectedNextHighSkip(m)
+			if err != nil {
+				return nil, err
+			}
+			highSkip = &highSkipPre
+		} else if arg.HighSkipFallback != nil {
+			highSkip = arg.HighSkipFallback
+		}
+
+		if highSkip != nil {
+			highSkipObj := jsonw.NewDictionary()
+			highSkipObj.SetKey("seqno", jsonw.NewInt64(int64(highSkip.Seqno)))
+			if hash := highSkip.Hash; hash != nil {
+				highSkipObj.SetKey("hash", jsonw.NewString(hash.String()))
+			} else {
+				highSkipObj.SetKey("hash", jsonw.NewNil())
+			}
+			j.SetKey("high_skip", highSkipObj)
+		}
+	}
+
+	if arg.IgnoreIfUnsupported {
+		j.SetKey("ignore_if_unsupported", jsonw.NewBool(true))
+	}
 	eldest := arg.Eldest
 	if eldest == "" {
+		if arg.Me == nil {
+			return nil, fmt.Errorf("missing self user object while signing")
+		}
 		eldest = arg.Me.GetEldestKID()
 	}
 
@@ -333,49 +417,64 @@ func (arg ProofMetadata) ToJSON(g *GlobalContext) (ret *jsonw.Wrapper, err error
 	body.SetKey("key", key)
 	// Capture the most recent Merkle Root, inside of "body"
 	// field.
-	if mr := arg.merkleRootInfo(g); mr != nil {
+	if mr := arg.merkleRootInfo(m); mr != nil {
 		body.SetKey("merkle_root", mr)
 	}
 
-	ret.SetKey("body", body)
+	j.SetKey("body", body)
 
 	// Save what kind of client we're running.
-	ret.SetKey("client", clientInfo(g))
+	j.SetKey("client", clientInfo(m))
 
 	if arg.SeqType != 0 {
-		ret.SetKey("seq_type", jsonw.NewInt(int(arg.SeqType)))
+		j.SetKey("seq_type", jsonw.NewInt(int(arg.SeqType)))
 	}
 
-	return
+	return &ProofMetadataRes{
+		J:     j,
+		Seqno: seqno,
+	}, err
 }
 
-func (u *User) TrackingProofFor(signingKey GenericKey, u2 *User, outcome *IdentifyOutcome) (ret *jsonw.Wrapper, err error) {
-	ret, err = ProofMetadata{
+func (u *User) TrackingProofFor(m MetaContext, signingKey GenericKey, sigVersion SigVersion, u2 *User, outcome *IdentifyOutcome) (*ProofMetadataRes, error) {
+	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeTrack,
 		SigningKey: signingKey,
-	}.ToJSON(u.G())
+		SigVersion: sigVersion,
+	}.ToJSON2(m)
 	if err == nil {
-		err = u2.ToTrackingStatement(ret.AtKey("body"), outcome)
+		err = u2.ToTrackingStatement(ret.J.AtKey("body"), outcome)
 	}
-	return
+	return ret, err
 }
 
-func (u *User) UntrackingProofFor(signingKey GenericKey, u2 *User) (ret *jsonw.Wrapper, err error) {
-	ret, err = ProofMetadata{
+func (u *User) UntrackingProofFor(m MetaContext, signingKey GenericKey, sigVersion SigVersion, u2 *User) (*ProofMetadataRes, error) {
+	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeUntrack,
 		SigningKey: signingKey,
-	}.ToJSON(u.G())
+		SigVersion: sigVersion,
+	}.ToJSON2(m)
 	if err == nil {
-		err = u2.ToUntrackingStatement(ret.AtKey("body"))
+		err = u2.ToUntrackingStatement(ret.J.AtKey("body"))
 	}
-	return
+	return ret, err
 }
 
 // arg.Me user is used to get the last known seqno in ProofMetadata.
 // If arg.Me == nil, set arg.Seqno.
-func KeyProof(arg Delegator) (ret *jsonw.Wrapper, err error) {
+func KeyProof(m MetaContext, arg Delegator) (*jsonw.Wrapper, error) {
+	res, err := KeyProof2(m, arg)
+	if err != nil {
+		return nil, err
+	}
+	return res.J, nil
+}
+
+// arg.Me user is used to get the last known seqno in ProofMetadata.
+// If arg.Me == nil, set arg.Seqno.
+func KeyProof2(m MetaContext, arg Delegator) (ret *ProofMetadataRes, err error) {
 	var kp *jsonw.Wrapper
 	includePGPHash := false
 
@@ -397,29 +496,37 @@ func KeyProof(arg Delegator) (ret *jsonw.Wrapper, err error) {
 		}
 
 		if kp, err = keySection.ToJSON(); err != nil {
-			return
+			return nil, err
 		}
 	}
 
-	ret, err = ProofMetadata{
-		Me:             arg.Me,
-		SigningUser:    arg.SigningUser,
-		LinkType:       LinkType(arg.DelegationType),
-		ExpireIn:       arg.Expire,
-		SigningKey:     arg.GetSigningKey(),
-		Eldest:         arg.EldestKID,
-		CreationTime:   arg.Ctime,
-		IncludePGPHash: includePGPHash,
-		Seqno:          arg.Seqno,
-		PrevLinkID:     arg.PrevLinkID,
-		MerkleRoot:     arg.MerkleRoot,
-	}.ToJSON(arg.G())
-
-	if err != nil {
-		return
+	// Only set the fallback for subkeys during KEX where arg.Me == nil; it is
+	// otherwise updated using me.SigChainBump().
+	var highSkipFallback *HighSkip
+	if arg.Me == nil && arg.DelegationType == DelegationTypeSubkey {
+		highSkip := NewHighSkip(arg.Seqno-1, arg.PrevLinkID)
+		highSkipFallback = &highSkip
 	}
 
-	body := ret.AtKey("body")
+	ret, err = ProofMetadata{
+		Me:               arg.Me,
+		SigningUser:      arg.SigningUser,
+		LinkType:         LinkType(arg.DelegationType),
+		ExpireIn:         arg.Expire,
+		SigningKey:       arg.GetSigningKey(),
+		Eldest:           arg.EldestKID,
+		CreationTime:     arg.Ctime,
+		IncludePGPHash:   includePGPHash,
+		Seqno:            arg.Seqno,
+		HighSkipFallback: highSkipFallback,
+		PrevLinkID:       arg.PrevLinkID,
+		MerkleRoot:       arg.MerkleRoot,
+	}.ToJSON2(m)
+	if err != nil {
+		return nil, err
+	}
+
+	body := ret.J.AtKey("body")
 
 	if arg.Device != nil {
 		device := *arg.Device
@@ -431,25 +538,30 @@ func KeyProof(arg Delegator) (ret *jsonw.Wrapper, err error) {
 		}
 		body.SetKey("device", dw)
 	}
-
 	if kp != nil {
 		body.SetKey(string(arg.DelegationType), kp)
 	}
-
-	return
+	return ret, nil
 }
 
-func (u *User) ServiceProof(signingKey GenericKey, typ ServiceType, remotename string) (ret *jsonw.Wrapper, err error) {
-	ret, err = ProofMetadata{
+func (u *User) ServiceProof(m MetaContext, signingKey GenericKey, typ ServiceType, remotename string, sigVersion SigVersion) (*ProofMetadataRes, error) {
+	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeWebServiceBinding,
 		SigningKey: signingKey,
-	}.ToJSON(u.G())
+		SigVersion: sigVersion,
+	}.ToJSON2(m)
 	if err != nil {
-		return
+		return nil, err
 	}
-	ret.AtKey("body").SetKey("service", typ.ToServiceJSON(remotename))
-	return
+	service := typ.ToServiceJSON(remotename)
+	entropy, err := LinkEntropy()
+	if err != nil {
+		return nil, err
+	}
+	service.SetKey("entropy", jsonw.NewString(entropy))
+	ret.J.AtKey("body").SetKey("service", service)
+	return ret, err
 }
 
 // SimpleSignJson marshals the given Json structure and then signs it.
@@ -463,42 +575,61 @@ func SignJSON(jw *jsonw.Wrapper, key GenericKey) (out string, id keybase1.SigID,
 	return
 }
 
-// AuthenticationProof makes a JSON proof statement for the user that he can sign
-// to prove a log-in to the system.  If successful, the server will return with
-// a session token.
-func (u *User) AuthenticationProof(key GenericKey, session string, ei int) (ret *jsonw.Wrapper, err error) {
-	if ret, err = (ProofMetadata{
-		Me:         u,
-		LinkType:   LinkTypeAuthentication,
-		ExpireIn:   ei,
-		SigningKey: key,
-	}.ToJSON(u.G())); err != nil {
-		return
-	}
-	body := ret.AtKey("body")
-	var nonce [16]byte
-	if _, err = rand.Read(nonce[:]); err != nil {
-		return
-	}
-	auth := jsonw.NewDictionary()
-	auth.SetKey("nonce", jsonw.NewString(hex.EncodeToString(nonce[:])))
-	auth.SetKey("session", jsonw.NewString(session))
-
-	body.SetKey("auth", auth)
-	return
+func GetDefaultSigVersion(g *GlobalContext) SigVersion {
+	return KeybaseSignatureV2
 }
 
-func (u *User) RevokeKeysProof(key GenericKey, kidsToRevoke []keybase1.KID, deviceToDisable keybase1.DeviceID, merkleRoot *MerkleRoot) (*jsonw.Wrapper, error) {
+func MakeSig(
+	m MetaContext,
+	signingKey GenericKey,
+	v1LinkType LinkType,
+	innerLinkJSON []byte,
+	hasRevokes SigHasRevokes,
+	seqType keybase1.SeqType,
+	ignoreIfUnsupported SigIgnoreIfUnsupported,
+	me *User,
+	sigVersion SigVersion) (sig string, sigID keybase1.SigID, linkID LinkID, err error) {
+	switch sigVersion {
+	case KeybaseSignatureV1:
+		sig, sigID, err = signingKey.SignToString(innerLinkJSON)
+		linkID = ComputeLinkID(innerLinkJSON)
+	case KeybaseSignatureV2:
+		prevSeqno := me.GetSigChainLastKnownSeqno()
+		prevLinkID := me.GetSigChainLastKnownID()
+		highSkip, highSkipErr := me.GetExpectedNextHighSkip(m)
+		if highSkipErr != nil {
+			return sig, sigID, linkID, highSkipErr
+		}
+		sig, sigID, linkID, err = MakeSigchainV2OuterSig(
+			m,
+			signingKey,
+			v1LinkType,
+			prevSeqno+1,
+			innerLinkJSON,
+			prevLinkID,
+			hasRevokes,
+			seqType,
+			ignoreIfUnsupported,
+			&highSkip,
+		)
+	default:
+		err = errors.New("Invalid Signature Version")
+	}
+	return sig, sigID, linkID, err
+}
+
+func (u *User) RevokeKeysProof(m MetaContext, key GenericKey, kidsToRevoke []keybase1.KID,
+	deviceToDisable keybase1.DeviceID, merkleRoot *MerkleRoot) (*ProofMetadataRes, error) {
 	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeRevoke,
 		SigningKey: key,
 		MerkleRoot: merkleRoot,
-	}.ToJSON(u.G())
+	}.ToJSON2(m)
 	if err != nil {
 		return nil, err
 	}
-	body := ret.AtKey("body")
+	body := ret.J.AtKey("body")
 	revokeSection := jsonw.NewDictionary()
 	revokeSection.SetKey("kids", jsonw.NewWrapper(kidsToRevoke))
 	body.SetKey("revoke", revokeSection)
@@ -516,17 +647,17 @@ func (u *User) RevokeKeysProof(key GenericKey, kidsToRevoke []keybase1.KID, devi
 	return ret, nil
 }
 
-func (u *User) RevokeSigsProof(key GenericKey, sigIDsToRevoke []keybase1.SigID, merkleRoot *MerkleRoot) (*jsonw.Wrapper, error) {
+func (u *User) RevokeSigsProof(m MetaContext, key GenericKey, sigIDsToRevoke []keybase1.SigID, merkleRoot *MerkleRoot) (*ProofMetadataRes, error) {
 	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeRevoke,
 		SigningKey: key,
 		MerkleRoot: merkleRoot,
-	}.ToJSON(u.G())
+	}.ToJSON2(m)
 	if err != nil {
 		return nil, err
 	}
-	body := ret.AtKey("body")
+	body := ret.J.AtKey("body")
 	revokeSection := jsonw.NewDictionary()
 	idsArray := jsonw.NewArray(len(sigIDsToRevoke))
 	for i, id := range sigIDsToRevoke {
@@ -537,20 +668,26 @@ func (u *User) RevokeSigsProof(key GenericKey, sigIDsToRevoke []keybase1.SigID, 
 	return ret, nil
 }
 
-func (u *User) CryptocurrencySig(key GenericKey, address string, typ CryptocurrencyType, sigToRevoke keybase1.SigID, merkleRoot *MerkleRoot) (*jsonw.Wrapper, error) {
+func (u *User) CryptocurrencySig(m MetaContext, key GenericKey, address string, typ CryptocurrencyType, sigToRevoke keybase1.SigID, merkleRoot *MerkleRoot, sigVersion SigVersion) (*ProofMetadataRes, error) {
 	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeCryptocurrency,
 		SigningKey: key,
 		MerkleRoot: merkleRoot,
-	}.ToJSON(u.G())
+		SigVersion: sigVersion,
+	}.ToJSON2(m)
 	if err != nil {
 		return nil, err
 	}
-	body := ret.AtKey("body")
+	body := ret.J.AtKey("body")
 	currencySection := jsonw.NewDictionary()
 	currencySection.SetKey("address", jsonw.NewString(address))
 	currencySection.SetKey("type", jsonw.NewString(typ.String()))
+	entropy, err := LinkEntropy()
+	if err != nil {
+		return nil, err
+	}
+	currencySection.SetKey("entropy", jsonw.NewString(entropy))
 	body.SetKey("cryptocurrency", currencySection)
 	if len(sigToRevoke) > 0 {
 		revokeSection := jsonw.NewDictionary()
@@ -560,12 +697,12 @@ func (u *User) CryptocurrencySig(key GenericKey, address string, typ Cryptocurre
 	return ret, nil
 }
 
-func (u *User) UpdatePassphraseProof(key GenericKey, pwh string, ppGen PassphraseGeneration, pdpka5kid string) (*jsonw.Wrapper, error) {
+func (u *User) UpdatePassphraseProof(m MetaContext, key GenericKey, pwh string, ppGen PassphraseGeneration, pdpka5kid string) (*jsonw.Wrapper, error) {
 	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeUpdatePassphrase,
 		SigningKey: key,
-	}.ToJSON(u.G())
+	}.ToJSON(m)
 	if err != nil {
 		return nil, err
 	}
@@ -573,18 +710,18 @@ func (u *User) UpdatePassphraseProof(key GenericKey, pwh string, ppGen Passphras
 	pp := jsonw.NewDictionary()
 	pp.SetKey("hash", jsonw.NewString(pwh))
 	pp.SetKey("pdpka5_kid", jsonw.NewString(pdpka5kid))
-	pp.SetKey("version", jsonw.NewInt(int(triplesec.Version)))
+	pp.SetKey("version", jsonw.NewInt(int(ClientTriplesecVersion)))
 	pp.SetKey("passphrase_generation", jsonw.NewInt(int(ppGen)))
 	body.SetKey("update_passphrase_hash", pp)
 	return ret, nil
 }
 
-func (u *User) UpdateEmailProof(key GenericKey, newEmail string) (*jsonw.Wrapper, error) {
+func (u *User) UpdateEmailProof(m MetaContext, key GenericKey, newEmail string) (*jsonw.Wrapper, error) {
 	ret, err := ProofMetadata{
 		Me:         u,
 		LinkType:   LinkTypeUpdateSettings,
 		SigningKey: key,
-	}.ToJSON(u.G())
+	}.ToJSON(m)
 	if err != nil {
 		return nil, err
 	}
@@ -596,13 +733,15 @@ func (u *User) UpdateEmailProof(key GenericKey, newEmail string) (*jsonw.Wrapper
 }
 
 type SigMultiItem struct {
-	Sig        string                  `json:"sig"`
+	Sig3       *Sig3                   `json:"sig3,omitempty"`
+	Sig        string                  `json:"sig,omitempty"`
 	SigningKID keybase1.KID            `json:"signing_kid"`
 	Type       string                  `json:"type"`
 	SeqType    keybase1.SeqType        `json:"seq_type"`
 	SigInner   string                  `json:"sig_inner"`
 	TeamID     keybase1.TeamID         `json:"team_id"`
 	PublicKeys *SigMultiItemPublicKeys `json:"public_keys,omitempty"`
+	Version    SigVersion              `json:"version"`
 }
 
 type SigMultiItemPublicKeys struct {
@@ -610,13 +749,20 @@ type SigMultiItemPublicKeys struct {
 	Signing    keybase1.KID `json:"signing"`
 }
 
+type Sig3 struct {
+	Inner string `json:"i,omitempty"`
+	Outer string `json:"o,omitempty"`
+	Sig   string `json:"s,omitempty"`
+}
+
 // PerUserKeyProof creates a proof introducing a new per-user-key generation.
 // `signingKey` is the key signing in this new key. Not to be confused with the derived per-user-key signing key.
-func PerUserKeyProof(me *User,
+func PerUserKeyProof(m MetaContext,
+	me *User,
 	pukSigKID keybase1.KID,
 	pukEncKID keybase1.KID,
 	generation keybase1.PerUserKeyGeneration,
-	signingKey GenericKey) (*jsonw.Wrapper, error) {
+	signingKey GenericKey) (*ProofMetadataRes, error) {
 
 	if me == nil {
 		return nil, fmt.Errorf("missing user object for proof")
@@ -626,7 +772,7 @@ func PerUserKeyProof(me *User,
 		Me:         me,
 		LinkType:   LinkTypePerUserKey,
 		SigningKey: signingKey,
-	}.ToJSON(me.G())
+	}.ToJSON2(m)
 	if err != nil {
 		return nil, err
 	}
@@ -638,17 +784,23 @@ func PerUserKeyProof(me *User,
 	// The caller is responsible for overwriting reverse_sig after signing.
 	pukSection.SetKey("reverse_sig", jsonw.NewNil())
 
-	body := ret.AtKey("body")
+	body := ret.J.AtKey("body")
 	body.SetKey("per_user_key", pukSection)
 
 	return ret, nil
 }
 
+type UserLinkSignature struct {
+	Payload JSONPayload
+	Seqno   keybase1.Seqno
+	LinkID  LinkID
+}
+
 // Make a per-user key proof with a reverse sig.
 // Modifies the User `me` with a sigchain bump and key delegation.
 // Returns a JSONPayload ready for use in "sigs" in sig/multi.
-func PerUserKeyProofReverseSigned(me *User, perUserKeySeed PerUserKeySeed, generation keybase1.PerUserKeyGeneration,
-	signer GenericKey) (JSONPayload, error) {
+func PerUserKeyProofReverseSigned(m MetaContext, me *User, perUserKeySeed PerUserKeySeed, generation keybase1.PerUserKeyGeneration,
+	signer GenericKey) (*UserLinkSignature, error) {
 
 	pukSigKey, err := perUserKeySeed.DeriveSigningKey()
 	if err != nil {
@@ -661,17 +813,17 @@ func PerUserKeyProofReverseSigned(me *User, perUserKeySeed PerUserKeySeed, gener
 	}
 
 	// Make reverse sig
-	jwRev, err := PerUserKeyProof(me, pukSigKey.GetKID(), pukEncKey.GetKID(), generation, signer)
+	forward, err := PerUserKeyProof(m, me, pukSigKey.GetKID(), pukEncKey.GetKID(), generation, signer)
 	if err != nil {
 		return nil, err
 	}
-	reverseSig, _, _, err := SignJSON(jwRev, pukSigKey)
+	reverseSig, _, _, err := SignJSON(forward.J, pukSigKey)
 	if err != nil {
 		return nil, err
 	}
 
 	// Make sig
-	jw := jwRev
+	jw := forward.J
 	jw.SetValueAtPath("body.per_user_key.reverse_sig", jsonw.NewString(reverseSig))
 	sig, sigID, linkID, err := SignJSON(jw, signer)
 	if err != nil {
@@ -679,7 +831,7 @@ func PerUserKeyProofReverseSigned(me *User, perUserKeySeed PerUserKeySeed, gener
 	}
 
 	// Update the user locally
-	me.SigChainBump(linkID, sigID)
+	me.SigChainBump(linkID, sigID, false)
 	me.localDelegatePerUserKey(keybase1.PerUserKey{
 		Gen:         int(generation),
 		Seqno:       me.GetSigChainLastKnownSeqno(),
@@ -692,10 +844,119 @@ func PerUserKeyProofReverseSigned(me *User, perUserKeySeed PerUserKeySeed, gener
 	publicKeysEntry["signing"] = pukSigKey.GetKID().String()
 	publicKeysEntry["encryption"] = pukEncKey.GetKID().String()
 
-	res := make(JSONPayload)
-	res["sig"] = sig
-	res["signing_kid"] = signer.GetKID().String()
-	res["type"] = LinkTypePerUserKey
-	res["public_keys"] = publicKeysEntry
-	return res, nil
+	payload := make(JSONPayload)
+	payload["sig"] = sig
+	payload["signing_kid"] = signer.GetKID().String()
+	payload["type"] = LinkTypePerUserKey
+	payload["public_keys"] = publicKeysEntry
+	return &UserLinkSignature{
+		Payload: payload,
+		Seqno:   forward.Seqno,
+		LinkID:  linkID,
+	}, nil
+}
+
+// StellarProof creates a proof of a stellar wallet.
+func StellarProof(m MetaContext, me *User, walletAddress stellar1.AccountID,
+	signingKey GenericKey) (*ProofMetadataRes, error) {
+	if me == nil {
+		return nil, fmt.Errorf("missing user object for proof")
+	}
+	walletPubKey, err := MakeNaclSigningKeyPairFromStellarAccountID(walletAddress)
+	if err != nil {
+		return nil, err
+	}
+	walletKID := walletPubKey.GetKID()
+
+	ret, err := ProofMetadata{
+		Me:                  me,
+		LinkType:            LinkTypeWalletStellar,
+		SigningKey:          signingKey,
+		SigVersion:          KeybaseSignatureV2,
+		IgnoreIfUnsupported: SigIgnoreIfUnsupported(true),
+	}.ToJSON2(m)
+	if err != nil {
+		return nil, err
+	}
+
+	walletSection := jsonw.NewDictionary()
+	walletSection.SetKey("address", jsonw.NewString(walletAddress.String()))
+	walletSection.SetKey("network", jsonw.NewString(string(WalletNetworkStellar)))
+
+	// Inner links can be hidden. To prevent an attacker from figuring out the
+	// contents from the hash of the inner link, add 18 random bytes.
+	entropy, err := LinkEntropy()
+	if err != nil {
+		return nil, err
+	}
+	walletSection.SetKey("entropy", jsonw.NewString(entropy))
+
+	walletKeySection := jsonw.NewDictionary()
+	walletKeySection.SetKey("kid", jsonw.NewString(walletKID.String()))
+	// The caller is responsible for overwriting reverse_sig after signing.
+	walletKeySection.SetKey("reverse_sig", jsonw.NewNil())
+
+	body := ret.J.AtKey("body")
+	body.SetKey("wallet", walletSection)
+	body.SetKey("wallet_key", walletKeySection)
+
+	return ret, nil
+}
+
+// Make a stellar proof with a reverse sig.
+// Modifies the User `me` with a sigchain bump and key delegation.
+// Returns a JSONPayload ready for use in "sigs" in sig/multi.
+func StellarProofReverseSigned(m MetaContext, me *User, walletAddress stellar1.AccountID,
+	stellarSigner stellar1.SecretKey, deviceSigner GenericKey) (*UserLinkSignature, error) {
+	// Make reverse sig
+	forward, err := StellarProof(m, me, walletAddress, deviceSigner)
+	if err != nil {
+		return nil, err
+	}
+	stellarSignerKey, err := MakeNaclSigningKeyPairFromStellarSecretKey(stellarSigner)
+	if err != nil {
+		return nil, err
+	}
+	reverseSig, _, linkID, err := SignJSON(forward.J, stellarSignerKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Make sig
+	jw := forward.J
+	jw.SetValueAtPath("body.wallet_key.reverse_sig", jsonw.NewString(reverseSig))
+	innerJSON, err := jw.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	sig, sigID, linkID, err := MakeSig(
+		m,
+		deviceSigner,
+		LinkTypeWalletStellar,
+		innerJSON,
+		SigHasRevokes(false),
+		keybase1.SeqType_PUBLIC,
+		SigIgnoreIfUnsupported(true),
+		me,
+		KeybaseSignatureV2,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update the user locally
+	me.SigChainBump(linkID, sigID, false)
+	// TODO: do we need to locally do something like me.localDelegatePerUserKey?
+
+	payload := make(JSONPayload)
+	payload["sig"] = sig
+	payload["sig_inner"] = string(innerJSON)
+	payload["signing_kid"] = deviceSigner.GetKID().String()
+	payload["public_key"] = stellarSignerKey.GetKID().String()
+	payload["type"] = LinkTypeWalletStellar
+	return &UserLinkSignature{
+		Payload: payload,
+		Seqno:   forward.Seqno,
+		LinkID:  linkID,
+	}, nil
 }

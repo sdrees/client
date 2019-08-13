@@ -4,7 +4,7 @@ import './app/globals.native'
 
 // Load storybook or the app
 if (__STORYBOOK__) {
-  const {load} = require('./stories/setup-app.native.js')
+  const load = require('./storybook/index.native').default
   load()
 } else {
   const {load} = require('./app/index.native')

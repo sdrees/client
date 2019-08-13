@@ -27,20 +27,20 @@ func TestOurResolve(t *testing.T) {
 	require.True(t, id.Eq(id2))
 
 	r2input := fmt.Sprintf("team:%s", nm.String())
-	rres := g.Resolver.ResolveFullExpressionNeedUsername(ctx, r2input)
+	rres := g.Resolver.ResolveFullExpressionNeedUsername(libkb.NewMetaContext(ctx, g), r2input)
 	require.NoError(t, rres.GetError())
 	require.True(t, rres.GetTeamID().Exists())
 	require.Equal(t, rres.UserOrTeam().Name, nm.String())
 	require.Equal(t, rres.UserOrTeam().Id.String(), id2.String())
 }
 
-// Test that verifyResolveResult would catch an bad (unverifiable) resolution.
+// Test that verifyResolveResult would catch a bad (unverifiable) resolution.
 func TestVerifyResolveEvilServer(t *testing.T) {
 	_, tcs, cleanup := setupNTests(t, 1)
 	defer cleanup()
 
 	t.Logf("check good assertion")
-	assertion, err := externals.AssertionParseAndOnly("t_tracy@rooter")
+	assertion, err := externals.AssertionParseAndOnly(libkb.NewMetaContext(context.Background(), tcs[0].G), "t_tracy@rooter")
 	require.NoError(t, err)
 	err = verifyResolveResult(context.TODO(), tcs[0].G, libkb.ResolvedAssertion{
 		Assertion: assertion,
@@ -49,7 +49,7 @@ func TestVerifyResolveEvilServer(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Logf("check bad assertion")
-	assertion, err = externals.AssertionParseAndOnly("beluga@rooter")
+	assertion, err = externals.AssertionParseAndOnly(libkb.NewMetaContext(context.Background(), tcs[0].G), "beluga@rooter")
 	require.NoError(t, err)
 	err = verifyResolveResult(context.TODO(), tcs[0].G, libkb.ResolvedAssertion{
 		Assertion: assertion,

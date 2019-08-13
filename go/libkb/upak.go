@@ -5,18 +5,19 @@ package libkb
 import (
 	"fmt"
 
+	"github.com/keybase/client/go/kbcrypto"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 )
 
 // BaseProofSet creates a basic proof set for a user with their
 // keybase and uid proofs and any pgp fingerprint proofs.
-func BaseProofSet(u *keybase1.UserPlusAllKeys) *ProofSet {
+func BaseProofSet(u *keybase1.UserPlusKeysV2AllIncarnations) *ProofSet {
 	proofs := []Proof{
 		{Key: "keybase", Value: u.GetName()},
 		{Key: "uid", Value: u.GetUID().String()},
 	}
-	for _, key := range u.PGPKeys {
-		proofs = append(proofs, Proof{Key: PGPAssertionKey, Value: key.PGPFingerprint})
+	for _, key := range u.Current.PGPKeys {
+		proofs = append(proofs, Proof{Key: PGPAssertionKey, Value: key.Fingerprint.String()})
 	}
 	return NewProofSet(proofs)
 }
@@ -62,54 +63,61 @@ func checkKIDKeybase(u *keybase1.UserPlusKeysV2AllIncarnations, kid keybase1.KID
 }
 
 func CheckKID(u *keybase1.UserPlusKeysV2AllIncarnations, kid keybase1.KID) (found bool, revokedAt *keybase1.KeybaseTime, deleted bool) {
-	if IsPGPAlgo(AlgoType(kid.GetKeyType())) {
+	if IsPGPAlgo(kbcrypto.AlgoType(kid.GetKeyType())) {
 		found = checkKIDPGP(u, kid)
 		return found, nil, false
 	}
 	return checkKIDKeybase(u, kid)
 }
 
-func GetRemoteChainLinkFor(u *keybase1.UserPlusAllKeys, username NormalizedUsername, uid keybase1.UID, g *GlobalContext) (ret *TrackChainLink, err error) {
-	defer g.Trace(fmt.Sprintf("UPAK#GetRemoteChainLinkFor(%s,%s,%s)", u.Base.Uid, username, uid), func() error { return err })()
-	g.VDL.Log(VLog1, "| Full user: %+v\n", *u)
-	rtl := u.GetRemoteTrack(username.String())
+func GetRemoteChainLinkFor(m MetaContext, follower *keybase1.UserPlusKeysV2AllIncarnations, followeeUsername NormalizedUsername, followeeUID keybase1.UID) (ret *TrackChainLink, err error) {
+	defer m.Trace(fmt.Sprintf("UPAK#GetRemoteChainLinkFor(%s,%s,%s)", follower.Current.GetUID(), followeeUsername, followeeUID), func() error { return err })()
+	m.VLogf(VLog1, "| Full user: %+v\n", *follower)
+	rtl := follower.GetRemoteTrack(followeeUID)
 	if rtl == nil {
-		g.VDL.Log(VLog0, "| no remote track found")
+		m.VLogf(VLog0, "| no remote track found")
 		return nil, nil
 	}
-	if !rtl.Uid.Equal(uid) {
-		return nil, UIDMismatchError{Msg: fmt.Sprintf("UIDs didn't match for (%s,%q); got %s", uid, username.String(), rtl.Uid)}
+	if !NewNormalizedUsername(rtl.Username).Eq(followeeUsername) {
+		return nil, UIDMismatchError{Msg: fmt.Sprintf("Usernames didn't match for (%s,%q); got %s", followeeUID, followeeUsername.String(), rtl.Uid)}
+	}
+	if !rtl.Uid.Equal(followeeUID) {
+		return nil, UIDMismatchError{Msg: fmt.Sprintf("UIDs didn't match for (%s,%q); got %s", followeeUID, followeeUsername.String(), rtl.Uid)}
 	}
 	var lid LinkID
-	g.VDL.Log(VLog0, "| remote track found with linkID=%s", rtl.LinkID)
+	m.VLogf(VLog0, "| remote track found with linkID=%s", rtl.LinkID)
 	lid, err = ImportLinkID(rtl.LinkID)
 	if err != nil {
-		g.Log.Debug("| Failed to import link ID")
+		m.Debug("| Failed to import link ID")
 		return nil, err
 	}
 	var link *ChainLink
-	link, err = ImportLinkFromStorage(lid, u.Base.Uid, g)
+	link, err = ImportLinkFromStorage(m, lid, follower.GetUID())
 	if err != nil {
-		g.Log.Debug("| failed to import link from storage")
+		m.Debug("| failed to import link from storage")
 		return nil, err
 	}
 	if link == nil {
-		g.Log.Debug("| no cached chainlink found")
+		m.Debug("| no cached chainlink found")
 		// Such a bug is only possible if the DB cache was reset after
 		// this user was originally loaded in; otherwise, all of this
 		// UPAK's chain links should be available on disk.
 		return nil, InconsistentCacheStateError{}
 	}
 	ret, err = ParseTrackChainLink(GenericChainLink{link})
-	g.VDL.Log(VLog0, "| ParseTrackChainLink -> found=%v", (ret != nil))
+	m.VLogf(VLog0, "| ParseTrackChainLink -> found=%v", (ret != nil))
 	return ret, err
 }
 
-func TrackChainLinkFromUserPlusAllKeys(u *keybase1.UserPlusAllKeys, username NormalizedUsername, uid keybase1.UID, g *GlobalContext) (*TrackChainLink, error) {
-	tcl, err := GetRemoteChainLinkFor(u, username, uid, g)
-	if _, ok := err.(InconsistentCacheStateError); ok {
+func TrackChainLinkFromUPK2AI(m MetaContext, follower *keybase1.UserPlusKeysV2AllIncarnations, followeeUsername NormalizedUsername, followeeUID keybase1.UID) (*TrackChainLink, error) {
+	tcl, err := GetRemoteChainLinkFor(m, follower, followeeUsername, followeeUID)
+	if err != nil {
 		return nil, err
 	}
-	tcl, err = TrackChainLinkFor(u.Base.Uid, uid, tcl, err, g)
+	tcl, err = TrackChainLinkFor(m, follower.Current.Uid, followeeUID, tcl, err)
 	return tcl, err
+}
+
+func NormalizedUsernameFromUPK2(u keybase1.UserPlusKeysV2) NormalizedUsername {
+	return NewNormalizedUsername(u.Username)
 }

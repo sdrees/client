@@ -1,7 +1,6 @@
 package git
 
 import (
-	"crypto/rand"
 	"fmt"
 
 	"golang.org/x/crypto/nacl/secretbox"
@@ -56,14 +55,13 @@ func (c *Crypto) Box(ctx context.Context, plaintext []byte, teamSpec keybase1.Te
 		}
 	}
 
-	var nonce keybase1.BoxNonce
-	if _, err := rand.Read(nonce[:]); err != nil {
+	nonce, err := libkb.RandomNaclDHNonce()
+	if err != nil {
 		return nil, err
 	}
 
 	var encKey [libkb.NaclSecretBoxKeySize]byte = key.Key
-	var naclNonce [libkb.NaclDHNonceSize]byte = nonce
-	sealed := secretbox.Seal(nil, plaintext, &naclNonce, &encKey)
+	sealed := secretbox.Seal(nil, plaintext, &nonce, &encKey)
 
 	return &keybase1.EncryptedGitMetadata{
 		V:   libkb.CurrentGitMetadataEncryptionVersion,
@@ -95,7 +93,7 @@ func (c *Crypto) Unbox(ctx context.Context, teamSpec keybase1.TeamIDWithVisibili
 
 	key := publicCryptKey
 	if !public {
-		key, err = team.ApplicationKeyAtGeneration(keybase1.TeamApplication_GIT_METADATA, metadata.Gen)
+		key, err = team.ApplicationKeyAtGeneration(ctx, keybase1.TeamApplication_GIT_METADATA, metadata.Gen)
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +116,9 @@ func (c *Crypto) loadTeam(ctx context.Context, teamSpec keybase1.TeamIDWithVisib
 		Public: public,
 	}
 	if needKeyGeneration != 0 {
-		arg.Refreshers.NeedKeyGeneration = needKeyGeneration
+		arg.Refreshers.NeedApplicationsAtGenerations = map[keybase1.PerTeamKeyGeneration][]keybase1.TeamApplication{
+			needKeyGeneration: {keybase1.TeamApplication_GIT_METADATA},
+		}
 	}
 	team, err := teams.Load(ctx, c.G(), arg)
 	if err != nil {

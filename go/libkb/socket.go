@@ -21,6 +21,7 @@ type SocketInfo struct {
 	log       logger.Logger
 	bindFile  string
 	dialFiles []string
+	testOwner bool
 }
 
 func (s SocketInfo) GetBindFile() string {
@@ -50,7 +51,7 @@ func (g *GlobalContext) BindToSocket() (net.Listener, error) {
 }
 
 func NewTransportFromSocket(g *GlobalContext, s net.Conn) rpc.Transporter {
-	return rpc.NewTransport(s, NewRPCLogFactory(g), MakeWrapError(g))
+	return rpc.NewTransport(s, NewRPCLogFactory(g), MakeWrapError(g), rpc.DefaultMaxFrameLength)
 }
 
 // ResetSocket clears and returns a new socket

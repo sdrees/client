@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/net/context"
 
+	"github.com/keybase/client/go/kbcrypto"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 )
@@ -39,9 +40,9 @@ func TestCryptoSignED25519(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publicKey := libkb.NaclSigningKeyPublic(ret.PublicKey)
-	if !publicKey.Verify(msg, (*libkb.NaclSignature)(&ret.Sig)) {
-		t.Error(libkb.VerificationError{})
+	publicKey := kbcrypto.NaclSigningKeyPublic(ret.PublicKey)
+	if !publicKey.Verify(msg, kbcrypto.NaclSignature(ret.Sig)) {
+		t.Error(kbcrypto.VerificationError{})
 	}
 }
 
@@ -64,7 +65,7 @@ func TestCryptoSignToString(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, msg2, _, err := libkb.NaclVerifyAndExtract(signature)
+	_, msg2, _, err := kbcrypto.NaclVerifyAndExtract(signature)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func TestCryptoUnboxBytes32(t *testing.T) {
 			{Kid: kp.GetKID(), Ciphertext: encryptedBytes32, Nonce: nonce, PublicKey: peersPublicKey},
 		},
 	}
-	res, err := UnboxBytes32Any(context.TODO(), tc.G, f, arg)
+	res, err := UnboxBytes32Any(NewMetaContextForTest(tc), f, arg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,18 +304,18 @@ func TestCryptoUnboxBytes32AnyPaper(t *testing.T) {
 	u := CreateAndSignupFakeUser(tc, "fu")
 
 	// create a paper key and cache it
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: u.NewSecretUI(),
 	}
 	peng := NewPaperKey(tc.G)
-	if err := RunEngine(peng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, peng); err != nil {
 		t.Fatal(err)
 	}
-	err := tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.SetUnlockedPaperKey(peng.SigKey(), peng.EncKey())
-	}, "TestCryptoUnboxBytes32AnyPaper")
+
+	m.ActiveDevice().CacheProvisioningKey(m, libkb.NewDeviceWithKeysOnly(peng.SigKey(), peng.EncKey()))
 
 	key := peng.EncKey()
 	kp, ok := key.(libkb.NaclDHKeyPair)
@@ -368,7 +369,7 @@ func TestCryptoUnboxBytes32AnyPaper(t *testing.T) {
 		},
 		PromptPaper: true,
 	}
-	res, err := UnboxBytes32Any(context.TODO(), tc.G, f, arg)
+	res, err := UnboxBytes32Any(NewMetaContextForTest(tc), f, arg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,9 +381,7 @@ func TestCryptoUnboxBytes32AnyPaper(t *testing.T) {
 	}
 
 	// clear the paper key cache to test getting a paper key via UI
-	err = tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearCachedSecretKeys()
-	}, "TestCryptoUnboxBytes32AnyPaper")
+	clearCaches(tc.G)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +393,7 @@ func TestCryptoUnboxBytes32AnyPaper(t *testing.T) {
 		return secretUI
 	}
 
-	res, err = UnboxBytes32Any(context.TODO(), tc.G, f, arg)
+	res, err = UnboxBytes32Any(NewMetaContextForTest(tc), f, arg)
 	if err != nil {
 		t.Fatal(err)
 	}

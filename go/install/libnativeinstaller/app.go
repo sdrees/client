@@ -4,13 +4,14 @@
 package libnativeinstaller
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/kardianos/osext"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/utils"
 )
 
 // Log is the logging interface for this package
@@ -21,7 +22,7 @@ type Log interface {
 	Errorf(s string, args ...interface{})
 }
 
-// Context is the enviroment for install package.
+// Context is the environment for install package.
 type Context interface {
 	GetConfigDir() string
 	GetCacheDir() string
@@ -35,17 +36,17 @@ type Context interface {
 
 // AppBundleForPath returns path to app bundle
 func AppBundleForPath() (string, error) {
-	path, err := osext.Executable()
+	path, err := utils.BinPath()
 	if err != nil {
 		return "", err
 	}
 	if path == "" {
-		return "", err
+		return "", errors.New("Could not get executable name")
 	}
 	paths := strings.SplitN(path, ".app", 2)
 	// If no match, return ""
 	if len(paths) <= 1 {
-		return "", fmt.Errorf("Unable to resolve bundle for valid path: %s; %s", path, err)
+		return "", fmt.Errorf("Unable to resolve bundle for valid path: %s", path)
 	}
 
 	appPath := paths[0] + ".app"
@@ -87,6 +88,17 @@ func InstallMountDir(runMode libkb.RunMode, log Log) error {
 func UninstallMountDir(runMode libkb.RunMode, log Log) error {
 	// We need the installer to remove the mount directory (since it's in the root, only the helper tool can do it)
 	return execNativeInstallerWithArg([]string{"--uninstall-mountdir"}, runMode, log)
+}
+
+// InstallRedirector calls the installer with --install-redirector.
+func InstallRedirector(runMode libkb.RunMode, log Log) error {
+	log.Info("Starting redirector")
+	return execNativeInstallerWithArg([]string{"--install-redirector"}, runMode, log)
+}
+
+// UninstallRedirector calls the installer with --uninstall-redirector.
+func UninstallRedirector(runMode libkb.RunMode, log Log) error {
+	return execNativeInstallerWithArg([]string{"--uninstall-redirector"}, runMode, log)
 }
 
 // InstallFuse calls the installer with --install-fuse.

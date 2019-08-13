@@ -4,13 +4,19 @@
 package service
 
 import (
-	"errors"
 	"fmt"
+	"sort"
 
+	"github.com/keybase/client/go/avatars"
 	"github.com/keybase/client/go/chat"
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/engine"
+	"github.com/keybase/client/go/externals"
+	"github.com/keybase/client/go/kbun"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/offline"
+	"github.com/keybase/client/go/phonenumbers"
+	"github.com/keybase/client/go/profiling"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 	"github.com/keybase/go-framed-msgpack-rpc/rpc"
 	"golang.org/x/net/context"
@@ -21,79 +27,51 @@ type UserHandler struct {
 	*BaseHandler
 	libkb.Contextified
 	globals.ChatContextified
+	service *Service
 }
 
 // NewUserHandler creates a UserHandler for the xp transport.
-func NewUserHandler(xp rpc.Transporter, g *libkb.GlobalContext, chatG *globals.ChatContext) *UserHandler {
+func NewUserHandler(xp rpc.Transporter, g *libkb.GlobalContext, chatG *globals.ChatContext, s *Service) *UserHandler {
 	return &UserHandler{
 		BaseHandler:      NewBaseHandler(g, xp),
 		Contextified:     libkb.NewContextified(g),
 		ChatContextified: globals.NewChatContextified(chatG),
+		service:          s,
 	}
 }
 
-// ListTrackers gets the list of trackers for a user by uid.
-func (h *UserHandler) ListTrackers(_ context.Context, arg keybase1.ListTrackersArg) ([]keybase1.Tracker, error) {
-	eng := engine.NewListTrackers(arg.Uid, h.G())
-	return h.listTrackers(arg.SessionID, eng)
-}
-
-// ListTrackersByName gets the list of trackers for a user by
-// username.
-func (h *UserHandler) ListTrackersByName(_ context.Context, arg keybase1.ListTrackersByNameArg) ([]keybase1.Tracker, error) {
-	eng := engine.NewListTrackersByName(arg.Username)
-	return h.listTrackers(arg.SessionID, eng)
-}
-
-// ListTrackersSelf gets the list of trackers for the logged in
-// user.
-func (h *UserHandler) ListTrackersSelf(_ context.Context, sessionID int) ([]keybase1.Tracker, error) {
-	eng := engine.NewListTrackersSelf()
-	return h.listTrackers(sessionID, eng)
-}
-
-func (h *UserHandler) listTrackers(sessionID int, eng *engine.ListTrackersEngine) ([]keybase1.Tracker, error) {
-	ctx := &engine.Context{
-		LogUI:     h.getLogUI(sessionID),
-		SessionID: sessionID,
-	}
-	if err := engine.RunEngine(eng, ctx); err != nil {
-		return nil, err
-	}
-	res := eng.ExportedList()
-	return res, nil
-}
-
-func (h *UserHandler) LoadUncheckedUserSummaries(_ context.Context, arg keybase1.LoadUncheckedUserSummariesArg) ([]keybase1.UserSummary, error) {
-	ctx := &engine.Context{}
-	eng := engine.NewUserSummary(arg.Uids, h.G())
-	if err := engine.RunEngine(eng, ctx); err != nil {
+func (h *UserHandler) LoadUncheckedUserSummaries(ctx context.Context, arg keybase1.LoadUncheckedUserSummariesArg) ([]keybase1.UserSummary, error) {
+	eng := engine.NewUserSummary(h.G(), arg.Uids)
+	m := libkb.NewMetaContext(ctx, h.G())
+	if err := engine.RunEngine2(m, eng); err != nil {
 		return nil, err
 	}
 	res := eng.ExportedSummariesList()
 	return res, nil
 }
 
-func (h *UserHandler) ListTracking(_ context.Context, arg keybase1.ListTrackingArg) (res []keybase1.UserSummary, err error) {
-	eng := engine.NewListTrackingEngine(&engine.ListTrackingEngineArg{
+func (h *UserHandler) ListTracking(ctx context.Context, arg keybase1.ListTrackingArg) (res []keybase1.UserSummary, err error) {
+	eng := engine.NewListTrackingEngine(h.G(), &engine.ListTrackingEngineArg{
 		Filter:       arg.Filter,
 		ForAssertion: arg.Assertion,
 		// Verbose has no effect on this call. At the engine level, it only
 		// affects JSON output.
-	}, h.G())
-	err = engine.RunEngine(eng, &engine.Context{})
+	})
+	m := libkb.NewMetaContext(ctx, h.G())
+	err = engine.RunEngine2(m, eng)
 	res = eng.TableResult()
 	return
 }
 
-func (h *UserHandler) ListTrackingJSON(_ context.Context, arg keybase1.ListTrackingJSONArg) (res string, err error) {
-	eng := engine.NewListTrackingEngine(&engine.ListTrackingEngineArg{
+func (h *UserHandler) ListTrackingJSON(ctx context.Context, arg keybase1.ListTrackingJSONArg) (res string, err error) {
+	eng := engine.NewListTrackingEngine(h.G(), &engine.ListTrackingEngineArg{
 		JSON:         true,
 		Filter:       arg.Filter,
 		Verbose:      arg.Verbose,
 		ForAssertion: arg.Assertion,
-	}, h.G())
-	err = engine.RunEngine(eng, &engine.Context{})
+	})
+	m := libkb.NewMetaContext(ctx, h.G())
+	err = engine.RunEngine2(m, eng)
 	res = eng.JSONResult()
 	return
 }
@@ -120,6 +98,28 @@ func (h *UserHandler) LoadUserByName(_ context.Context, arg keybase1.LoadUserByN
 	return
 }
 
+func (h *UserHandler) LoadUserPlusKeysV2(ctx context.Context, arg keybase1.LoadUserPlusKeysV2Arg) (ret keybase1.UserPlusKeysV2AllIncarnations, err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("LUPK2")
+	defer mctx.Trace(fmt.Sprintf("UserHandler#LoadUserPlusKeysV2(%+v)", arg), func() error { return err })()
+
+	cacheArg := keybase1.LoadUserPlusKeysV2Arg{
+		Uid: arg.Uid,
+	}
+
+	retp := &ret
+	servedRet, err := h.service.offlineRPCCache.Serve(mctx, arg.Oa, offline.Version(1), "user.loadUserPlusKeysV2", false, cacheArg, &retp, func(mctx libkb.MetaContext) (interface{}, error) {
+		return h.G().GetUPAKLoader().LoadV2WithKID(mctx.Ctx(), arg.Uid, arg.PollForKID)
+	})
+	if s, ok := servedRet.(*keybase1.UserPlusKeysV2AllIncarnations); ok && s != nil {
+		// Even if err != nil, the caller might still be expecting
+		// data, so use the return value if there is one.
+		ret = *s
+	} else if err != nil {
+		ret = keybase1.UserPlusKeysV2AllIncarnations{}
+	}
+	return ret, err
+}
+
 func (h *UserHandler) LoadUserPlusKeys(netCtx context.Context, arg keybase1.LoadUserPlusKeysArg) (keybase1.UserPlusKeys, error) {
 	netCtx = libkb.WithLogTag(netCtx, "LUPK")
 	h.G().Log.CDebugf(netCtx, "+ UserHandler#LoadUserPlusKeys(%+v)", arg)
@@ -135,7 +135,7 @@ func (h *UserHandler) LoadUserPlusKeys(netCtx context.Context, arg keybase1.Load
 
 	if err == nil {
 		// ret.Status might indicate an error we should return
-		// (like libkb.DeletedError, for example)
+		// (like libkb.UserDeletedError, for example)
 		err = libkb.UserErrorFromStatus(ret.Status)
 		if err != nil {
 			h.G().Log.CDebugf(netCtx, "using error from StatusCode: %v => %s", ret.Status, err)
@@ -146,28 +146,24 @@ func (h *UserHandler) LoadUserPlusKeys(netCtx context.Context, arg keybase1.Load
 	return ret, err
 }
 
-func (h *UserHandler) Search(_ context.Context, arg keybase1.SearchArg) (results []keybase1.SearchResult, err error) {
-	eng := engine.NewSearchEngine(engine.SearchEngineArgs{
-		Query: arg.Query,
-	}, h.G())
-	ctx := &engine.Context{
-		LogUI:     h.getLogUI(arg.SessionID),
-		SessionID: arg.SessionID,
-	}
-	err = engine.RunEngine(eng, ctx)
-	if err == nil {
-		results = eng.GetResults()
-	}
-	return
-}
-
-func (h *UserHandler) LoadMySettings(ctx context.Context, sessionID int) (us keybase1.UserSettings, err error) {
-	emails, err := libkb.LoadUserEmails(h.G())
+func (h *UserHandler) LoadMySettings(ctx context.Context, sessionID int) (res keybase1.UserSettings, err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G())
+	emails, err := libkb.LoadUserEmails(mctx)
 	if err != nil {
-		return
+		return res, err
 	}
-	us.Emails = emails
-	return
+	phoneNumbers, err := phonenumbers.GetPhoneNumbers(mctx)
+	if err != nil {
+		switch err.(type) {
+		case libkb.FeatureFlagError:
+			mctx.Debug("PhoneNumbers feature not enabled - phone number list will be empty")
+		default:
+			return res, err
+		}
+	}
+	res.Emails = emails
+	res.PhoneNumbers = phoneNumbers
+	return res, nil
 }
 
 func (h *UserHandler) LoadPublicKeys(ctx context.Context, arg keybase1.LoadPublicKeysArg) (keys []keybase1.PublicKey, err error) {
@@ -195,7 +191,7 @@ func (h *UserHandler) loadPublicKeys(ctx context.Context, larg libkb.LoadUserArg
 func (h *UserHandler) LoadAllPublicKeysUnverified(ctx context.Context,
 	arg keybase1.LoadAllPublicKeysUnverifiedArg) (keys []keybase1.PublicKey, err error) {
 
-	u, err := libkb.LoadUserFromServer(ctx, h.G(), arg.Uid, nil)
+	u, err := libkb.LoadUserFromServer(libkb.NewMetaContext(ctx, h.G()), arg.Uid, nil)
 	if err != nil {
 		return
 	}
@@ -206,64 +202,27 @@ func (h *UserHandler) LoadAllPublicKeysUnverified(ctx context.Context,
 	return publicKeys, nil
 }
 
-func (h *UserHandler) ListTrackers2(_ context.Context, arg keybase1.ListTrackers2Arg) (res keybase1.UserSummary2Set, err error) {
-	h.G().Trace(fmt.Sprintf("ListTrackers2(assertion=%s,reverse=%v)", arg.Assertion, arg.Reverse),
+func (h *UserHandler) ListTrackers2(ctx context.Context, arg keybase1.ListTrackers2Arg) (res keybase1.UserSummary2Set, err error) {
+	m := libkb.NewMetaContext(ctx, h.G())
+	defer m.Trace(fmt.Sprintf("ListTrackers2(assertion=%s,reverse=%v)", arg.Assertion, arg.Reverse),
 		func() error { return err })()
 	eng := engine.NewListTrackers2(h.G(), arg)
-	ctx := &engine.Context{
+	uis := libkb.UIs{
 		LogUI:     h.getLogUI(arg.SessionID),
 		SessionID: arg.SessionID,
 	}
-	err = engine.RunEngine(eng, ctx)
+	m = m.WithUIs(uis)
+	err = engine.RunEngine2(m, eng)
 	if err == nil {
 		res = eng.GetResults()
 	}
 	return res, err
 }
 
-func (h *UserHandler) ResetUser(ctx context.Context, sessionID int) error {
-	if h.G().Env.GetRunMode() != libkb.DevelRunMode {
-		return errors.New("can only reset user via service RPC in dev mode")
-	}
-	err := h.G().LoginState().ResetAccount(h.G().Env.GetUsername().String())
-	if err != nil {
-		return err
-	}
-	err = h.G().Logout()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (h *UserHandler) DeleteUser(ctx context.Context, sessionID int) error {
-	if h.G().Env.GetRunMode() != libkb.DevelRunMode {
-		return errors.New("can only delete user via service RPC in dev mode")
-	}
-	err := h.G().LoginState().DeleteAccount(h.G().Env.GetUsername().String())
-	if err != nil {
-		return err
-	}
-	err = h.G().Logout()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func (h *UserHandler) ProfileEdit(nctx context.Context, arg keybase1.ProfileEditArg) error {
 	eng := engine.NewProfileEdit(h.G(), arg)
-	ctx := &engine.Context{NetContext: nctx}
-	return engine.RunEngine(eng, ctx)
-}
-
-func (h *UserHandler) loadUsername(ctx context.Context, uid keybase1.UID) (string, error) {
-	arg := libkb.NewLoadUserByUIDArg(ctx, h.G(), uid).WithPublicKeyOptional().WithStaleOK(true).WithCachedOnly()
-	upak, _, err := h.G().GetUPAKLoader().Load(arg)
-	if err != nil {
-		return "", err
-	}
-	return upak.GetName(), nil
+	m := libkb.NewMetaContext(nctx, h.G())
+	return engine.RunEngine2(m, eng)
 }
 
 func (h *UserHandler) InterestingPeople(ctx context.Context, maxUsers int) (res []keybase1.InterestingPerson, err error) {
@@ -309,16 +268,360 @@ func (h *UserHandler) InterestingPeople(ctx context.Context, maxUsers int) (res 
 		h.G().Log.Debug("InterestingPeople: failed to get list: %s", err.Error())
 		return nil, err
 	}
-	for _, u := range uids {
-		name, err := h.loadUsername(ctx, u)
-		if err != nil {
-			h.G().Log.Debug("InterestingPeople: failed to get username for: %s msg: %s", u, err.Error())
+
+	if len(uids) == 0 {
+		h.G().Log.Debug("InterestingPeople: there are no interesting people for current user")
+		return []keybase1.InterestingPerson{}, nil
+	}
+
+	const fullnameFreshness = 0 // never stale
+	packages, err := h.G().UIDMapper.MapUIDsToUsernamePackagesOffline(ctx, h.G(), uids, fullnameFreshness)
+	if err != nil {
+		h.G().Log.Debug("InterestingPeople: failed in UIDMapper: %s, but continuing", err.Error())
+	}
+
+	for i, uid := range uids {
+		if packages[i].NormalizedUsername.IsNil() {
+			// We asked UIDMapper for cached data only, this username was missing.
+			h.G().Log.Debug("InterestingPeople: failed to get username for: %s", uid)
 			continue
 		}
-		res = append(res, keybase1.InterestingPerson{
-			Uid:      u,
-			Username: name,
-		})
+		ret := keybase1.InterestingPerson{
+			Uid:      uid,
+			Username: packages[i].NormalizedUsername.String(),
+		}
+		if fn := packages[i].FullName; fn != nil {
+			ret.Fullname = fn.FullName.String()
+		}
+		res = append(res, ret)
 	}
 	return res, nil
+}
+
+func (h *UserHandler) MeUserVersion(ctx context.Context, arg keybase1.MeUserVersionArg) (res keybase1.UserVersion, err error) {
+	loadMeArg := libkb.NewLoadUserArg(h.G()).
+		WithNetContext(ctx).
+		WithUID(h.G().Env.GetUID()).
+		WithSelf(true).
+		WithForcePoll(arg.ForcePoll).
+		WithPublicKeyOptional()
+	upak, _, err := h.G().GetUPAKLoader().LoadV2(loadMeArg)
+	if err != nil {
+		return keybase1.UserVersion{}, err
+	}
+	if upak == nil {
+		return keybase1.UserVersion{}, fmt.Errorf("could not load self upak")
+	}
+	return upak.Current.ToUserVersion(), nil
+}
+
+func (h *UserHandler) GetUPAK(ctx context.Context, uid keybase1.UID) (ret keybase1.UPAKVersioned, err error) {
+	arg := libkb.NewLoadUserArg(h.G()).WithNetContext(ctx).WithUID(uid).WithPublicKeyOptional()
+	upak, _, err := h.G().GetUPAKLoader().LoadV2(arg)
+	if err != nil {
+		return ret, err
+	}
+	if upak == nil {
+		return ret, libkb.UserNotFoundError{UID: uid, Msg: "upak load failed"}
+	}
+	ret = keybase1.NewUPAKVersionedWithV2(*upak)
+	return ret, err
+}
+
+func (h *UserHandler) GetUPAKLite(ctx context.Context, uid keybase1.UID) (ret keybase1.UPKLiteV1AllIncarnations, err error) {
+	arg := libkb.NewLoadUserArg(h.G()).WithNetContext(ctx).WithUID(uid).WithPublicKeyOptional().ForUPAKLite()
+	upakLite, err := h.G().GetUPAKLoader().LoadLite(arg)
+	if err != nil {
+		return ret, err
+	}
+	if upakLite == nil {
+		return ret, libkb.UserNotFoundError{UID: uid, Msg: "upak load failed"}
+	}
+	ret = *upakLite
+	return ret, nil
+}
+
+func (h *UserHandler) UploadUserAvatar(ctx context.Context, arg keybase1.UploadUserAvatarArg) (err error) {
+	ctx = libkb.WithLogTag(ctx, "US")
+	defer h.G().CTraceTimed(ctx, fmt.Sprintf("UploadUserAvatar(%s)", arg.Filename), func() error { return err })()
+
+	mctx := libkb.NewMetaContext(ctx, h.G())
+	return avatars.UploadImage(mctx, arg.Filename, nil /* teamname */, arg.Crop)
+}
+
+func (h *UserHandler) ProofSuggestions(ctx context.Context, sessionID int) (ret keybase1.ProofSuggestionsRes, err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("US")
+	defer mctx.TraceTimed("ProofSuggestions", func() error { return err })()
+	tracer := mctx.G().CTimeTracer(mctx.Ctx(), "ProofSuggestions", libkb.ProfileProofSuggestions)
+	defer tracer.Finish()
+	suggestions, err := h.proofSuggestionsHelper(mctx, tracer)
+	if err != nil {
+		return ret, err
+	}
+	tracer.Stage("fold-pri")
+	foldPriority := mctx.G().GetProofServices().SuggestionFoldPriority(h.MetaContext(ctx))
+	tracer.Stage("fold-loop")
+	for _, suggestion := range suggestions {
+		if foldPriority > 0 && suggestion.Priority >= foldPriority {
+			ret.ShowMore = true
+			suggestion.BelowFold = true
+		}
+		ret.Suggestions = append(ret.Suggestions, suggestion.ProofSuggestion)
+	}
+	return ret, nil
+}
+
+type ProofSuggestion struct {
+	keybase1.ProofSuggestion
+	LogoKey  string
+	Priority int
+}
+
+var pgpProofSuggestion = ProofSuggestion{
+	ProofSuggestion: keybase1.ProofSuggestion{
+		Key:           "pgp",
+		ProfileText:   "Add a PGP key",
+		PickerText:    "PGP key",
+		PickerSubtext: "",
+	},
+	LogoKey: "pgp",
+}
+
+var webProofSuggestion = ProofSuggestion{
+	ProofSuggestion: keybase1.ProofSuggestion{
+		Key:           "web",
+		ProfileText:   "Prove your website",
+		PickerText:    "Your own website",
+		PickerSubtext: "",
+	},
+	LogoKey: "web",
+}
+
+var bitcoinProofSuggestion = ProofSuggestion{
+	ProofSuggestion: keybase1.ProofSuggestion{
+		Key:           "btc",
+		ProfileText:   "Set a Bitcoin address",
+		PickerText:    "Bitcoin address",
+		PickerSubtext: "",
+	},
+	LogoKey: "btc",
+}
+
+var zcashProofSuggestion = ProofSuggestion{
+	ProofSuggestion: keybase1.ProofSuggestion{
+		Key:           "zcash",
+		ProfileText:   "Set a Zcash address",
+		PickerText:    "Zcash address",
+		PickerSubtext: "",
+	},
+	LogoKey: "zcash",
+}
+
+func (h *UserHandler) proofSuggestionsHelper(mctx libkb.MetaContext, tracer profiling.TimeTracer) (ret []ProofSuggestion, err error) {
+	user, err := libkb.LoadMe(libkb.NewLoadUserArgWithMetaContext(mctx).WithPublicKeyOptional())
+	if err != nil {
+		return ret, err
+	}
+	if user == nil || user.IDTable() == nil {
+		return ret, fmt.Errorf("could not load logged-in user")
+	}
+
+	tracer.Stage("get_list")
+	var suggestions []ProofSuggestion
+	serviceKeys := mctx.G().GetProofServices().ListServicesThatAcceptNewProofs(mctx)
+	tracer.Stage("loop_keys")
+	for _, service := range serviceKeys {
+		switch service {
+		case "web", "dns", "http", "https":
+			// These are under the "web" umbrella.
+			// "web" is added below.
+			continue
+		}
+		serviceType := mctx.G().GetProofServices().GetServiceType(mctx.Ctx(), service)
+		if serviceType == nil {
+			mctx.Debug("missing proof service type: %v", service)
+			continue
+		}
+		if len(user.IDTable().GetActiveProofsFor(serviceType)) > 0 {
+			mctx.Debug("user has an active proof: %v", serviceType.Key())
+			continue
+		}
+		subtext := serviceType.DisplayGroup()
+		if len(subtext) == 0 {
+			subtext = serviceType.PickerSubtext()
+		}
+		var metas []keybase1.Identify3RowMeta
+		if serviceType.IsNew(mctx) {
+			metas = []keybase1.Identify3RowMeta{{Label: "new", Color: keybase1.Identify3RowColor_BLUE}}
+		}
+		suggestions = append(suggestions, ProofSuggestion{
+			LogoKey: serviceType.GetLogoKey(),
+			ProofSuggestion: keybase1.ProofSuggestion{
+				Key:           service,
+				ProfileText:   fmt.Sprintf("Prove your %v", serviceType.DisplayName()),
+				PickerText:    serviceType.DisplayName(),
+				PickerSubtext: subtext,
+				Metas:         metas,
+			}})
+	}
+	tracer.Stage("misc")
+	hasPGP := len(user.GetActivePGPKeys(true)) > 0
+	if !hasPGP {
+		suggestions = append(suggestions, pgpProofSuggestion)
+	}
+	// Always show the option to create a new web proof.
+	suggestions = append(suggestions, webProofSuggestion)
+	if !user.IDTable().HasActiveCryptocurrencyFamily(libkb.CryptocurrencyFamilyBitcoin) {
+		suggestions = append(suggestions, bitcoinProofSuggestion)
+	}
+	if !user.IDTable().HasActiveCryptocurrencyFamily(libkb.CryptocurrencyFamilyZCash) {
+		suggestions = append(suggestions, zcashProofSuggestion)
+	}
+
+	// Attach icon urls
+	tracer.Stage("icons")
+	for i := range suggestions {
+		suggestion := &suggestions[i]
+		suggestion.ProfileIcon = externals.MakeIcons(mctx, suggestion.LogoKey, "logo_black", 16)
+		suggestion.PickerIcon = externals.MakeIcons(mctx, suggestion.LogoKey, "logo_full", 32)
+	}
+
+	// Alphabetize so that ties later on in SliceStable are deterministic.
+	tracer.Stage("alphabetize")
+	sort.Slice(suggestions, func(i, j int) bool {
+		return suggestions[i].Key < suggestions[j].Key
+	})
+
+	// Priorities from the server.
+	tracer.Stage("prioritize-server")
+	serverPriority := make(map[string]int) // key -> server priority
+	maxServerPriority := 0
+	for _, displayConfig := range mctx.G().GetProofServices().ListDisplayConfigs(mctx) {
+		if displayConfig.Priority <= 0 {
+			continue
+		}
+		var altKey string
+		switch displayConfig.Key {
+		case "zcash.t", "zcash.z", "zcash.s":
+			altKey = "zcash"
+		case "bitcoin":
+			altKey = "btc"
+		case "http", "https", "dns":
+			altKey = "web"
+		}
+		serverPriority[displayConfig.Key] = displayConfig.Priority
+		if len(altKey) > 0 {
+			if v, ok := serverPriority[altKey]; !ok || displayConfig.Priority < v {
+				serverPriority[altKey] = displayConfig.Priority
+			}
+		}
+		if displayConfig.Priority > maxServerPriority {
+			maxServerPriority = displayConfig.Priority
+		}
+	}
+
+	// Fallback priorities for rows the server missed.
+	// Fallback priorities are placed after server priorities.
+	tracer.Stage("fallback")
+	offlineOrder := []string{
+		"twitter",
+		"github",
+		"reddit",
+		"hackernews",
+		"rooter",
+		"web",
+		"pgp",
+		"bitcoin",
+		"zcash",
+	}
+	offlineOrderMap := make(map[string]int) // key -> offline priority
+	for i, k := range offlineOrder {
+		offlineOrderMap[k] = i
+	}
+
+	tracer.Stage("prioritize-again")
+	priorityFn := func(key string) int {
+		if p, ok := serverPriority[key]; ok {
+			return p
+		} else if p, ok := offlineOrderMap[key]; ok {
+			return p + maxServerPriority + 1
+		} else {
+			return len(offlineOrderMap) + maxServerPriority
+		}
+	}
+	for i := range suggestions {
+		suggestions[i].Priority = priorityFn(suggestions[i].Key)
+	}
+
+	tracer.Stage("sort-final")
+	sort.SliceStable(suggestions, func(i, j int) bool {
+		return suggestions[i].Priority < suggestions[j].Priority
+	})
+	return suggestions, nil
+}
+
+func (h *UserHandler) FindNextMerkleRootAfterRevoke(ctx context.Context, arg keybase1.FindNextMerkleRootAfterRevokeArg) (ret keybase1.NextMerkleRootRes, err error) {
+	m := libkb.NewMetaContext(ctx, h.G())
+	m = m.WithLogTag("FNMR")
+	defer m.TraceTimed("UserHandler#FindNextMerkleRootAfterRevoke", func() error { return err })()
+	return libkb.FindNextMerkleRootAfterRevoke(m, arg)
+}
+
+func (h *UserHandler) FindNextMerkleRootAfterReset(ctx context.Context, arg keybase1.FindNextMerkleRootAfterResetArg) (ret keybase1.NextMerkleRootRes, err error) {
+	m := libkb.NewMetaContext(ctx, h.G())
+	m = m.WithLogTag("FNMR")
+	defer m.TraceTimed("UserHandler#FindNextMerkleRootAfterReset", func() error { return err })()
+	return libkb.FindNextMerkleRootAfterReset(m, arg)
+}
+
+func (h *UserHandler) LoadHasRandomPw(ctx context.Context, arg keybase1.LoadHasRandomPwArg) (res bool, err error) {
+	m := libkb.NewMetaContext(ctx, h.G())
+	return libkb.LoadHasRandomPw(m, arg)
+}
+
+func (h *UserHandler) CanLogout(ctx context.Context, sessionID int) (res keybase1.CanLogoutRes, err error) {
+	m := libkb.NewMetaContext(ctx, h.G())
+	res = libkb.CanLogout(m)
+	return res, nil
+}
+
+func (h *UserHandler) UserCard(ctx context.Context, arg keybase1.UserCardArg) (res *keybase1.UserCard, err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G())
+	defer mctx.TraceTimed("UserHandler#UserCard", func() error { return err })()
+
+	uid := mctx.G().UIDMapper.MapHardcodedUsernameToUID(kbun.NewNormalizedUsername(arg.Username))
+	if !uid.Exists() {
+		uid = libkb.UsernameToUIDPreserveCase(arg.Username)
+	}
+	return libkb.UserCard(mctx, uid, arg.UseSession)
+}
+
+func (h *UserHandler) BlockUser(ctx context.Context, username string) (err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G())
+	defer mctx.TraceTimed("UserHandler#BlockUser", func() error { return err })()
+	return h.setUserBlock(mctx, username, true)
+}
+
+func (h *UserHandler) UnblockUser(ctx context.Context, username string) (err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G())
+	defer mctx.TraceTimed("UserHandler#UnblockUser", func() error { return err })()
+	return h.setUserBlock(mctx, username, false)
+}
+
+func (h *UserHandler) setUserBlock(mctx libkb.MetaContext, username string, block bool) error {
+	uid, err := mctx.G().GetUPAKLoader().LookupUID(mctx.Ctx(), libkb.NewNormalizedUsername(username))
+	if err != nil {
+		return err
+	}
+	apiArg := libkb.APIArg{
+		Endpoint:    "user/block",
+		SessionType: libkb.APISessionTypeREQUIRED,
+		Args: libkb.HTTPArgs{
+			"block_uid": libkb.S{Val: uid.String()},
+			"unblock":   libkb.B{Val: !block},
+		},
+	}
+	_, err = mctx.G().API.Post(mctx, apiArg)
+	mctx.G().CardCache().Delete(uid)
+	return err
 }

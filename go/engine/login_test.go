@@ -22,6 +22,7 @@ import (
 
 	"github.com/keybase/client/go/kex2"
 	"github.com/keybase/client/go/libkb"
+	gregor1 "github.com/keybase/client/go/protocol/gregor1"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 )
 
@@ -35,7 +36,7 @@ func TestLoginLogoutLogin(t *testing.T) {
 }
 
 // Test login switching between two different users.
-func TestLoginAndSwitch(t *testing.T) {
+func TestLoginAndSwitchWithLogout(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
@@ -48,8 +49,52 @@ func TestLoginAndSwitch(t *testing.T) {
 	Logout(tc)
 	t.Logf("second logging back in")
 	u2.LoginOrBust(tc)
+}
 
-	return
+func TestLoginTwiceLogoutOnce(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+	u1 := CreateAndSignupFakeUser(tc, "first")
+	Logout(tc)
+	t.Logf("Logout first, and signup  u2")
+	u2 := CreateAndSignupFakeUser(tc, "secon")
+	t.Logf("Login u1")
+	u1.SwitchTo(tc.G, true)
+	t.Logf("Logged in u1")
+	u2.SwitchTo(tc.G, true)
+	eng := NewLogout()
+	mctx := NewMetaContextForTest(tc).WithUIs(libkb.UIs{
+		LoginUI:  &libkb.TestLoginUI{},
+		SecretUI: &nullSecretUI{},
+	})
+	err := RunEngine2(mctx, eng)
+	require.NoError(t, err)
+	require.True(t, tc.G.ActiveDevice.Valid())
+	require.Equal(t, tc.G.ActiveDevice.UID(), u1.UID())
+}
+
+// Test login switching between two different users.
+func TestLoginAndSwitchWithoutLogout(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+	u1 := CreateAndSignupFakeUser(tc, "first")
+	Logout(tc)
+	t.Logf("Logout first, and signup  u2")
+	u2 := CreateAndSignupFakeUser(tc, "secon")
+	t.Logf("Login u1")
+	u1.SwitchTo(tc.G, true)
+	t.Logf("Logged in u1")
+	u2.SwitchTo(tc.G, true)
+	t.Logf("Logged in u2")
+
+	swtch := func(u *FakeUser) {
+		err := u.SwitchTo(tc.G, false)
+		require.NoError(t, err)
+	}
+	for i := 0; i < 3; i++ {
+		swtch(u1)
+		swtch(u2)
+	}
 }
 
 func TestLoginUsernameWhitespace(t *testing.T) {
@@ -85,18 +130,12 @@ func TestLoginActiveDevice(t *testing.T) {
 	u1.LoginOrBust(tc)
 
 	assertDeviceKeysCached(tc)
-
-	if tc.G.ActiveDevice.Name() != defaultDeviceName {
-		t.Errorf("active device name: %q, expected %q", tc.G.ActiveDevice.Name(), defaultDeviceName)
-	}
+	require.Equal(t, tc.G.ActiveDevice.Name(), defaultDeviceName)
 
 	simulateServiceRestart(t, tc, u1)
 
 	assertDeviceKeysCached(tc)
-
-	if tc.G.ActiveDevice.Name() != defaultDeviceName {
-		t.Errorf("after restart, active device name: %q, expected %q", tc.G.ActiveDevice.Name(), defaultDeviceName)
-	}
+	require.Equal(t, tc.G.ActiveDevice.Name(), defaultDeviceName)
 }
 
 func TestCreateFakeUserNoKeys(t *testing.T) {
@@ -126,57 +165,21 @@ func TestCreateFakeUserNoKeys(t *testing.T) {
 
 func testUserHasDeviceKey(tc libkb.TestContext) {
 	me, err := libkb.LoadMe(libkb.NewLoadUserPubOptionalArg(tc.G))
-	if err != nil {
-		tc.T.Fatal(err)
-	}
+	require.NoError(tc.T, err)
 
 	kf := me.GetKeyFamily()
-	if kf == nil {
-		tc.T.Fatal("user has a nil key family")
-	}
-	if me.GetEldestKID().IsNil() {
-		tc.T.Fatal("user has no eldest key")
-	}
+	require.NotNil(tc.T, kf)
+	require.False(tc.T, me.GetEldestKID().IsNil())
 
 	ckf := me.GetComputedKeyFamily()
-	if ckf == nil {
-		tc.T.Fatalf("user has no computed key family")
-	}
+	require.NotNil(tc.T, ckf)
 
 	active := ckf.HasActiveKey()
-	if !active {
-		tc.T.Errorf("user has no active key")
-	}
+	require.True(tc.T, active)
 
 	subkey, err := me.GetDeviceSubkey()
-	if err != nil {
-		tc.T.Fatal(err)
-	}
-	if subkey == nil {
-		tc.T.Fatal("nil subkey")
-	}
-}
-
-func TestUserInfo(t *testing.T) {
-	t.Skip()
-	tc := SetupEngineTest(t, "login")
-	defer tc.Cleanup()
-
-	u := CreateAndSignupFakeUser(tc, "login")
-	var username libkb.NormalizedUsername
-	var err error
-	aerr := tc.G.LoginState().Account(func(a *libkb.Account) {
-		_, username, _, _, _, err = a.UserInfo()
-	}, "TestUserInfo")
-	if aerr != nil {
-		t.Fatal(err)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !username.Eq(libkb.NewNormalizedUsername(u.Username)) {
-		t.Errorf("userinfo username: %q, expected %q", username, u.Username)
-	}
+	require.NoError(tc.T, err)
+	require.NotNil(tc.T, subkey)
 }
 
 func TestUserEmails(t *testing.T) {
@@ -184,7 +187,7 @@ func TestUserEmails(t *testing.T) {
 	defer tc.Cleanup()
 
 	CreateAndSignupFakeUser(tc, "login")
-	emails, err := libkb.LoadUserEmails(tc.G)
+	emails, err := libkb.LoadUserEmails(NewMetaContextForTest(tc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,15 +196,136 @@ func TestUserEmails(t *testing.T) {
 	}
 }
 
+func TestProvisionDesktopAfterSwitch(t *testing.T) {
+	testProvisionAfterSwitch(t, true)
+}
+
+func TestProvisionAfterSwitchWithWrongUser(t *testing.T) {
+	testProvisionAfterSwitch(t, false)
+}
+
+func testProvisionAfterSwitch(t *testing.T, shouldItWork bool) {
+	// device X (provisioner) context:
+	t.Logf("setup X")
+	tcX := SetupEngineTest(t, "kex2provision")
+	defer tcX.Cleanup()
+
+	// device Y (provisionee) context:
+	t.Logf("setup Y")
+	tcY := SetupEngineTest(t, "template")
+	defer tcY.Cleanup()
+
+	// provisioner needs to be logged in
+	t.Logf("provisioner login")
+	userX := CreateAndSignupFakeUserPaper(tcX, "login")
+	Logout(tcX)
+
+	var secretX kex2.Secret
+	_, err := rand.Read(secretX[:])
+	require.NoError(t, err)
+
+	// Now make a user Pam
+	userPam := CreateAndSignupFakeUserPaper(tcX, "login")
+
+	userProvisionAs := userX
+	if !shouldItWork {
+		userProvisionAs = userPam
+	}
+
+	// Now switch back to userX, which may or may not be userProvisionAs (above)
+	userX.SwitchTo(tcX.G, true)
+
+	secretCh := make(chan kex2.Secret)
+
+	// provisionee calls login:
+	t.Logf("provisionee login")
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUISecretCh(secretCh),
+		LoginUI:     &libkb.TestLoginUI{Username: userProvisionAs.Username},
+		LogUI:       tcY.G.UI.GetLogUI(),
+		SecretUI:    &libkb.TestSecretUI{},
+		GPGUI:       &gpgtestui{},
+	}
+
+	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+
+	var wg sync.WaitGroup
+
+	assertError := func(err error) {
+		if shouldItWork {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
+			require.True(t, strings.Contains(err.Error(), "is a different user than we wanted"))
+		}
+	}
+
+	// start provisionee
+	t.Logf("start provisionee")
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		err := RunEngine2(m, eng)
+		assertError(err)
+	}()
+
+	// start provisioner
+	t.Logf("start provisioner")
+	provisioner := NewKex2Provisioner(tcX.G, secretX, nil)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		uis := libkb.UIs{
+			SecretUI:    userProvisionAs.NewSecretUI(),
+			ProvisionUI: newTestProvisionUI(),
+		}
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		err := RunEngine2(m, provisioner)
+		assertError(err)
+	}()
+
+	secretFromY := <-secretCh
+
+	provisioner.AddSecret(secretFromY)
+
+	t.Logf("wait")
+	wg.Wait()
+
+	require.False(t, t.Failed(), "prior failure in a goroutine")
+
+	if !shouldItWork {
+		return
+	}
+
+	t.Logf("asserts")
+	if err := AssertProvisioned(tcY); err != nil {
+		t.Fatal(err)
+	}
+
+	// after provisioning, the passphrase stream should be cached
+	// (note that this just checks the passphrase stream, not 3sec)
+	assertPassphraseStreamCache(tcY)
+
+	// after provisioning, the device keys should be cached
+	assertDeviceKeysCached(tcY)
+
+	// after provisioning, the secret should be stored
+	assertSecretStored(tcY, userX.Username)
+
+}
+
 func TestProvisionDesktop(t *testing.T) {
-	testProvisionDesktop(t, false)
+	doWithSigChainVersions(func(sigVersion libkb.SigVersion) {
+		testProvisionDesktop(t, false, sigVersion)
+	})
 }
 
 func TestProvisionDesktopPUK(t *testing.T) {
-	testProvisionDesktop(t, true)
+	testProvisionDesktop(t, true, libkb.KeybaseNullSigVersion)
 }
 
-func testProvisionDesktop(t *testing.T, upgradePerUserKey bool) {
+func testProvisionDesktop(t *testing.T, upgradePerUserKey bool, sigVersion libkb.SigVersion) {
 	// device X (provisioner) context:
 	t.Logf("setup X")
 	tcX := SetupEngineTest(t, "kex2provision")
@@ -226,13 +350,14 @@ func testProvisionDesktop(t *testing.T, upgradePerUserKey bool) {
 
 	// provisionee calls login:
 	t.Logf("provisionee login")
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
 		SecretUI:    &libkb.TestSecretUI{},
 		GPGUI:       &gpgtestui{},
 	}
+
 	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
 
 	var wg sync.WaitGroup
@@ -242,8 +367,8 @@ func testProvisionDesktop(t *testing.T, upgradePerUserKey bool) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -256,11 +381,12 @@ func testProvisionDesktop(t *testing.T, upgradePerUserKey bool) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -290,34 +416,14 @@ func testProvisionDesktop(t *testing.T, upgradePerUserKey bool) {
 	// after provisioning, the secret should be stored
 	assertSecretStored(tcY, userX.Username)
 
-	testTrack := func(whom string) {
-
-		// make sure that the provisioned device can use
-		// the passphrase stream cache (use an empty secret ui)
-		arg := &TrackEngineArg{
-			UserAssertion: whom,
-			Options:       keybase1.TrackOptions{BypassConfirm: true},
-		}
-		ctx = &Context{
-			LogUI:      tcY.G.UI.GetLogUI(),
-			IdentifyUI: &FakeIdentifyUI{},
-			SecretUI:   &libkb.TestSecretUI{},
-		}
-
-		teng := NewTrackEngine(arg, tcY.G)
-		if err := RunEngine(teng, ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	t.Logf("test tracks")
-	testTrack("t_alice")
+	testTrack(t, tcY, sigVersion, "t_alice")
 
 	// Make sure that we can still track without a passphrase
-	// after a similated service restart.  In other words, that
+	// after a simulated service restart.  In other words, that
 	// the full LKSec secret was written to the secret store.
 	simulateServiceRestart(t, tcY, userX)
-	testTrack("t_bob")
+	testTrack(t, tcY, sigVersion, "t_bob")
 }
 
 func TestProvisionMobile(t *testing.T) {
@@ -339,7 +445,7 @@ func TestProvisionMobile(t *testing.T) {
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -354,7 +460,8 @@ func TestProvisionMobile(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -366,11 +473,12 @@ func TestProvisionMobile(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -406,7 +514,7 @@ func TestProvisionWithRevoke(t *testing.T) {
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -421,7 +529,8 @@ func TestProvisionWithRevoke(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -433,11 +542,12 @@ func TestProvisionWithRevoke(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -460,40 +570,92 @@ func TestProvisionWithRevoke(t *testing.T) {
 	}
 }
 
-// If a user has device keys and no pgp keys,
-// not selecting a device should result in
-// ProvisionUnavailable.
-func TestProvisionChooseNoDeviceWithoutPGP(t *testing.T) {
+// If a user has device keys and no pgp keys, not selecting a device
+// should trigger the autoreset flow.
+func TestProvisionAutoreset(t *testing.T) {
 	// device X (provisioner) context:
 	tcX := SetupEngineTest(t, "provision_x")
 	defer tcX.Cleanup()
 
 	// create user (and device X)
 	userX := CreateAndSignupFakeUser(tcX, "login")
+	require.NoError(t, AssertLoggedIn(tcX), "should be logged in on device x")
+	require.NoError(t, AssertProvisioned(tcX), "should be provisioned on device x")
 
 	// device Y (provisionee) context:
 	tcY := SetupEngineTest(t, "provision_y")
 	defer tcY.Cleanup()
+	libkb.AddEnvironmentFeatureForTest(tcY, libkb.EnvironmentFeatureAutoresetPipeline)
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIChooseNoDevice(),
-		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
-		LogUI:       tcY.G.UI.GetLogUI(),
-		SecretUI:    &libkb.TestSecretUI{},
-		GPGUI:       &gpgtestui{},
+		LoginUI: &libkb.TestLoginUI{
+			Username:     userX.Username,
+			ResetAccount: true,
+		},
+		LogUI:    tcY.G.UI.GetLogUI(),
+		SecretUI: &libkb.TestSecretUI{Passphrase: userX.Passphrase},
+		GPGUI:    &gpgtestui{},
 	}
+	m := NewMetaContextForTest(tcY).WithUIs(uis)
 	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
-	if err == nil {
-		t.Fatal("expected login to fail, but it ran without error")
-	}
-	if _, ok := err.(libkb.ProvisionUnavailableError); !ok {
-		t.Fatalf("expected ProvisionUnavailableError, got %T (%s)", err, err)
-	}
+	require.NoError(t, RunEngine2(m, eng), "expected login engine to succeed")
+	require.NotNil(t, AssertLoggedIn(tcY), "should not be logged in")
 
-	if err := AssertLoggedIn(tcY); err == nil {
-		t.Fatal("should not be logged in")
+	// Travel 3 days into future + 1h to make sure that it all runs
+	require.NoError(t, timeTravelReset(tcX, time.Hour*73))
+	require.NoError(t, processReset(tcX))
+
+	// Rather than sleeping we'll wait for autoreset by analyzing its state
+	var lastErr error
+	for i := 0; i < 60; i++ {
+		// up to 60 iters * 100ms = 6s
+		lastErr = assertAutoreset(tcX, userX.UID(), libkb.AutoresetEventReady)
+		if lastErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
+	require.NoError(t, lastErr)
+
+	// Second iteration on device Y should result in a reset + provision
+	uis = libkb.UIs{
+		ProvisionUI: newTestProvisionUIChooseNoDevice(),
+		LoginUI: &libkb.TestLoginUI{
+			Username:     userX.Username,
+			ResetAccount: true,
+		},
+		LogUI:    tcY.G.UI.GetLogUI(),
+		SecretUI: &libkb.TestSecretUI{Passphrase: userX.Passphrase},
+		GPGUI:    &gpgtestui{},
+	}
+	m = NewMetaContextForTest(tcY).WithUIs(uis)
+	eng = NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+	require.NoError(t, RunEngine2(m, eng), "expected 2nd login engine to succeed")
+	require.NoError(t, AssertLoggedIn(tcY), "should be logged in")
+	require.NoError(t, AssertProvisioned(tcY), "should be provisioned on device y")
+}
+
+func timeTravelReset(tc libkb.TestContext, duration time.Duration) error {
+	mctx := libkb.NewMetaContextForTest(tc)
+	_, err := tc.G.API.Post(mctx, libkb.APIArg{
+		Endpoint:    "autoreset/timetravel",
+		SessionType: libkb.APISessionTypeREQUIRED,
+		Args: libkb.HTTPArgs{
+			"duration_sec": libkb.I{Val: int(gregor1.ToDurationSec(duration))},
+		},
+	})
+	return err
+}
+
+func processReset(tc libkb.TestContext) error {
+	mctx := libkb.NewMetaContextForTest(tc)
+	_, err := tc.G.API.Post(mctx, libkb.APIArg{
+		Endpoint:    "autoreset/process_dev",
+		SessionType: libkb.APISessionTypeNONE,
+		RetryCount:  5,
+	})
+	return err
 }
 
 func TestProvisionPassphraseNoKeysSolo(t *testing.T) {
@@ -520,7 +682,7 @@ func testProvisionPassphraseNoKeysSolo(t *testing.T, upgradePerUserKey bool) {
 	defer tc.Cleanup()
 	tc.Tp.DisableUpgradePerUserKey = !upgradePerUserKey
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -528,7 +690,8 @@ func testProvisionPassphraseNoKeysSolo(t *testing.T, upgradePerUserKey bool) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -558,7 +721,7 @@ func TestProvisionPassphraseBadName(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: strings.Repeat("X", 20)},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -566,13 +729,10 @@ func TestProvisionPassphraseBadName(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
-	if err == nil {
-		t.Fatal("Provision via passphrase should have failed with bad name.")
-	}
-	if _, ok := err.(libkb.BadNameError); !ok {
-		t.Fatalf("Provision via passphrase err type: %T, expected libkb.BadNameError", err)
-	}
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
+	require.Error(t, err)
+	require.IsType(t, libkb.BadUsernameError{}, err)
 }
 
 // If a user has (only) a synced pgp key, provision via passphrase
@@ -588,7 +748,7 @@ func TestProvisionPassphraseSyncedPGP(t *testing.T) {
 	tc = SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u1.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -596,7 +756,8 @@ func TestProvisionPassphraseSyncedPGP(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -631,7 +792,7 @@ func TestProvisionPassphraseSyncedPGPEmail(t *testing.T) {
 	tc = SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u1.Email},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -639,22 +800,11 @@ func TestProvisionPassphraseSyncedPGPEmail(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	// since this user didn't have any device keys, login should have fixed that:
-	testUserHasDeviceKey(tc)
-
-	// and they should not have a paper backup key
-	hasZeroPaperDev(tc, u1)
-
-	if err := AssertProvisioned(tc); err != nil {
-		t.Fatal(err)
-	}
-
-	// after provisioning, the secret should be stored
-	assertSecretStored(tc, u1.Username)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
+	require.Error(t, err)
+	require.IsType(t, libkb.BadUsernameError{}, err)
+	require.Contains(t, err.Error(), "not supported")
 }
 
 // Check that a bad passphrase fails to unlock a synced pgp key
@@ -669,7 +819,7 @@ func TestProvisionSyncedPGPBadPassphrase(t *testing.T) {
 	tc = SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u1.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -677,7 +827,8 @@ func TestProvisionSyncedPGPBadPassphrase(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err == nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err == nil {
 		t.Fatal("sync pgp provision worked with bad passphrase")
 	} else if _, ok := err.(libkb.PassphraseError); !ok {
 		t.Errorf("error: %T, expected libkb.PassphraseError", err)
@@ -703,7 +854,7 @@ func TestProvisionPassphraseNoKeysSwitchUser(t *testing.T) {
 
 	Logout(tc)
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -711,7 +862,8 @@ func TestProvisionPassphraseNoKeysSwitchUser(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, username, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -747,7 +899,7 @@ func TestProvisionSyncedPGPWithPUK(t *testing.T) {
 	tc = SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u1.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -755,7 +907,8 @@ func TestProvisionSyncedPGPWithPUK(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -773,7 +926,7 @@ func TestProvisionSyncedPGPWithPUK(t *testing.T) {
 	tc2 := SetupEngineTest(t, "login")
 	defer tc2.Cleanup()
 
-	ctx2 := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u1.Username},
 		LogUI:       tc2.G.UI.GetLogUI(),
@@ -784,7 +937,8 @@ func TestProvisionSyncedPGPWithPUK(t *testing.T) {
 	// this should fail, the user should not be allowed to use synced pgp key to provision
 	// second device when PUK is on:
 	eng2 := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng2, ctx2)
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	err := RunEngine2(m2, eng2)
 	if err == nil {
 		t.Fatal("Provision w/ synced pgp key successful on device 2 w/ PUK enabled")
 	}
@@ -812,11 +966,8 @@ func TestProvisionGPGWithPUK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// now safe to cleanup first home
-	tc.Cleanup()
-
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -824,7 +975,8 @@ func TestProvisionGPGWithPUK(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -846,7 +998,7 @@ func TestProvisionGPGWithPUK(t *testing.T) {
 	}
 
 	// run login on new device
-	ctx3 := &Context{
+	uis3 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc3.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -854,13 +1006,87 @@ func TestProvisionGPGWithPUK(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng3 := NewLogin(tc3.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng3, ctx3)
+	m3 := NewMetaContextForTest(tc3).WithUIs(uis3)
+	err := RunEngine2(m3, eng3)
 	if err == nil {
 		t.Fatal("Provision w/ gpg key successful on device 2 w/ PUK enabled")
 	}
 	if _, ok := err.(libkb.ProvisionViaDeviceRequiredError); !ok {
 		t.Errorf("Provision error type: %T (%s), expected libkb.ProvisionViaDeviceRequiredError", err, err)
 	}
+}
+
+// Test provisioning where we use one username, but suddenly we are
+// key-exchanging with someone else.
+func TestProvisionWithUnexpectedX(t *testing.T) {
+	t.Logf("Setting contexts and users")
+
+	// We want to provision as this user:
+	tcV := SetupEngineTest(t, "kex2provision")
+	defer tcV.Cleanup()
+	wantedUser := CreateAndSignupFakeUserPaper(tcV, "usr1")
+
+	// But actually this one will respond:
+	tcF := SetupEngineTest(t, "unexpected")
+	defer tcF.Cleanup()
+	actualUser := CreateAndSignupFakeUserPaper(tcF, "usr2")
+	var secretX kex2.Secret
+	_, err := rand.Read(secretX[:])
+	require.NoError(t, err)
+
+	// device Y (provisionee) context:
+	tcY := SetupEngineTest(t, "template")
+	defer tcY.Cleanup()
+
+	secretCh := make(chan kex2.Secret)
+
+	// provisionee calls login:
+	t.Logf("provisionee login")
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUISecretCh(secretCh),
+		LoginUI:     &libkb.TestLoginUI{Username: wantedUser.Username},
+		LogUI:       tcY.G.UI.GetLogUI(),
+		SecretUI:    &libkb.TestSecretUI{},
+		GPGUI:       &gpgtestui{},
+	}
+
+	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+
+	var wg sync.WaitGroup
+
+	// start provisionee
+	t.Logf("start provisionee")
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		err := RunEngine2(m, eng)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "different user")
+	}()
+
+	// start provisioner
+	t.Logf("start provisioner")
+	provisioner := NewKex2Provisioner(tcF.G, secretX, nil)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		uis := libkb.UIs{
+			SecretUI:    actualUser.NewSecretUI(),
+			ProvisionUI: newTestProvisionUI(),
+		}
+		m := NewMetaContextForTest(tcF).WithUIs(uis)
+		err := RunEngine2(m, provisioner)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "different user")
+	}()
+
+	secretFromY := <-secretCh
+	provisioner.AddSecret(secretFromY)
+
+	t.Logf("wait")
+	wg.Wait()
 }
 
 func testSign(t *testing.T, tc libkb.TestContext) {
@@ -873,32 +1099,57 @@ func testSign(t *testing.T, tc libkb.TestContext) {
 		Source: ioutil.NopCloser(bytes.NewBufferString("hello")),
 	}
 
-	signEng := NewSaltpackSign(sarg, tc.G)
-	ctx := &Context{
+	signEng := NewSaltpackSign(tc.G, sarg)
+	uis := libkb.UIs{
 		IdentifyUI: &FakeIdentifyUI{},
 		SecretUI:   &libkb.TestSecretUI{}, // empty
 	}
 
-	if err := RunEngine(signEng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, signEng); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestProvisionPaperOnly(t *testing.T) {
+func testTrack(t *testing.T, tc libkb.TestContext, sigVersion libkb.SigVersion, whom string) {
+
+	if sigVersion == libkb.KeybaseNullSigVersion {
+		sigVersion = libkb.GetDefaultSigVersion(tc.G)
+	}
+	// should be able to track someone (no passphrase prompt)
+	targ := &TrackEngineArg{
+		UserAssertion: whom,
+		Options:       keybase1.TrackOptions{BypassConfirm: true},
+		SigVersion:    sigVersion,
+	}
+	uis := libkb.UIs{
+		LogUI:      tc.G.UI.GetLogUI(),
+		IdentifyUI: &FakeIdentifyUI{},
+		SecretUI:   &libkb.TestSecretUI{},
+	}
+
+	teng := NewTrackEngine(tc.G, targ)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, teng)
+	require.NoError(t, err)
+}
+
+func testProvisionPaperOnly(t *testing.T, changePaperkey func(s string) string) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
+
 	fu := NewFakeUserOrBust(t, "paper")
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: fu.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
@@ -916,14 +1167,13 @@ func TestProvisionPaperOnly(t *testing.T) {
 	fakeClock := clockwork.NewFakeClockAt(time.Now())
 	tc2.G.SetClock(fakeClock)
 	// to pick up the new clock...
-	tc2.G.ResetLoginState()
 	defer tc2.Cleanup()
 
 	secUI := fu.NewSecretUI()
-	secUI.Passphrase = loginUI.PaperPhrase
+	secUI.Passphrase = changePaperkey(loginUI.PaperPhrase)
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: fu.Username}
-	ctx = &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -931,7 +1181,8 @@ func TestProvisionPaperOnly(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -949,73 +1200,62 @@ func TestProvisionPaperOnly(t *testing.T) {
 	if provLoginUI.CalledGetEmailOrUsername != 1 {
 		t.Errorf("expected 1 call to GetEmailOrUsername, got %d", provLoginUI.CalledGetEmailOrUsername)
 	}
-	var key libkb.GenericKey
+	var device *libkb.DeviceWithKeys
 
 	ch := make(chan struct{})
 	pch := func() {
 		ch <- struct{}{}
 	}
 
-	tc2.G.LoginState().Account(func(a *libkb.Account) {
-		key = a.GetUnlockedPaperEncKey()
-		a.SetTestPostCleanHook(pch)
-	}, "GetUnlockedPaperEncKey")
-	if key == nil {
+	wrapper := m2.ActiveDevice().ProvisioningKeyWrapper(m2)
+	if wrapper != nil {
+		device = wrapper.DeviceWithKeys()
+		wrapper.SetTestPostCleanHook(pch)
+	}
+
+	if device == nil || device.EncryptionKey() == nil {
 		t.Errorf("Got a null paper encryption key")
 	}
 
-	fakeClock.Advance(libkb.PaperKeyMemoryTimeout + 1*time.Minute)
+	fakeClock.Advance(libkb.ProvisioningKeyMemoryTimeout + 1*time.Minute)
 	<-ch
 
-	tc2.G.LoginState().Account(func(a *libkb.Account) {
-		key = a.GetUnlockedPaperEncKey()
-	}, "GetUnlockedPaperEncKey")
-	if key != nil {
+	device = m2.ActiveDevice().ProvisioningKey(m2)
+	if device != nil {
 		t.Errorf("Got a non-null paper encryption key after timeout")
 	}
 
 	testSign(t, tc2)
 
-	testTrack := func(whom string) {
-
-		// should be able to track someone (no passphrase prompt)
-		targ := &TrackEngineArg{
-			UserAssertion: whom,
-			Options:       keybase1.TrackOptions{BypassConfirm: true},
-		}
-		ctx := &Context{
-			LogUI:      tc2.G.UI.GetLogUI(),
-			IdentifyUI: &FakeIdentifyUI{},
-			SecretUI:   &libkb.TestSecretUI{},
-		}
-
-		teng := NewTrackEngine(targ, tc2.G)
-		if err := RunEngine(teng, ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	testTrack("t_alice")
+	testTrack(t, tc2, libkb.KeybaseNullSigVersion, "t_alice")
 
 	simulateServiceRestart(t, tc2, fu)
 
 	// should be able to sign and to track someone (no passphrase prompt)
 	testSign(t, tc2)
-	testTrack("t_bob")
+	testTrack(t, tc2, libkb.KeybaseNullSigVersion, "t_bob")
+}
+
+func removePaperkeyPrefix(paperkey string) string {
+	return strings.Join(strings.Split(paperkey, " ")[2:], " ")
+}
+
+func TestProvisionPaperOnlyNoPrefix(t *testing.T) {
+	testProvisionPaperOnly(t, removePaperkeyPrefix)
+}
+
+func TestProvisionPaperOnly(t *testing.T) {
+	testProvisionPaperOnly(t, func(s string) string { return s })
 }
 
 func simulateServiceRestart(t *testing.T, tc libkb.TestContext, fu *FakeUser) {
 
 	// Simulate restarting the service by wiping out the
 	// passphrase stream cache and cached secret keys
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-		a.ClearLoginSession()
-	}, "account - clear")
+	tc.SimulateServiceRestart()
 
 	// now assert we can login without a passphrase
-	ctx := &Context{
+	uis := libkb.UIs{
 		LoginUI:     &libkb.TestLoginUI{Username: fu.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
 		SecretUI:    &libkb.TestSecretUI{},
@@ -1023,10 +1263,9 @@ func simulateServiceRestart(t *testing.T, tc libkb.TestContext, fu *FakeUser) {
 		ProvisionUI: newTestProvisionUI(),
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
+	require.NoError(t, err)
 }
 
 func TestProvisionPaperCommandLine(t *testing.T) {
@@ -1036,34 +1275,31 @@ func TestProvisionPaperCommandLine(t *testing.T) {
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: fu.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
-	if err != nil {
-		tc.T.Fatal(err)
-	}
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
+	require.NoError(t, err)
 
 	assertNumDevicesAndKeys(tc, fu, 2, 4)
 
 	Logout(tc)
 
-	if len(loginUI.PaperPhrase) == 0 {
-		t.Fatal("login ui has no paper key phrase")
-	}
+	require.True(t, len(loginUI.PaperPhrase) > 0)
 
-	// redo SetupEngineTest to get a new home directory...should look like a new device.
+	// redo SetupEngineTest to get a new home directory...should look like a
+	// new device.
 	tc2 := SetupEngineTest(t, "login")
 	defer tc2.Cleanup()
 
 	secUI := fu.NewSecretUI()
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: fu.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -1071,26 +1307,148 @@ func TestProvisionPaperCommandLine(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 
+	m := NewMetaContextForTest(tc2).WithUIs(uis)
 	eng := NewPaperProvisionEngine(tc2.G, fu.Username, "fakedevice", loginUI.PaperPhrase)
-	if err := RunEngine(eng, ctx); err != nil {
-		t.Fatal(err)
-	}
+	err = RunEngine2(m, eng)
+	require.NoError(t, err)
 
 	testUserHasDeviceKey(tc2)
 
 	assertNumDevicesAndKeys(tc, fu, 3, 6)
+	err = AssertProvisioned(tc2)
+	require.NoError(t, err)
 
-	if err := AssertProvisioned(tc2); err != nil {
-		t.Fatal(err)
+	require.Equal(t, provUI.calledChooseDeviceType, 0)
+	require.Equal(t, provLoginUI.CalledGetEmailOrUsername, 0)
+}
+
+func TestSelfProvision(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+
+	user := CreateAndSignupFakeUser(tc, "clone")
+	secUI := user.NewSecretUI()
+	provUI := newTestProvisionUIPaper()
+	provLoginUI := &libkb.TestLoginUI{Username: user.Username}
+	uis := libkb.UIs{
+		ProvisionUI: provUI,
+		LogUI:       tc.G.UI.GetLogUI(),
+		SecretUI:    secUI,
+		LoginUI:     provLoginUI,
+		GPGUI:       &gpgtestui{},
 	}
 
-	if provUI.calledChooseDeviceType != 0 {
-		t.Errorf("expected 0 calls to ChooseDeviceType, got %d", provUI.calledChooseDeviceType)
-	}
-	if provLoginUI.CalledGetEmailOrUsername != 0 {
-		t.Errorf("expected 0 calls to GetEmailOrUsername, got %d", provLoginUI.CalledGetEmailOrUsername)
-	}
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	// Test the happy case of successfully self provisioning.
+	assertValidSelfProvision(t, tc, m, user)
+}
 
+func assertValidSelfProvision(t *testing.T, tc libkb.TestContext, m libkb.MetaContext, user *FakeUser) {
+	libkb.CreateClonedDevice(tc, m)
+	newName := tc.G.ActiveDevice.Name() + "uncloneme"
+	eng := NewSelfProvisionEngine(tc.G, newName)
+	err := RunEngine2(m, eng)
+	require.NoError(t, err)
+
+	testUserHasDeviceKey(tc)
+	assertNumDevicesAndKeys(tc, user, 2, 4)
+	err = AssertProvisioned(tc)
+	require.NoError(t, err)
+	require.Equal(t, tc.G.ActiveDevice.Name(), newName)
+
+	assertDeviceKeysCached(tc)
+	assertPassphraseStreamCache(tc)
+	assertSecretStored(tc, user.Username)
+
+	// GetBootstrapStatus should return without error and with LoggedIn set to
+	// true.
+	beng := NewBootstrap(tc.G)
+	err = RunEngine2(m, beng)
+	require.NoError(t, err)
+	status := beng.Status()
+	require.True(t, status.LoggedIn)
+	require.True(t, status.Registered)
+
+	t.Logf("test tracks")
+	testTrack(t, tc, libkb.KeybaseNullSigVersion, "t_alice")
+	testSign(t, tc)
+
+	// Make sure that we can still track without a passphrase
+	// after a simulated service restart.  In other words, that
+	// the full LKSec secret was written to the secret store.
+	simulateServiceRestart(t, tc, user)
+	testSign(t, tc)
+	testTrack(t, tc, libkb.KeybaseNullSigVersion, "t_bob")
+	assertDeviceKeysCached(tc)
+	require.Equal(t, tc.G.ActiveDevice.Name(), newName)
+
+	Logout(tc)
+	user.LoginOrBust(tc)
+}
+
+func TestSelfProvisionFailNoClone(t *testing.T) {
+	// If we don't have a clone, we can't run this engine
+	testFailSelfProvision(t, func(tc libkb.TestContext, m libkb.MetaContext) string {
+		return "new"
+	})
+}
+
+func TestSelfProvisionFailDuplicateName(t *testing.T) {
+	testFailSelfProvision(t, func(tc libkb.TestContext, m libkb.MetaContext) string {
+		libkb.CreateClonedDevice(tc, m)
+		// Use the default name so we get an error when provisioning.
+		return ""
+	})
+}
+
+func testFailSelfProvision(t *testing.T, fn func(tc libkb.TestContext, m libkb.MetaContext) string) {
+
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+
+	user := CreateAndSignupFakeUser(tc, "clone")
+
+	secUI := user.NewSecretUI()
+	provUI := newTestProvisionUIPaper()
+	provLoginUI := &libkb.TestLoginUI{Username: user.Username}
+	uis := libkb.UIs{
+		ProvisionUI: provUI,
+		LogUI:       tc.G.UI.GetLogUI(),
+		SecretUI:    secUI,
+		LoginUI:     provLoginUI,
+		GPGUI:       &gpgtestui{},
+	}
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+
+	suffix := fn(tc, m)
+	oldName := tc.G.ActiveDevice.Name()
+	newName := oldName + suffix
+
+	t.Logf("self provision running %v %v", oldName, newName)
+	eng := NewSelfProvisionEngine(tc.G, newName)
+	err := RunEngine2(m, eng)
+	require.Error(t, err)
+	t.Logf("self provision failed successfully %v %v", oldName, newName)
+
+	testUserHasDeviceKey(tc)
+	// Since provisioning failed, we still just have a single device.
+	assertNumDevicesAndKeys(tc, user, 1, 2)
+	require.Equal(t, tc.G.ActiveDevice.Name(), oldName)
+
+	// GetBootstrapStatus should return without error and with LoggedIn set
+	// to true.
+	beng := NewBootstrap(tc.G)
+	err = RunEngine2(m, beng)
+	require.NoError(t, err)
+	status := beng.Status()
+	require.True(t, status.LoggedIn)
+	require.True(t, status.Registered)
+
+	Logout(tc)
+	user.LoginOrBust(tc)
+
+	// Make sure we can successfully self provision after we've failed.
+	assertValidSelfProvision(t, tc, m, user)
 }
 
 // Provision device using a private GPG key (not synced to keybase
@@ -1111,11 +1469,8 @@ func TestProvisionGPGImportOK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// now safe to cleanup first home
-	tc.Cleanup()
-
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1123,7 +1478,8 @@ func TestProvisionGPGImportOK(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1165,11 +1521,8 @@ func TestProvisionGPGImportMultiple(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// now safe to cleanup first home
-	tc.Cleanup()
-
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1177,7 +1530,8 @@ func TestProvisionGPGImportMultiple(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1227,11 +1581,8 @@ func TestProvisionGPGSign(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// now safe to cleanup first home
-		tc.Cleanup()
-
 		// run login on new device
-		ctx := &Context{
+		uis2 := libkb.UIs{
 			ProvisionUI: newTestProvisionUIGPGSign(),
 			LogUI:       tc2.G.UI.GetLogUI(),
 			SecretUI:    u1.NewSecretUI(),
@@ -1239,7 +1590,8 @@ func TestProvisionGPGSign(t *testing.T) {
 			GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc2.G)},
 		}
 		eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-		if err := RunEngine(eng, ctx); err != nil {
+		m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+		if err := RunEngine2(m2, eng); err != nil {
 			t.Logf("test run %d:  RunEngine(Login) error: %s", i+1, err)
 			continue
 		}
@@ -1289,11 +1641,8 @@ func TestProvisionGPGSignFailedSign(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// now safe to cleanup first home
-	tc.Cleanup()
-
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGSign(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1301,7 +1650,8 @@ func TestProvisionGPGSignFailedSign(t *testing.T) {
 		GPGUI:       &gpgTestUIBadSign{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err == nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err == nil {
 		t.Fatal("expected a failure in login")
 	}
 
@@ -1343,15 +1693,12 @@ func TestProvisionGPGSignSecretStore(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// now safe to cleanup first home
-		tc.Cleanup()
-
 		// create a secret UI that stores the secret
 		secUI := u1.NewSecretUI()
 		secUI.StoreSecret = true
 
 		// run login on new device
-		ctx := &Context{
+		uis2 := libkb.UIs{
 			ProvisionUI: newTestProvisionUIGPGSign(),
 			LogUI:       tc2.G.UI.GetLogUI(),
 			SecretUI:    secUI,
@@ -1359,7 +1706,8 @@ func TestProvisionGPGSignSecretStore(t *testing.T) {
 			GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc2.G)},
 		}
 		eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-		if err := RunEngine(eng, ctx); err != nil {
+		m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+		if err := RunEngine2(m2, eng); err != nil {
 			t.Logf("test run %d:  RunEngine(Login) error: %s", i+1, err)
 			continue
 		}
@@ -1412,9 +1760,6 @@ func TestProvisionGPGSwitchToSign(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// now safe to cleanup first home
-		tc.Cleanup()
-
 		// load the user (bypassing LoginUsername for this test...)
 		user, err := libkb.LoadUser(libkb.NewLoadUserByNameArg(tc2.G, u1.Username))
 		if err != nil {
@@ -1422,7 +1767,7 @@ func TestProvisionGPGSwitchToSign(t *testing.T) {
 		}
 
 		// run login on new device
-		ctx := &Context{
+		uis := libkb.UIs{
 			ProvisionUI: newTestProvisionUIGPGImport(),
 			LogUI:       tc2.G.UI.GetLogUI(),
 			SecretUI:    u1.NewSecretUI(),
@@ -1439,8 +1784,9 @@ func TestProvisionGPGSwitchToSign(t *testing.T) {
 		eng := newLoginProvision(tc2.G, &arg)
 		// use a gpg client that will fail to import any gpg key
 		eng.gpgCli = newGPGImportFailer(tc2.G)
+		m := NewMetaContextForTest(tc2).WithUIs(uis).WithNewProvisionalLoginContext()
 
-		if err := RunEngine(eng, ctx); err != nil {
+		if err := RunEngine2(m, eng); err != nil {
 			t.Logf("test run %d:  RunEngine(Login) error: %s", i+1, err)
 			continue
 		}
@@ -1490,9 +1836,6 @@ func TestProvisionGPGNoSwitchToSign(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// now safe to cleanup first home
-	tc.Cleanup()
-
 	// load the user (bypassing LoginUsername for this test...)
 	user, err := libkb.LoadUser(libkb.NewLoadUserByNameArg(tc2.G, u1.Username))
 	if err != nil {
@@ -1504,7 +1847,7 @@ func TestProvisionGPGNoSwitchToSign(t *testing.T) {
 	provUI.abortSwitchToGPGSign = true
 
 	// run login on new device
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1522,7 +1865,9 @@ func TestProvisionGPGNoSwitchToSign(t *testing.T) {
 	// use a gpg client that will fail to import any gpg key
 	eng.gpgCli = newGPGImportFailer(tc2.G)
 
-	if err := RunEngine(eng, ctx); err == nil {
+	m := NewMetaContextForTest(tc2).WithUIs(uis)
+
+	if err := RunEngine2(m, eng); err == nil {
 		t.Fatal("provisioning worked despite not allowing switch to gpg sign")
 	}
 }
@@ -1539,7 +1884,7 @@ func TestProvisionGPGNoKeyring(t *testing.T) {
 	defer tc2.Cleanup()
 
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1547,7 +1892,8 @@ func TestProvisionGPGNoKeyring(t *testing.T) {
 		GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc.G)},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err == nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err == nil {
 		t.Fatal("provision worked without gpg keyring")
 	} else if _, ok := err.(libkb.NoMatchingGPGKeysError); !ok {
 		t.Errorf("error %T, expected libkb.NoMatchingGPGKeysError", err)
@@ -1572,7 +1918,7 @@ func TestProvisionGPGNoMatch(t *testing.T) {
 	}
 
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1580,7 +1926,8 @@ func TestProvisionGPGNoMatch(t *testing.T) {
 		GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc2.G)},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err == nil {
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	if err := RunEngine2(m2, eng); err == nil {
 		t.Fatal("provision worked without matching gpg key")
 	} else if _, ok := err.(libkb.NoMatchingGPGKeysError); !ok {
 		t.Errorf("error %T, expected libkb.NoMatchingGPGKeysError", err)
@@ -1602,7 +1949,7 @@ func TestProvisionGPGNoGPGExecutable(t *testing.T) {
 	tc2.G.Env.Test.GPG = filepath.Join(string(filepath.Separator), "dev", "null")
 
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1610,7 +1957,8 @@ func TestProvisionGPGNoGPGExecutable(t *testing.T) {
 		GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc2.G)},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	err := RunEngine2(m2, eng)
 	if err == nil {
 		t.Fatal("provision worked without gpg")
 	}
@@ -1635,7 +1983,7 @@ func TestProvisionGPGNoGPGFound(t *testing.T) {
 	tc2.G.Env.Test.GPG = filepath.Join(string(filepath.Separator), "not", "a", "directory", "that", "ever", "exists", "bin", "gpg")
 
 	// run login on new device
-	ctx := &Context{
+	uis2 := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -1643,7 +1991,8 @@ func TestProvisionGPGNoGPGFound(t *testing.T) {
 		GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc2.G)},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	err := RunEngine2(m2, eng)
 	if err == nil {
 		t.Fatal("provision worked without gpg")
 	}
@@ -1669,7 +2018,7 @@ func TestProvisionDupDevice(t *testing.T) {
 	provui := &testProvisionDupDeviceUI{newTestProvisionUISecretCh(secretCh)}
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: provui,
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -1677,9 +2026,10 @@ func TestProvisionDupDevice(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+	m := NewMetaContextForTest(tcY).WithUIs(uis)
 
 	// start provisionee
-	if err := RunEngine(eng, ctx); err == nil {
+	if err := RunEngine2(m, eng); err == nil {
 		t.Errorf("login ran without error")
 		return
 	}
@@ -1713,7 +2063,7 @@ func TestProvisionPassphraseNoKeysMultipleAccounts(t *testing.T) {
 	Logout(tc)
 
 	// now try to log in as the web user
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -1721,7 +2071,8 @@ func TestProvisionPassphraseNoKeysMultipleAccounts(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, username, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1744,26 +2095,24 @@ func TestLoginStreamCache(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	u1 := CreateAndSignupFakeUser(tc, "login")
+	u1 := SignupFakeUserStoreSecret(tc, "login")
+	assertSecretStored(tc, u1.Username)
 
 	if !assertStreamCache(tc, true) {
 		t.Fatal("expected valid stream cache after signup")
 	}
 
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-	}, "clear stream cache")
+	clearCaches(tc.G)
 
 	if !assertStreamCache(tc, false) {
 		t.Fatal("expected invalid stream cache after clear")
 	}
 
-	// This should now unlock the stream cache too
+	// This should not unlock the stream cache
 	u1.LoginOrBust(tc)
 
-	if !assertStreamCache(tc, true) {
-		t.Fatal("expected valid stream cache after login")
+	if !assertStreamCache(tc, false) {
+		t.Fatal("expected no valid stream cache after login")
 	}
 	assertDeviceKeysCached(tc)
 	assertSecretStored(tc, u1.Username)
@@ -1781,7 +2130,7 @@ func TestLoginInvalidDeviceType(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -1789,7 +2138,8 @@ func TestLoginInvalidDeviceType(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypePaper, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err == nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err == nil {
 		t.Fatal("login with paper device type worked")
 	} else if _, ok := err.(libkb.InvalidArgumentError); !ok {
 		t.Errorf("err type: %T, expected libkb.InvalidArgumentError", err)
@@ -1807,14 +2157,15 @@ func TestProvisionNilUser(t *testing.T) {
 		User:       nil,
 	}
 	eng := newLoginProvision(tc.G, &arg)
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{},
 		LogUI:       tc.G.UI.GetLogUI(),
 		SecretUI:    &libkb.TestSecretUI{},
 		GPGUI:       &gpgtestui{},
 	}
-	if err := RunEngine(eng, ctx); err == nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err == nil {
 		t.Fatal("loginprovision with nil user worked")
 	} else if _, ok := err.(libkb.InvalidArgumentError); !ok {
 		t.Errorf("err type: %T, expected libkb.InvalidArgumentError", err)
@@ -1828,14 +2179,14 @@ func userPlusPaper(t *testing.T) (*FakeUser, string) {
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: fu.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	if err := RunEngine(s, ctx); err != nil {
+	s := NewSignupEngine(tc.G, &arg)
+	if err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s); err != nil {
 		t.Fatal(err)
 	}
 	Logout(tc)
@@ -1855,7 +2206,7 @@ func TestProvisionPaperFailures(t *testing.T) {
 	secUI.Passphrase = uyPaper
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: ux.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -1863,8 +2214,37 @@ func TestProvisionPaperFailures(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err == nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err == nil {
 		t.Fatal("provision with another user's paper key worked")
+	}
+
+	// try provision as ux on a new device with swapped word paper key
+	tcSwap := SetupEngineTest(t, "login")
+	defer tcSwap.Cleanup()
+
+	words := strings.Fields(uxPaper)
+	words[2], words[3] = words[3], words[2]
+	swapped := strings.Join(words, " ")
+	secUI = ux.NewSecretUI()
+	secUI.Passphrase = swapped
+	provUI = newTestProvisionUIPaper()
+	provLoginUI = &libkb.TestLoginUI{Username: ux.Username}
+	uis = libkb.UIs{
+		ProvisionUI: provUI,
+		LogUI:       tcSwap.G.UI.GetLogUI(),
+		SecretUI:    secUI,
+		LoginUI:     provLoginUI,
+		GPGUI:       &gpgtestui{},
+	}
+	eng = NewLogin(tcSwap.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+	m = NewMetaContextForTest(tcSwap).WithUIs(uis)
+	err := RunEngine2(m, eng)
+	if err == nil {
+		t.Fatal("provision with swapped word paper key worked")
+	}
+	if _, ok := err.(libkb.NotFoundError); !ok {
+		t.Fatalf("error type: %T, expected libkb.NotFoundError", err)
 	}
 
 	// try provision as ux on a new device first with fu's paper key
@@ -1877,7 +2257,7 @@ func TestProvisionPaperFailures(t *testing.T) {
 	}
 	provUI = newTestProvisionUIPaper()
 	provLoginUI = &libkb.TestLoginUI{Username: ux.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    retrySecUI,
@@ -1885,7 +2265,8 @@ func TestProvisionPaperFailures(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng = NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m = NewMetaContextForTest(tc2).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 	if retrySecUI.index != len(retrySecUI.Passphrases) {
@@ -1902,7 +2283,7 @@ func TestProvisionPaperFailures(t *testing.T) {
 	}
 	provUI = newTestProvisionUIPaper()
 	provLoginUI = &libkb.TestLoginUI{Username: ux.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc3.G.UI.GetLogUI(),
 		SecretUI:    retrySecUI,
@@ -1910,7 +2291,8 @@ func TestProvisionPaperFailures(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng = NewLogin(tc3.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m = NewMetaContextForTest(tc3).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 	if retrySecUI.index != len(retrySecUI.Passphrases) {
@@ -1931,7 +2313,7 @@ func TestProvisionPaperFailures(t *testing.T) {
 	}
 	provUI = newTestProvisionUIPaper()
 	provLoginUI = &libkb.TestLoginUI{Username: ux.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc4.G.UI.GetLogUI(),
 		SecretUI:    retrySecUI,
@@ -1939,7 +2321,8 @@ func TestProvisionPaperFailures(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng = NewLogin(tc4.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m = NewMetaContextForTest(tc4).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 	if retrySecUI.index != len(retrySecUI.Passphrases) {
@@ -1969,7 +2352,7 @@ func TestProvisionKexUseSyncPGP(t *testing.T) {
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -1984,7 +2367,8 @@ func TestProvisionKexUseSyncPGP(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -1996,11 +2380,12 @@ func TestProvisionKexUseSyncPGP(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -2018,22 +2403,7 @@ func TestProvisionKexUseSyncPGP(t *testing.T) {
 	t.Logf("provisioned")
 	t.Logf(strings.Repeat("*", 100))
 
-	// make sure that the provisioned device can use
-	// the passphrase stream cache (use an empty secret ui)
-	arg := &TrackEngineArg{
-		UserAssertion: "t_alice",
-		Options:       keybase1.TrackOptions{BypassConfirm: true},
-	}
-	ctx = &Context{
-		LogUI:      tcY.G.UI.GetLogUI(),
-		IdentifyUI: &FakeIdentifyUI{},
-		SecretUI:   &libkb.TestSecretUI{},
-	}
-
-	teng := NewTrackEngine(arg, tcY.G)
-	if err := RunEngine(teng, ctx); err != nil {
-		t.Fatal(err)
-	}
+	testTrack(t, tcY, libkb.KeybaseNullSigVersion, "t_alice")
 
 	// tsec isn't cached on device Y, so this should fail since the
 	// secret ui doesn't know the passphrase:
@@ -2063,15 +2433,16 @@ func TestProvisionMultipleUsers(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
-		LoginUI:     &libkb.TestLoginUI{Username: users[0].Email},
+		LoginUI:     &libkb.TestLoginUI{Username: users[0].Username},
 		LogUI:       tc.G.UI.GetLogUI(),
 		SecretUI:    users[0].NewSecretUI(),
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2084,7 +2455,7 @@ func TestProvisionMultipleUsers(t *testing.T) {
 	Logout(tc)
 
 	// provision user[1] on the same device, specifying username
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -2092,7 +2463,8 @@ func TestProvisionMultipleUsers(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng = NewLogin(tc.G, libkb.DeviceTypeDesktop, users[1].Username, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m = NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2105,15 +2477,16 @@ func TestProvisionMultipleUsers(t *testing.T) {
 	Logout(tc)
 
 	// provision user[2] on the same device, specifying email
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{},
 		LogUI:       tc.G.UI.GetLogUI(),
 		SecretUI:    users[2].NewSecretUI(),
 		GPGUI:       &gpgtestui{},
 	}
-	eng = NewLogin(tc.G, libkb.DeviceTypeDesktop, users[2].Email, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	eng = NewLogin(tc.G, libkb.DeviceTypeDesktop, users[2].Username, keybase1.ClientType_CLI)
+	m = NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2125,8 +2498,8 @@ func TestProvisionMultipleUsers(t *testing.T) {
 
 	Logout(tc)
 
-	// login via email works now (CORE-6284):
-	ctx = &Context{
+	// login via email does not work anymore (CORE-10470)
+	uis = libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -2134,9 +2507,11 @@ func TestProvisionMultipleUsers(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng = NewLogin(tc.G, libkb.DeviceTypeDesktop, users[2].Email, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
-		t.Fatal(err)
-	}
+	m = NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
+	require.Error(t, err)
+	require.IsType(t, libkb.BadUsernameError{}, err)
+	require.Contains(t, err.Error(), "not supported")
 }
 
 // create a standard user with device keys, reset account, login.
@@ -2255,7 +2630,7 @@ func TestResetAccountPaper(t *testing.T) {
 
 	// login, creating new eldest key, new paper keys
 	loginUI := &paperLoginUI{Username: u.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUI(),
 		LogUI:       tc.G.UI.GetLogUI(),
 		GPGUI:       &gpgtestui{},
@@ -2263,7 +2638,8 @@ func TestResetAccountPaper(t *testing.T) {
 		LoginUI:     loginUI,
 	}
 	li := NewLogin(tc.G, libkb.DeviceTypeDesktop, u.Username, keybase1.ClientType_CLI)
-	if err := RunEngine(li, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, li); err != nil {
 		t.Fatal(err)
 	}
 	paper := loginUI.PaperPhrase
@@ -2272,13 +2648,14 @@ func TestResetAccountPaper(t *testing.T) {
 	}
 	testUserHasDeviceKey(tc)
 
-	pctx := &Context{
+	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		LoginUI:  &libkb.TestLoginUI{},
 		SecretUI: &libkb.TestSecretUI{},
 	}
 	peng := NewPaperKey(tc.G)
-	if err := RunEngine(peng, pctx); err != nil {
+	m = NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, peng); err != nil {
 		t.Fatal(err)
 	}
 	if len(peng.Passphrase()) == 0 {
@@ -2294,7 +2671,7 @@ func TestResetAccountPaper(t *testing.T) {
 	secUI.Passphrase = paper
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: u.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tcp.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -2302,7 +2679,8 @@ func TestResetAccountPaper(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tcp.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m = NewMetaContextForTest(tcp).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2338,7 +2716,7 @@ func TestResetAccountKexProvision(t *testing.T) {
 	defer tcY.Cleanup()
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: u.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -2353,7 +2731,8 @@ func TestResetAccountKexProvision(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -2365,11 +2744,12 @@ func TestResetAccountKexProvision(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    u.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -2379,44 +2759,26 @@ func TestResetAccountKexProvision(t *testing.T) {
 
 	wg.Wait()
 
-	if err := AssertProvisioned(tcY); err != nil {
-		t.Fatal(err)
-	}
-
-	// make sure that the provisioned device can use
-	// the passphrase stream cache (use an empty secret ui)
-	arg := &TrackEngineArg{
-		UserAssertion: "t_alice",
-		Options:       keybase1.TrackOptions{BypassConfirm: true},
-	}
-	ctx = &Context{
-		LogUI:      tcY.G.UI.GetLogUI(),
-		IdentifyUI: &FakeIdentifyUI{},
-		SecretUI:   &libkb.TestSecretUI{},
-	}
-
-	teng := NewTrackEngine(arg, tcY.G)
-	if err := RunEngine(teng, ctx); err != nil {
-		t.Fatal(err)
-	}
+	err := AssertProvisioned(tcY)
+	require.NoError(t, err)
+	testTrack(t, tcY, libkb.KeybaseNullSigVersion, "t_alice")
 }
 
 // Try to replicate @nistur sigchain.
 // github issue: https://github.com/keybase/client/issues/2356
 func TestResetThenPGPOnlyThenProvision(t *testing.T) {
+	tc0 := SetupEngineTest(t, "login")
+	defer tc0.Cleanup()
+
+	// user with synced pgp key
+	u := createFakeUserWithPGPOnly(t, tc0)
+	Logout(tc0)
+
+	// provision a device with that key
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	// user with synced pgp key
-	u := createFakeUserWithPGPOnly(t, tc)
-	Logout(tc)
-	tc.Cleanup()
-
-	// provision a device with that key
-	tc = SetupEngineTest(t, "login")
-	defer tc.Cleanup()
-
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -2424,7 +2786,8 @@ func TestResetThenPGPOnlyThenProvision(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2435,34 +2798,33 @@ func TestResetThenPGPOnlyThenProvision(t *testing.T) {
 	ResetAccount(tc, u)
 
 	// Now login again so we can post a PGP key
-	err := tc.G.LoginState().LoginWithPassphrase(u.Username, u.Passphrase, false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	m = m.WithNewProvisionalLoginContext()
+	err := libkb.PassphraseLoginNoPrompt(m, u.Username, u.Passphrase)
+	require.NoError(t, err, "passphrase login no prompt worked")
 
 	// Generate a new test PGP key for the user, and specify the PushSecret
 	// flag so that their triplesec'ed key is pushed to the server.
 	gen := libkb.PGPGenArg{
-		PrimaryBits: 1024,
-		SubkeyBits:  1024,
+		PrimaryBits: 768,
+		SubkeyBits:  768,
 	}
 	gen.AddDefaultUID(tc.G)
-	peng := NewPGPKeyImportEngine(PGPKeyImportEngineArg{
-		Ctx:        tc.G,
+	peng := NewPGPKeyImportEngine(tc.G, PGPKeyImportEngineArg{
 		Gen:        &gen,
 		PushSecret: true,
 		NoSave:     true,
 	})
 
-	if err := RunEngine(peng, ctx); err != nil {
+	if err := RunEngine2(m, peng); err != nil {
 		tc.T.Fatal(err)
 	}
 
+	m = m.CommitProvisionalLogin()
 	Logout(tc)
 
 	// Now finally try a login
 	eng = NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2473,19 +2835,18 @@ func TestResetThenPGPOnlyThenProvision(t *testing.T) {
 // Try to replicate @nistur sigchain.
 // github issue: https://github.com/keybase/client/issues/2356
 func TestResetAccountLikeNistur(t *testing.T) {
+	tc0 := SetupEngineTest(t, "login")
+	defer tc0.Cleanup()
+
+	// user with synced pgp key
+	u := createFakeUserWithPGPOnly(t, tc0)
+	Logout(tc0)
+
+	// provision a device with that key
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
 
-	// user with synced pgp key
-	u := createFakeUserWithPGPOnly(t, tc)
-	Logout(tc)
-	tc.Cleanup()
-
-	// provision a device with that key
-	tc = SetupEngineTest(t, "login")
-	defer tc.Cleanup()
-
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{Username: u.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -2493,7 +2854,8 @@ func TestResetAccountLikeNistur(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2524,7 +2886,7 @@ func TestResetAccountLikeNistur(t *testing.T) {
 	defer tcY.Cleanup()
 
 	// provisionee calls login:
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: u.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -2539,7 +2901,8 @@ func TestResetAccountLikeNistur(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -2551,11 +2914,82 @@ func TestResetAccountLikeNistur(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    u.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
+			t.Errorf("provisioner error: %s", err)
+			return
+		}
+	}()
+	secretFromY := <-secretCh
+	provisioner.AddSecret(secretFromY)
+
+	wg.Wait()
+
+	err := AssertProvisioned(tcY)
+	require.NoError(t, err)
+	testTrack(t, tcY, libkb.KeybaseNullSigVersion, "t_alice")
+}
+
+// Establish two devices.  Reset on one of them, login on the other.
+func TestResetMultipleDevices(t *testing.T) {
+	tcX := SetupEngineTest(t, "login")
+	defer tcX.Cleanup()
+
+	// create provisioner device
+	u := CreateAndSignupFakeUser(tcX, "login")
+	if err := AssertProvisioned(tcX); err != nil {
+		t.Fatal(err)
+	}
+	testUserHasDeviceKey(tcX)
+	var secretX kex2.Secret
+	if _, err := rand.Read(secretX[:]); err != nil {
+		t.Fatal(err)
+	}
+	secretCh := make(chan kex2.Secret)
+
+	// provisionee context:
+	tcY := SetupEngineTest(t, "template")
+	defer tcY.Cleanup()
+
+	// provisionee calls login:
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUISecretCh(secretCh),
+		LoginUI:     &libkb.TestLoginUI{Username: u.Username},
+		LogUI:       tcY.G.UI.GetLogUI(),
+		SecretUI:    &libkb.TestSecretUI{},
+		GPGUI:       &gpgtestui{},
+	}
+	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+
+	var wg sync.WaitGroup
+
+	// start provisionee
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
+			t.Errorf("login error: %s", err)
+			return
+		}
+	}()
+
+	// start provisioner
+	provisioner := NewKex2Provisioner(tcX.G, secretX, nil)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		uis := libkb.UIs{
+			SecretUI:    u.NewSecretUI(),
+			ProvisionUI: newTestProvisionUI(),
+		}
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -2569,21 +3003,24 @@ func TestResetAccountLikeNistur(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// make sure that the provisioned device can use
-	// the passphrase stream cache (use an empty secret ui)
-	arg := &TrackEngineArg{
-		UserAssertion: "t_alice",
-		Options:       keybase1.TrackOptions{BypassConfirm: true},
-	}
-	ctx = &Context{
-		LogUI:      tcY.G.UI.GetLogUI(),
-		IdentifyUI: &FakeIdentifyUI{},
-		SecretUI:   &libkb.TestSecretUI{},
+	// have two devices in contexts tcX and tcY
+	deviceX := tcX.G.Env.GetDeviceID()
+
+	// logout on tcX
+	Logout(tcX)
+
+	// reset on tcY
+	ResetAccount(tcY, u)
+
+	// login on tcX
+	u.LoginOrBust(tcX)
+
+	if err := AssertProvisioned(tcX); err != nil {
+		t.Fatal(err)
 	}
 
-	teng := NewTrackEngine(arg, tcY.G)
-	if err := RunEngine(teng, ctx); err != nil {
-		t.Fatal(err)
+	if tcX.G.Env.GetDeviceID() == deviceX {
+		t.Error("device id did not change")
 	}
 }
 
@@ -2629,7 +3066,7 @@ func TestProvisionWithBadConfig(t *testing.T) {
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -2644,7 +3081,8 @@ func TestProvisionWithBadConfig(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("login error: %s", err)
 			return
 		}
@@ -2656,11 +3094,12 @@ func TestProvisionWithBadConfig(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -2677,26 +3116,9 @@ func TestProvisionWithBadConfig(t *testing.T) {
 		t.Error("y device id matches x device id, they should be different")
 	}
 
-	if err := AssertProvisioned(tcY); err != nil {
-		t.Fatal(err)
-	}
-
-	// make sure that the provisioned device can use
-	// the passphrase stream cache (use an empty secret ui)
-	arg := &TrackEngineArg{
-		UserAssertion: "t_alice",
-		Options:       keybase1.TrackOptions{BypassConfirm: true},
-	}
-	ctx = &Context{
-		LogUI:      tcY.G.UI.GetLogUI(),
-		IdentifyUI: &FakeIdentifyUI{},
-		SecretUI:   &libkb.TestSecretUI{},
-	}
-
-	teng := NewTrackEngine(arg, tcY.G)
-	if err := RunEngine(teng, ctx); err != nil {
-		t.Fatal(err)
-	}
+	err = AssertProvisioned(tcY)
+	require.NoError(t, err)
+	testTrack(t, tcY, libkb.KeybaseNullSigVersion, "t_alice")
 }
 
 // If the provisioner has their secret stored, they should not be
@@ -2717,15 +3139,12 @@ func TestProvisionerSecretStore(t *testing.T) {
 	if _, err := rand.Read(secretX[:]); err != nil {
 		t.Fatal(err)
 	}
-	tcX.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-	}, "clear stream cache")
+	clearCaches(tcX.G)
 
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -2733,22 +3152,24 @@ func TestProvisionerSecretStore(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+	m := NewMetaContextForTest(tcY).WithUIs(uis)
 
 	// start provisionee
 	errY := make(chan error, 1)
 	go func() {
-		errY <- RunEngine(eng, ctx)
+		errY <- RunEngine2(m, eng)
 	}()
 
 	// start provisioner
 	provisioner := NewKex2Provisioner(tcX.G, secretX, nil)
 	errX := make(chan error, 1)
 	go func() {
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    &testNoPromptSecretUI{},
 			ProvisionUI: newTestProvisionUI(),
 		}
-		errX <- RunEngine(provisioner, ctx)
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		errX <- RunEngine2(m, provisioner)
 	}()
 	secretFromY := <-secretCh
 	go provisioner.AddSecret(secretFromY)
@@ -2778,7 +3199,7 @@ func TestProvisionerSecretStore(t *testing.T) {
 
 	// On device Y, logout and login. This should tickle Bug3964
 	Logout(tcY)
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -2786,7 +3207,8 @@ func TestProvisionerSecretStore(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng = NewLogin(tcY.G, libkb.DeviceTypeDesktop, userX.Username, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m = NewMetaContextForTest(tcY).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -2808,11 +3230,8 @@ func TestProvisionGPGMobile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// now safe to cleanup first home
-	tc.Cleanup()
-
 	// run login on new device
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIGPGImport(),
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    u1.NewSecretUI(),
@@ -2820,7 +3239,8 @@ func TestProvisionGPGMobile(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc2.G, libkb.DeviceTypeMobile, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
+	m := NewMetaContextForTest(tc2).WithUIs(uis)
+	err := RunEngine2(m, eng)
 	if err == nil {
 		t.Fatal("no error provisioning with gpg on mobile")
 	}
@@ -2866,16 +3286,17 @@ func testProvisionEnsureNoPaperKey(t *testing.T, upgradePerUserKey bool) {
 
 	t.Logf("revoke paper keys from X")
 	{
-		ctx := &Context{
+		uis := libkb.UIs{
 			LoginUI:  &libkb.TestLoginUI{Username: userX.Username},
 			LogUI:    tcX.G.UI.GetLogUI(),
 			SecretUI: &libkb.TestSecretUI{},
 		}
-		eng := NewRevokeDeviceEngine(RevokeDeviceEngineArgs{
+		eng := NewRevokeDeviceEngine(tcX.G, RevokeDeviceEngineArgs{
 			ID:        originalPaperKey,
 			ForceSelf: false,
-		}, tcX.G)
-		err := RunEngine(eng, ctx)
+		})
+		m := libkb.NewMetaContextTODO(tcX.G).WithUIs(uis)
+		err := RunEngine2(m, eng)
 		require.NoError(t, err, "revoke original paper key")
 	}
 
@@ -2887,7 +3308,7 @@ func testProvisionEnsureNoPaperKey(t *testing.T, upgradePerUserKey bool) {
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -2902,7 +3323,8 @@ func testProvisionEnsureNoPaperKey(t *testing.T, upgradePerUserKey bool) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("provisionee login error: %s", err)
 			return
 		}
@@ -2914,11 +3336,12 @@ func testProvisionEnsureNoPaperKey(t *testing.T, upgradePerUserKey bool) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -2943,31 +3366,11 @@ func testProvisionEnsureNoPaperKey(t *testing.T, upgradePerUserKey bool) {
 	// after provisioning, the device keys should be cached
 	assertDeviceKeysCached(tcY)
 
-	testTrack := func(whom string) {
-
-		// make sure that the provisioned device can use
-		// the passphrase stream cache (use an empty secret ui)
-		arg := &TrackEngineArg{
-			UserAssertion: whom,
-			Options:       keybase1.TrackOptions{BypassConfirm: true},
-		}
-		ctx = &Context{
-			LogUI:      tcY.G.UI.GetLogUI(),
-			IdentifyUI: &FakeIdentifyUI{},
-			SecretUI:   &libkb.TestSecretUI{},
-		}
-
-		teng := NewTrackEngine(arg, tcY.G)
-		if err := RunEngine(teng, ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	// Make sure that we can still track without a passphrase
-	// after a similated service restart.  In other words, that
+	// after a simulated service restart.  In other words, that
 	// the full LKSec secret was written to the secret store.
 	simulateServiceRestart(t, tcY, userX)
-	testTrack("t_bob")
+	testTrack(t, tcY, libkb.KeybaseNullSigVersion, "t_bob")
 
 	t.Logf("check for no paper key")
 	hasZeroPaperDev(tcY, userX)
@@ -3003,7 +3406,7 @@ func TestProvisionAndRevoke(t *testing.T) {
 	secretCh := make(chan kex2.Secret)
 
 	// provisionee calls login:
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUISecretCh(secretCh),
 		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
 		LogUI:       tcY.G.UI.GetLogUI(),
@@ -3018,7 +3421,8 @@ func TestProvisionAndRevoke(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Errorf("provisionee login error: %s", err)
 			return
 		}
@@ -3030,11 +3434,12 @@ func TestProvisionAndRevoke(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx := &Context{
+		uis := libkb.UIs{
 			SecretUI:    userX.NewSecretUI(),
 			ProvisionUI: newTestProvisionUI(),
 		}
-		if err := RunEngine(provisioner, ctx); err != nil {
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
 			t.Errorf("provisioner error: %s", err)
 			return
 		}
@@ -3063,46 +3468,27 @@ func TestProvisionAndRevoke(t *testing.T) {
 
 	// require.NoError(t, doRevokeDevice(tcY, userX, tcX.G.ActiveDevice.DeviceID(), false))
 	{
-		ctx := &Context{
+		uis := libkb.UIs{
 			LoginUI:  &libkb.TestLoginUI{Username: userX.Username},
 			LogUI:    tcY.G.UI.GetLogUI(),
 			SecretUI: &libkb.TestSecretUI{},
 		}
-		eng := NewRevokeDeviceEngine(RevokeDeviceEngineArgs{
+		eng := NewRevokeDeviceEngine(tcY.G, RevokeDeviceEngineArgs{
 			ID:        tcX.G.ActiveDevice.DeviceID(),
 			ForceSelf: false,
-		}, tcY.G)
-		err := RunEngine(eng, ctx)
+		})
+		m := libkb.NewMetaContextTODO(tcY.G).WithUIs(uis)
+		err := RunEngine2(m, eng)
 		require.NoError(t, err, "revoke original paper key")
 	}
 
 	t.Logf("revoke finished")
 
-	testTrack := func(whom string) {
-
-		// make sure that the provisioned device can use
-		// the passphrase stream cache (use an empty secret ui)
-		arg := &TrackEngineArg{
-			UserAssertion: whom,
-			Options:       keybase1.TrackOptions{BypassConfirm: true},
-		}
-		ctx = &Context{
-			LogUI:      tcY.G.UI.GetLogUI(),
-			IdentifyUI: &FakeIdentifyUI{},
-			SecretUI:   &libkb.TestSecretUI{},
-		}
-
-		teng := NewTrackEngine(arg, tcY.G)
-		if err := RunEngine(teng, ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	// Make sure that we can still track without a passphrase
-	// after a similated service restart.  In other words, that
+	// after a simulated service restart.  In other words, that
 	// the full LKSec secret was written to the secret store.
 	simulateServiceRestart(t, tcY, userX)
-	testTrack("t_bob")
+	testTrack(t, tcY, libkb.KeybaseNullSigVersion, "t_bob")
 
 	t.Logf("check for paper key")
 	hasOnePaperDev(tcY, userX)
@@ -3136,11 +3522,8 @@ func TestBootstrapAfterGPGSign(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// now safe to cleanup first home
-		tc.Cleanup()
-
 		// run login on new device
-		ctx := &Context{
+		uis := libkb.UIs{
 			ProvisionUI: newTestProvisionUIGPGSign(),
 			LogUI:       tc2.G.UI.GetLogUI(),
 			SecretUI:    u1.NewSecretUI(),
@@ -3148,7 +3531,8 @@ func TestBootstrapAfterGPGSign(t *testing.T) {
 			GPGUI:       &gpgtestui{Contextified: libkb.NewContextified(tc2.G)},
 		}
 		eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-		if err := RunEngine(eng, ctx); err != nil {
+		m := NewMetaContextForTest(tc2).WithUIs(uis)
+		if err := RunEngine2(m, eng); err != nil {
 			t.Logf("test run %d:  RunEngine(Login) error: %s", i+1, err)
 			continue
 		}
@@ -3170,26 +3554,22 @@ func TestBootstrapAfterGPGSign(t *testing.T) {
 
 		// Simulate restarting the service by wiping out the
 		// passphrase stream cache and cached secret keys
-		tc2.G.LoginState().Account(func(a *libkb.Account) {
-			a.ClearStreamCache()
-			a.ClearCachedSecretKeys()
-			a.UnloadLocalSession()
-		}, "account - clear")
+		tc2.SimulateServiceRestart()
 		tc2.G.GetUPAKLoader().ClearMemory()
 
 		// LoginOffline will run when service restarts.
 		// Since this was GPG sign, there will be no secret stored.
 		oeng := NewLoginOffline(tc2.G)
-		octx := &Context{NetContext: context.Background()}
-		oerr := RunEngine(oeng, octx)
+		oerr := RunEngine2(m, oeng)
 		if oerr != nil {
 			t.Fatalf("LoginOffline failed after gpg sign + svc restart: %s", oerr)
 		}
 
-		// GetBootstrapStatus should return without error and with LoggedIn set to true.
+		// GetBootstrapStatus should return without error and with LoggedIn set
+		// to true.
 		beng := NewBootstrap(tc2.G)
-		bctx := &Context{NetContext: context.Background()}
-		if err := RunEngine(beng, bctx); err != nil {
+		m = NewMetaContextForTest(tc2)
+		if err := RunEngine2(m, beng); err != nil {
 			t.Fatal(err)
 		}
 		status := beng.Status()
@@ -3231,6 +3611,34 @@ func TestLoginAlready(t *testing.T) {
 	}
 }
 
+func TestLoginUsernameOnProvisionedDevice(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+
+	u1 := CreateAndSignupFakeUser(tc, "login")
+	Logout(tc)
+
+	secui := u1.NewCountSecretUI()
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUIPassphrase(),
+		LoginUI:     &libkb.TestLoginUI{},
+		LogUI:       tc.G.UI.GetLogUI(),
+		SecretUI:    secui,
+		GPGUI:       &gpgtestui{},
+	}
+	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, u1.Username, keybase1.ClientType_CLI)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
+		t.Fatalf("login with email should work now, got error: %s (%T)", err, err)
+	}
+
+	assertPassphraseStreamCache(tc)
+	assertDeviceKeysCached(tc)
+	assertSecretStored(tc, u1.Username)
+
+	require.Equal(t, 1, secui.CallCount, "expecting a passphrase prompt when logging in with username")
+}
+
 func TestLoginEmailOnProvisionedDevice(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
@@ -3239,7 +3647,7 @@ func TestLoginEmailOnProvisionedDevice(t *testing.T) {
 	Logout(tc)
 
 	secui := u1.NewCountSecretUI()
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUIPassphrase(),
 		LoginUI:     &libkb.TestLoginUI{},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -3247,20 +3655,12 @@ func TestLoginEmailOnProvisionedDevice(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, u1.Email, keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
-		t.Fatalf("login with email should work now, got error: %s (%T)", err, err)
-	}
-
-	assertPassphraseStreamCache(tc)
-	assertDeviceKeysCached(tc)
-	assertSecretStored(tc, u1.Username)
-
-	// make sure they only had to enter passphrase once:
-	if secui.CallCount != 1 {
-		t.Errorf("login with email, passphrase prompts: %d, expected 1", secui.CallCount)
-	}
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
+	require.Error(t, err)
+	require.IsType(t, libkb.BadUsernameError{}, err)
+	require.Contains(t, err.Error(), "not supported")
 }
-
 func TestBeforeResetDeviceName(t *testing.T) {
 	tc := SetupEngineTest(t, "login")
 	defer tc.Cleanup()
@@ -3274,7 +3674,7 @@ func TestBeforeResetDeviceName(t *testing.T) {
 		testProvisionUI: newTestProvisionUI(),
 		DeviceName:      originalDeviceName,
 	}
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: provui,
 		LoginUI:     &libkb.TestLoginUI{Username: u.Username},
 		LogUI:       tc.G.UI.GetLogUI(),
@@ -3282,7 +3682,8 @@ func TestBeforeResetDeviceName(t *testing.T) {
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(tc.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	err := RunEngine(eng, ctx)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
 	if err == nil {
 		t.Errorf("Login worked with pre-reset device name")
 	}
@@ -3294,14 +3695,245 @@ func TestBeforeResetDeviceName(t *testing.T) {
 	}
 }
 
+func TestProvisioningWithSmartPunctuationDeviceName(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+
+	fu := NewFakeUserOrBust(tc.T, "login")
+	tc.G.Log.Debug("New test user: %s / %s", fu.Username, fu.Email)
+
+	arg := MakeTestSignupEngineRunArg(fu)
+	desiredName := arg.DeviceName + "'s test's cool-thing-device"
+	arg.DeviceName = arg.DeviceName + "’s test‘s cool—thing–device"
+	SignupFakeUserWithArg(tc, fu, arg)
+	fu.LoginOrBust(tc)
+	if err := fu.LoadUser(tc); err != nil {
+		t.Errorf("unable to load user: %q", err)
+	}
+	deviceNames, err := fu.User.DeviceNames()
+	if err != nil {
+		t.Errorf("unable to list device names: %q", err)
+	}
+	if len(deviceNames) < 1 {
+		t.Error("no devices returned")
+	}
+	if deviceNames[0] != desiredName {
+		t.Errorf("device name 0: %q, should be %q", deviceNames[0], desiredName)
+	}
+}
+
+func TestProvisionAutomatedPaperKey(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+
+	fu := NewFakeUserOrBust(t, "paper")
+	arg := MakeTestSignupEngineRunArg(fu)
+	arg.SkipPaper = false
+	loginUI := &paperLoginUI{Username: fu.Username}
+	uis := libkb.UIs{
+		LogUI:    tc.G.UI.GetLogUI(),
+		GPGUI:    &gpgtestui{},
+		SecretUI: fu.NewSecretUI(),
+		LoginUI:  loginUI,
+	}
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
+	if err != nil {
+		tc.T.Fatal(err)
+	}
+
+	assertNumDevicesAndKeys(tc, fu, 2, 4)
+
+	Logout(tc)
+
+	if len(loginUI.PaperPhrase) == 0 {
+		t.Fatal("login ui has no paper key phrase")
+	}
+
+	// redo SetupEngineTest to get a new home directory
+	tc2 := SetupEngineTest(t, "login")
+	defer tc2.Cleanup()
+
+	provUI := newTestProvisionUIPaper()
+	provLoginUI := &libkb.TestLoginUI{}
+	uis2 := libkb.UIs{
+		ProvisionUI: provUI,
+		LogUI:       tc2.G.UI.GetLogUI(),
+		SecretUI:    fu.NewSecretUI(),
+		LoginUI:     provLoginUI,
+		GPGUI:       &gpgtestui{},
+	}
+	eng := NewLogin(tc2.G, libkb.DeviceTypeDesktop, fu.Username, keybase1.ClientType_CLI)
+	eng.PaperKey = loginUI.PaperPhrase
+	eng.DeviceName = "a different device name"
+	m2 := NewMetaContextForTest(tc2).WithUIs(uis2)
+	require.NoError(t, RunEngine2(m2, eng), "run login engine")
+
+	assertNumDevicesAndKeys(tc, fu, 3, 6)
+	require.NoError(t, AssertProvisioned(tc2), "provisioned")
+
+	require.Equal(t, provLoginUI.CalledGetEmailOrUsername, 0, "expected no calls to GetEmailOrUsername")
+	require.Equal(t, provUI.calledChooseDevice, 0, "expected no calls to ChooseDevice")
+}
+
+// Device X provisions device Y (which has a cached passphrase stream), device X changes the password,
+// device Y provisions device Z (which could break because of the outdated passphrase stream)
+func TestProvisionAfterPasswordChange(t *testing.T) {
+	t.Logf("create 3 contexts")
+
+	// device X (initial provisioner and passphrase changer) context:
+	tcX := SetupEngineTest(t, "kex2race1")
+	defer tcX.Cleanup()
+
+	// device Y (second provisioner and race condition culprit) context:
+	tcY := SetupEngineTest(t, "kex2race2")
+	defer tcY.Cleanup()
+
+	// device Z (provisionee) context:
+	tcZ := SetupEngineTest(t, "kex2race3")
+	defer tcZ.Cleanup()
+
+	// the initial needs to sign up and log in
+	userX := CreateAndSignupFakeUserPaper(tcX, "login")
+	var secretX kex2.Secret
+	if _, err := rand.Read(secretX[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("kex#1 starting")
+
+	secretCh := make(chan kex2.Secret)
+
+	// provisionee calls login:
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUISecretCh(secretCh),
+		LoginUI:     &libkb.TestLoginUI{Username: userX.Username},
+		LogUI:       tcX.G.UI.GetLogUI(),
+		SecretUI:    &libkb.TestSecretUI{},
+		GPGUI:       &gpgtestui{},
+	}
+
+	var wg sync.WaitGroup
+
+	// start provisionee for step #1
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		eng := NewLogin(tcY.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+		if err := RunEngine2(m, eng); err != nil {
+			t.Errorf("provisionee login error: %s", err)
+			return
+		}
+	}()
+
+	// start provisioner for step #1
+	provisioner := NewKex2Provisioner(tcX.G, secretX, nil)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// We're reusing the m from the PGP key generation
+		m := NewMetaContextForTest(tcX).WithUIs(uis)
+		if err := RunEngine2(m, provisioner); err != nil {
+			t.Errorf("provisioner error: %s", err)
+			return
+		}
+	}()
+	secretFromY := <-secretCh
+	provisioner.AddSecret(secretFromY)
+
+	wg.Wait()
+
+	require.False(t, t.Failed(), "prior failure in a goroutine")
+
+	// 2nd device should be provisioned
+	if err := AssertProvisioned(tcY); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("kex#1 finished")
+
+	// after provisioning, the passphrase stream in device Y should be cached
+	assertPassphraseStreamCache(tcY)
+	assertDeviceKeysCached(tcY)
+
+	// now we have the following:
+	// 1) the initial provisioner
+	// 2) an already provisioned device with a cached passphrase stream
+	// 3) a totally clean device
+	// in order to trigger the race we have to make the cached ppstream in (2) outdated
+
+	// Change the password on device 1 to modify ppgen
+	newPassphrase := "password1234"
+	require.NoError(t, RunEngine2(
+		NewMetaContextForTest(tcX).WithUIs(libkb.UIs{
+			SecretUI: &libkb.TestSecretUI{},
+		}),
+		NewPassphraseChange(tcX.G, &keybase1.PassphraseChangeArg{
+			OldPassphrase: userX.Passphrase,
+			Passphrase:    newPassphrase,
+		}),
+	))
+
+	// Now provision Z from Y
+	t.Logf("kex#2 starting")
+
+	// start provisionee for step #2
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m := NewMetaContextForTest(tcZ).WithUIs(uis)
+		eng := NewLogin(tcZ.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
+		if err := RunEngine2(m, eng); err != nil {
+			t.Errorf("provisionee login error: %s", err)
+			return
+		}
+	}()
+
+	// start provisioner for step #2
+	var secretY kex2.Secret
+	if _, err := rand.Read(secretY[:]); err != nil {
+		t.Fatal(err)
+	}
+	provisioner = NewKex2Provisioner(tcY.G, secretY, nil)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// We're reusing the m from the PGP key generation
+		m := NewMetaContextForTest(tcY).WithUIs(uis)
+		// m.ActiveDevice().ClearPassphraseStreamCache()
+		if err := RunEngine2(m, provisioner); err != nil {
+			t.Errorf("provisioner error: %s", err)
+			return
+		}
+	}()
+	secretFromZ := <-secretCh
+	provisioner.AddSecret(secretFromZ)
+
+	wg.Wait()
+
+	require.False(t, t.Failed(), "prior failure in a goroutine")
+
+	// 3rd device should be provisioned
+	if err := AssertProvisioned(tcZ); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("kex#2 finished")
+}
+
 type testProvisionUI struct {
 	secretCh               chan kex2.Secret
 	method                 keybase1.ProvisionMethod
 	gpgMethod              keybase1.GPGMethod
 	chooseDevice           string
+	calledChooseDevice     int
 	verbose                bool
 	calledChooseDeviceType int
 	abortSwitchToGPGSign   bool
+	lastDevices            []keybase1.Device
 }
 
 func newTestProvisionUI() *testProvisionUI {
@@ -3316,6 +3948,12 @@ func newTestProvisionUI() *testProvisionUI {
 func newTestProvisionUISecretCh(ch chan kex2.Secret) *testProvisionUI {
 	ui := newTestProvisionUI()
 	ui.secretCh = ch
+	ui.chooseDevice = "desktop"
+	return ui
+}
+
+func newTestProvisionUINoSecret() *testProvisionUI {
+	ui := newTestProvisionUI()
 	ui.chooseDevice = "desktop"
 	return ui
 }
@@ -3378,6 +4016,10 @@ func (u *testProvisionUI) SwitchToGPGSignOK(ctx context.Context, arg keybase1.Sw
 
 func (u *testProvisionUI) ChooseDevice(_ context.Context, arg keybase1.ChooseDeviceArg) (keybase1.DeviceID, error) {
 	u.printf("ChooseDevice")
+	u.calledChooseDevice++
+
+	u.lastDevices = arg.Devices
+
 	if len(arg.Devices) == 0 {
 		return "", nil
 	}
@@ -3474,6 +4116,22 @@ func (p *paperLoginUI) DisplayPrimaryPaperKey(_ context.Context, arg keybase1.Di
 	return nil
 }
 
+func (p *paperLoginUI) PromptResetAccount(_ context.Context, arg keybase1.PromptResetAccountArg) (bool, error) {
+	return false, nil
+}
+
+func (p *paperLoginUI) DisplayResetProgress(_ context.Context, arg keybase1.DisplayResetProgressArg) error {
+	return nil
+}
+
+func (p *paperLoginUI) ExplainDeviceRecovery(_ context.Context, arg keybase1.ExplainDeviceRecoveryArg) error {
+	return nil
+}
+
+func (p *paperLoginUI) PromptPassphraseRecovery(_ context.Context, arg keybase1.PromptPassphraseRecoveryArg) (bool, error) {
+	return false, nil
+}
+
 func signString(tc libkb.TestContext, input string, secUI libkb.SecretUI) error {
 	var sink bytes.Buffer
 
@@ -3485,12 +4143,9 @@ func signString(tc libkb.TestContext, input string, secUI libkb.SecretUI) error 
 		},
 	}
 
-	eng := NewPGPSignEngine(&earg, tc.G)
-	ctx := Context{
-		SecretUI: secUI,
-	}
-
-	return RunEngine(eng, &ctx)
+	eng := NewPGPSignEngine(tc.G, &earg)
+	m := NewMetaContextForTest(tc).WithUIs(libkb.UIs{SecretUI: secUI})
+	return RunEngine2(m, eng)
 }
 
 type testRetrySecretUI struct {
@@ -3557,7 +4212,7 @@ func skipOldGPG(tc libkb.TestContext) {
 	if err != nil {
 		tc.T.Fatal(err)
 	}
-	tc.T.Skip(fmt.Sprintf("skipping test due to gpg version < 2.0.29 (%s)", v))
+	tc.T.Skip(fmt.Sprintf("skipping test due to gpg version < 2.0.29 (%v)", v))
 }
 
 func assertDeviceKeysCached(tc libkb.TestContext) {
@@ -3572,21 +4227,45 @@ func assertDeviceKeysCached(tc libkb.TestContext) {
 
 func assertPassphraseStreamCache(tc libkb.TestContext) {
 	var ppsValid bool
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		ppsValid = a.PassphraseStreamCache().ValidPassphraseStream()
-	}, "assertPassphraseStreamCache")
-
+	if ppsc := tc.G.ActiveDevice.PassphraseStreamCache(); ppsc != nil {
+		ppsValid = ppsc.ValidPassphraseStream()
+	}
 	if !ppsValid {
 		tc.T.Fatal("passphrase stream not cached")
 	}
 }
 
 func assertSecretStored(tc libkb.TestContext, username string) {
-	secret, err := tc.G.SecretStoreAll.RetrieveSecret(libkb.NewNormalizedUsername(username))
+	secret, err := tc.G.SecretStore().RetrieveSecret(NewMetaContextForTest(tc), libkb.NewNormalizedUsername(username))
+	require.NoError(tc.T, err, "no error fetching secret")
+	require.False(tc.T, secret.IsNil(), "secret was non-nil")
+}
+
+func assertAutoreset(tc libkb.TestContext, uid keybase1.UID, expectedStatus int) error {
+	mctx := libkb.NewMetaContextForTest(tc)
+	resp, err := tc.G.API.Get(mctx, libkb.APIArg{
+		Endpoint:    "autoreset/status_dev",
+		SessionType: libkb.APISessionTypeOPTIONAL,
+		Args: libkb.HTTPArgs{
+			"uid": libkb.S{Val: uid.String()},
+		},
+	})
 	if err != nil {
-		tc.T.Fatal(err)
+		return err
 	}
-	if secret.IsNil() {
-		tc.T.Fatal("secret in secret store was nil")
+
+	status, ok := resp.Body.AtPathGetInt("autoreset.type")
+	if expectedStatus == -1 {
+		if ok {
+			return fmt.Errorf("expected account %s to not be in reset pipeline", uid.String())
+		}
+		return nil
 	}
+	if !ok {
+		return fmt.Errorf("expected account %s to be in %d state (got null)", uid.String(), expectedStatus)
+	}
+	if status != expectedStatus {
+		return fmt.Errorf("expected account %s to be in %d state (got %d)", uid.String(), expectedStatus, status)
+	}
+	return nil
 }

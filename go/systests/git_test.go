@@ -26,9 +26,8 @@ func TestGitTeamer(t *testing.T) {
 	aliceTeamer := git.NewTeamer(alice.tc.G)
 
 	t.Logf("team that doesn't exist")
-	res, err := aliceTeamer.LookupOrCreate(context.Background(), keybase1.Folder{
+	res, err := aliceTeamer.LookupOrCreate(context.Background(), keybase1.FolderHandle{
 		Name:       "notateamxxx",
-		Private:    true,
 		FolderType: keybase1.FolderType_TEAM,
 	})
 	require.Error(t, err)
@@ -36,24 +35,13 @@ func TestGitTeamer(t *testing.T) {
 
 	t.Logf("team that exists")
 	teamID, teamName := tt.users[0].createTeam2()
-	res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.Folder{
+	res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.FolderHandle{
 		Name:       teamName.String(),
-		Private:    true,
 		FolderType: keybase1.FolderType_TEAM,
 	})
 	require.NoError(t, err)
 	require.Equal(t, res.TeamID, teamID)
 	require.Equal(t, res.Visibility, keybase1.TLFVisibility_PRIVATE)
-
-	t.Logf("public team")
-	_, teamName = tt.users[0].createTeam2()
-	res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.Folder{
-		Name:       teamName.String(),
-		Private:    false,
-		FolderType: keybase1.FolderType_TEAM,
-	})
-	require.Error(t, err)
-	require.Regexp(t, `not supported`, err.Error())
 
 	for _, public := range []bool{false, true} {
 		t.Logf("public:%v", public)
@@ -72,32 +60,31 @@ func TestGitTeamer(t *testing.T) {
 		bob := tt.addUser("bob")
 		gil := tt.addUser("gil")
 		frag := fmt.Sprintf("%v,%v#%v", alice.username, bob.username, gil.username)
-		res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.Folder{
+		res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.FolderHandle{
 			Name:       frag,
-			Private:    !public,
 			FolderType: folderType,
 		})
 		require.NoError(t, err)
-		expectedTeamID, _, _, err := teams.LookupImplicitTeam(context.Background(), alice.tc.G, frag, public)
+		expectedTeam, _, _, err := teams.LookupImplicitTeam(context.Background(), alice.tc.G, frag, public, teams.ImplicitTeamOptions{})
 		require.NoError(t, err)
-		require.Equal(t, public, expectedTeamID.IsPublic())
-		require.Equal(t, expectedTeamID, res.TeamID, "teamer should have created a team that was then looked up")
+		require.Equal(t, public, expectedTeam.ID.IsPublic())
+		require.Equal(t, expectedTeam.ID, res.TeamID,
+			"teamer should have created a team that was then looked up")
 		require.Equal(t, visibility, res.Visibility)
 
 		t.Logf("iteam that already exists")
 		bob = tt.addUser("bob")
 		gil = tt.addUser("gil")
 		frag = fmt.Sprintf("%v,%v#%v", alice.username, bob.username, gil.username)
-		teamID, _, _, err = teams.LookupOrCreateImplicitTeam(context.Background(), alice.tc.G, frag, public)
+		team, _, _, err := teams.LookupOrCreateImplicitTeam(context.Background(), alice.tc.G, frag, public)
 		require.NoError(t, err)
-		require.Equal(t, public, teamID.IsPublic())
-		res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.Folder{
+		require.Equal(t, public, team.ID.IsPublic())
+		res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.FolderHandle{
 			Name:       frag,
-			Private:    !public,
 			FolderType: folderType,
 		})
 		require.NoError(t, err)
-		require.Equal(t, res.TeamID, teamID, "teamer should return the same team that was created earlier")
+		require.Equal(t, res.TeamID, team.ID, "teamer should return the same team that was created earlier")
 		require.Equal(t, visibility, res.Visibility)
 
 		t.Logf("iteam conflict")
@@ -107,9 +94,9 @@ func TestGitTeamer(t *testing.T) {
 		iTeamNameCreate2 := strings.Join([]string{alice.username, bob.username + "@rooter"}, ",")
 		_, _, _, err = teams.LookupOrCreateImplicitTeam(context.Background(), alice.tc.G, iTeamNameCreate1, public)
 		require.NoError(t, err)
-		iTeamID2, _, _, err := teams.LookupOrCreateImplicitTeam(context.Background(), alice.tc.G, iTeamNameCreate2, public)
+		iTeam2, _, _, err := teams.LookupOrCreateImplicitTeam(context.Background(), alice.tc.G, iTeamNameCreate2, public)
 		require.NoError(t, err)
-		require.Equal(t, public, iTeamID2.IsPublic())
+		require.Equal(t, public, iTeam2.ID.IsPublic())
 
 		t.Logf("prove to create the conflict")
 		bob.proveRooter()
@@ -117,7 +104,7 @@ func TestGitTeamer(t *testing.T) {
 		t.Logf("wait for someone to add bob")
 		pollForConditionWithTimeout(t, 20*time.Second, "bob to be added to the team after rooter proof", func(ctx context.Context) bool {
 			team, err := teams.Load(ctx, alice.tc.G, keybase1.LoadTeamArg{
-				ID:          iTeamID2,
+				ID:          iTeam2.ID,
 				Public:      public,
 				ForceRepoll: true,
 			})
@@ -128,17 +115,16 @@ func TestGitTeamer(t *testing.T) {
 		})
 
 		t.Logf("find out the conflict suffix")
-		_, _, _, conflicts, err := teams.LookupImplicitTeamAndConflicts(context.Background(), alice.tc.G, iTeamNameCreate1, public)
+		_, _, _, conflicts, err := teams.LookupImplicitTeamAndConflicts(context.Background(), alice.tc.G, iTeamNameCreate1, public, teams.ImplicitTeamOptions{})
 		require.NoError(t, err)
 		require.Len(t, conflicts, 1)
 		t.Logf("check")
-		res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.Folder{
+		res, err = aliceTeamer.LookupOrCreate(context.Background(), keybase1.FolderHandle{
 			Name:       iTeamNameCreate1 + " " + libkb.FormatImplicitTeamDisplayNameSuffix(conflicts[0]),
-			Private:    !public,
 			FolderType: folderType,
 		})
 		require.NoError(t, err)
-		require.Equal(t, res.TeamID, iTeamID2, "teamer should return the old conflicted team")
+		require.Equal(t, res.TeamID, iTeam2.ID, "teamer should return the old conflicted team")
 		require.Equal(t, visibility, res.Visibility)
 	}
 }

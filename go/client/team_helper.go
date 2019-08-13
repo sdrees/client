@@ -26,6 +26,16 @@ func ParseOneTeamNameK1(ctx *cli.Context) (res keybase1.TeamName, err error) {
 	return keybase1.TeamNameFromString(teamNameStr)
 }
 
+func ParseOneTeamID(ctx *cli.Context) (res keybase1.TeamID, err error) {
+	if len(ctx.Args()) == 0 {
+		return "", errors.New("team ID argument required")
+	}
+	if len(ctx.Args()) > 1 {
+		return "", errors.New("one team ID argument required, multiple found")
+	}
+	return keybase1.TeamIDFromString(ctx.Args()[0])
+}
+
 func ParseUser(ctx *cli.Context) (string, error) {
 	username := ctx.String("user")
 	if len(username) == 0 {
@@ -34,6 +44,7 @@ func ParseUser(ctx *cli.Context) (string, error) {
 	return username, nil
 }
 
+// TODO(HOTPOT-227) add param to specify if BOT roles are allowed
 func ParseRole(ctx *cli.Context) (keybase1.TeamRole, error) {
 	srole := ctx.String("role")
 	if srole == "" {

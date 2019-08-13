@@ -1,48 +1,138 @@
 {
   "prelude": [
-    "import * as Constants from '../constants/config'",
-    "import * as RPCTypes  from '../constants/types/flow-types'"
+    "import {ConnectionType} from '../constants/types/config'",
+    "import * as Tabs from '../constants/tabs'",
+    "import * as ChatTypes from '../constants/types/chat2'",
+    "import * as FsTypes from '../constants/types/fs'",
+    "import {RPCError} from '../util/errors'"
   ],
   "actions": {
+    "startHandshake": {
+      "_description": "internal to config. should start the handshake process"
+    },
+    "restartHandshake": {
+      "_description": "internal to config. should restart the handshake process"
+    },
+    "daemonHandshake": {
+      "_description": "starting the connect process. Things that need to happen before we see the app should call daemonHandshakeWait",
+      "firstTimeConnecting": "boolean",
+      "version": "number"
+    },
+    "daemonHandshakeWait": {
+      "_description": "subsystems that need to do things during boot need to call this to register that we should wait.",
+      "name": "string",
+      "version": "number",
+      "increment": "boolean",
+      "failedReason?": "string | null",
+      "failedFatal?": "true"
+    },
+    "daemonHandshakeDone": {
+      "_description": "ready to show the app"
+    },
+    "filePickerError": {
+      "_description": "Sent whenever the mobile file picker encounters an error.",
+      "error": "Error"
+    },
+    "logout": {
+      "_description": "someone wants to log out"
+    },
+    "logoutHandshake": {
+      "_description": "starting the logout process. Things that need to happen before we see the app should call logoutHandshakeWait",
+      "version": "number"
+    },
+    "logoutHandshakeWait": {
+      "_description": "subsystems that need to do things during logout need to call this to register that we should wait.",
+      "name": "string",
+      "version": "number",
+      "increment": "boolean"
+    },
+    "installerRan": {
+      "_description": "desktop only: the installer ran and we can start up"
+    },
+    "dumpLogs": {"reason": ["'quitting through menu'"]},
+    "openAppSettings": {
+      "_description": "mobile only: open the settings page"
+    },
+    "changedFocus": {"appFocused": "boolean"},
+    "changedActive": {"userActive": "boolean"},
+    "mobileAppState": {"nextAppState": ["'active'", "'background'", "'inactive'"]},
+    "showMain": {},
     "bootstrapStatusLoaded": {
-      "bootstrapStatus": "RPCTypes.BootstrapStatus"
-    },
-    "bootstrap": {
-      "isReconnect?": "boolean"
-    },
-    "bootstrapSuccess": {},
-    "bootstrapRetry": {},
-    "bootstrapAttemptFailed": {},
-    "bootstrapFailed": {},
-    "changeKBFSPath": {
-      "kbfsPath": "string"
-    },
-    "clearRouteState": {},
-    "configLoaded": {
-      "config": "RPCTypes.Config"
-    },
-    "daemonError": {
-      "daemonError": "?Error"
-    },
-    "extendedConfigLoaded": {
-      "extendedConfig": "RPCTypes.ExtendedStatus"
-    },
-    "getExtendedStatus": {},
-    "globalError": {
-      "globalError": "?Error"
-    },
-    "updateFollowing": {
+      "deviceID": "string",
+      "deviceName": "string",
+      "fullname": "string",
+      "loggedIn": "boolean",
+      "registered": "boolean",
+      "uid": "string",
       "username": "string",
-      "isTracking": "boolean"
+      "userReacjis": "RPCTypes.UserReacjis"
     },
-    "persistRouteState": {},
-    "pushLoaded": {
-      "pushLoaded": "boolean"
+    "followerInfoUpdated": {
+      "uid": "string",
+      "followers": "Array<string>",
+      "followees": "Array<string>"
     },
-    "readyForBootstrap": {},
-    "retryBootstrap": {},
-    "setInitialState": {
-      "initialState": "Constants.InitialState"
+    "daemonError": {"daemonError": "Error | null"},
+    "setAccounts": {
+      "configuredAccounts": "Array<RPCTypes.ConfiguredAccount>"
+    },
+    "setDefaultUsername": {
+      "username": "string"
+    },
+    "globalError": {"globalError": "null | Error | RPCError"},
+    "pushLoaded": {"pushLoaded": "boolean"},
+    "setStartupDetails": {
+      "startupWasFromPush": "boolean",
+      "startupConversation": "ChatTypes.ConversationIDKey | null",
+      "startupLink": "string",
+      "startupTab": "Tabs.Tab | null",
+      "startupFollowUser": "string",
+      "startupSharePath": "FsTypes.LocalPath | null"
+    },
+    "setOpenAtLogin": {
+      "open": "boolean",
+      "writeFile": "boolean"
+    },
+    "setNotifySound": {
+      "sound": "boolean",
+      "writeFile": "boolean"
+    },
+    "setDeletedSelf": {"deletedUsername": "string"},
+    "persistRoute": {"path": "Array<any>"},
+    "setNavigator": {"navigator": "any"},
+    "loggedOut": {},
+    "loggedIn": {
+      "_description": "Used internally to know we were logged in. if you want to react to being logged in likely you want bootstrapStatusLoaded",
+      "causedBySignup": "boolean",
+      "causedByStartup": "boolean"
+    },
+    "updateMenubarWindowID": {"id": "number"},
+    "copyToClipboard": {"text": "string"},
+    "checkForUpdate": {},
+    "updateInfo": {"isOutOfDate": "boolean", "critical": "boolean", "message?": "string"},
+    "updateNow": {},
+    "openAppStore": {
+      "_description": "Open a link to the app store"
+    },
+    "updateCriticalCheckStatus": {
+      "_description": "Save critical check status",
+      "status": "'critical' | 'suggested' | 'ok'",
+      "message": "string"
+    },
+    "osNetworkStatusChanged": {
+      "online": "boolean",
+      "type": "ConnectionType",
+      "isInit?": "boolean"
+    },
+    "setDarkModePreference": {
+      "preference": ["'system'", "'alwaysDark'", "'alwaysLight'", "undefined"]
+    },
+    "setSystemDarkMode": {
+        "dark": "boolean"
+    },
+    "updateHTTPSrvInfo": {
+      "address": "string",
+      "token": "string"
     }
   }
 }

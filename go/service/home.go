@@ -28,12 +28,16 @@ func NewHomeHandler(xp rpc.Transporter, g *libkb.GlobalContext, home *home.Home)
 
 var _ keybase1.HomeInterface = (*HomeHandler)(nil)
 
-func (h *HomeHandler) HomeGetScreen(ctx context.Context, markViewed bool) (keybase1.HomeScreen, error) {
-	return h.home.Get(ctx, markViewed)
+func (h *HomeHandler) HomeGetScreen(ctx context.Context, arg keybase1.HomeGetScreenArg) (keybase1.HomeScreen, error) {
+	return h.home.Get(ctx, arg.MarkViewed, arg.NumFollowSuggestionsWanted)
 }
 
 func (h *HomeHandler) HomeSkipTodoType(ctx context.Context, typ keybase1.HomeScreenTodoType) error {
 	return h.home.SkipTodoType(ctx, typ)
+}
+
+func (h *HomeHandler) HomeDismissAnnouncement(ctx context.Context, id keybase1.HomeScreenAnnouncementID) error {
+	return h.home.DismissAnnouncement(ctx, id)
 }
 
 func (h *HomeHandler) HomeActionTaken(ctx context.Context) error {

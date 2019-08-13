@@ -79,9 +79,11 @@ func (c *ConversationRetry) fixInboxFetch(ctx context.Context, uid gregor1.UID) 
 	c.Debug(ctx, "fixInboxFetch: retrying conversation")
 
 	// Reload this conversation and hope it works
-	inbox, _, err := c.G().InboxSource.Read(ctx, uid, nil, true, &chat1.GetInboxLocalQuery{
-		ConvIDs: []chat1.ConversationID{c.convID},
-	}, nil)
+	inbox, _, err := c.G().InboxSource.Read(ctx, uid, types.ConversationLocalizerBlocking,
+		types.InboxSourceDataSourceAll, nil,
+		&chat1.GetInboxLocalQuery{
+			ConvIDs: []chat1.ConversationID{c.convID},
+		}, nil)
 	if err != nil {
 		c.Debug(ctx, "fixInboxFetch: failed to read inbox: msg: %s", err.Error())
 		return err
@@ -106,9 +108,10 @@ func (c *ConversationRetry) fixThreadFetch(ctx context.Context, uid gregor1.UID)
 	c.Debug(ctx, "fixThreadFetch: retrying conversation")
 	// Attempt a pull of 50 messages to simulate whatever request got the
 	// conversation in this queue.
-	_, _, err := c.G().ConvSource.Pull(ctx, c.convID, uid, nil, &chat1.Pagination{
-		Num: 50,
-	})
+	_, err := c.G().ConvSource.Pull(ctx, c.convID, uid, chat1.GetThreadReason_FIXRETRY, nil,
+		&chat1.Pagination{
+			Num: 50,
+		})
 	if err == nil {
 		c.Debug(ctx, "fixThreadFetch: fixed")
 		return nil
@@ -167,7 +170,7 @@ func (f FullInboxRetry) Fix(ctx context.Context, uid gregor1.UID) error {
 		f.Debug(ctx, "Fix: failed to convert query: %s", err.Error())
 		return err
 	}
-	_, _, err = f.G().InboxSource.ReadUnverified(ctx, uid, true, query, f.pagination)
+	_, err = f.G().InboxSource.ReadUnverified(ctx, uid, types.InboxSourceDataSourceAll, query, f.pagination)
 	if err != nil {
 		f.Debug(ctx, "Fix: failed to load again: %d", err.Error())
 	}
@@ -247,7 +250,7 @@ func (f *FetchRetrier) spawnRetrier(ctx context.Context, uid gregor1.UID, desc t
 
 	attempts := 1
 	nextTime := f.nextAttemptTime(attempts, f.clock.Now())
-	ctx = BackgroundContext(ctx, f.G())
+	ctx = globals.BackgroundChatCtx(ctx, f.G())
 	go func() {
 		for {
 			select {
@@ -293,13 +296,13 @@ func (f *FetchRetrier) spawnRetrier(ctx context.Context, uid gregor1.UID, desc t
 }
 
 // Failure indicates a failure of type kind has happened when loading a conversation.
-func (f *FetchRetrier) Failure(ctx context.Context, uid gregor1.UID, desc types.RetryDescription) (err error) {
+func (f *FetchRetrier) Failure(ctx context.Context, uid gregor1.UID, desc types.RetryDescription) {
 	f.Lock()
 	defer f.Unlock()
-	defer f.Trace(ctx, func() error { return err }, fmt.Sprintf("Failure(%s)", desc))()
+	defer f.Trace(ctx, func() error { return nil }, fmt.Sprintf("Failure(%s)", desc))()
 	if !f.running {
 		f.Debug(ctx, "Failure: not starting new retrier, not running")
-		return nil
+		return
 	}
 	key := f.key(uid, desc)
 	if _, ok := f.retriers[key]; !ok {
@@ -308,23 +311,18 @@ func (f *FetchRetrier) Failure(ctx context.Context, uid gregor1.UID, desc types.
 		f.retriers[key] = control
 		f.spawnRetrier(ctx, uid, desc, control)
 	}
-
-	return nil
 }
 
 // Success indicates a success of type kind loading a conversation. This effectively removes
 // that conversation from the retry queue.
-func (f *FetchRetrier) Success(ctx context.Context, uid gregor1.UID, desc types.RetryDescription) (err error) {
+func (f *FetchRetrier) Success(ctx context.Context, uid gregor1.UID, desc types.RetryDescription) {
 	f.Lock()
 	defer f.Unlock()
-	defer f.Trace(ctx, func() error { return err }, fmt.Sprintf("Success(%s)", desc))()
-
+	defer f.Trace(ctx, func() error { return nil }, fmt.Sprintf("Success(%s)", desc))()
 	key := f.key(uid, desc)
 	if control, ok := f.retriers[key]; ok {
 		control.Shutdown()
 	}
-
-	return nil
 }
 
 // Connected is called when a connection to the chat server is established, and forces a
@@ -366,7 +364,7 @@ func (f *FetchRetrier) Force(ctx context.Context) {
 
 func (f *FetchRetrier) Rekey(ctx context.Context, name string, membersType chat1.ConversationMembersType,
 	public bool) {
-	nameInfo, err := CtxKeyFinder(ctx, f.G()).Find(ctx, name, membersType, public)
+	nameInfo, err := CreateNameInfoSource(ctx, f.G(), membersType).LookupID(ctx, name, public)
 	if err != nil {
 		f.Debug(ctx, "Rekey: failed to load name info for: %s msg %s", name, err)
 		return

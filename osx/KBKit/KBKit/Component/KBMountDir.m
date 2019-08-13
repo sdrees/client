@@ -8,7 +8,9 @@
 
 #import "KBMountDir.h"
 #import "KBInstaller.h"
+#import "KBWorkspace.h"
 #import "KBSharedFileList.h"
+#import "KBTask.h"
 
 @interface KBMountDir ()
 @property KBHelperTool *helperTool;
@@ -52,21 +54,64 @@
 }
 
 - (void)removeMountDir:(NSString *)mountDir completion:(KBCompletion)completion {
-  // Because the mount dir is in the root path, we need the helper tool to remove it, even if owned by the user
-  NSDictionary *params = @{@"path": mountDir};
-  DDLogDebug(@"Removing mount directory: %@", params);
-  [self.helperTool.helper sendRequest:@"remove" params:@[params] completion:^(NSError *err, id value) {
+  DDLogDebug(@"Removing mount directory: %@", mountDir);
+  NSError *err = nil;
+  if (![NSFileManager.defaultManager removeItemAtPath:mountDir error:&err]) {
     completion(err);
-  }];
+  }
+  completion(nil);
+}
+
+-(BOOL)_isStandardKeybaseMountPath:(NSString*)path{
+  NSString *p = path.stringByStandardizingPath;
+  if (!p.absolutePath) {
+    return NO;
+  }
+  NSArray *a = [p componentsSeparatedByString:@"/"];
+  if (a.count != 3) {
+    return NO;
+  }
+  if (![a[0] isEqualToString:@""] || ![a[1] isEqualToString:@"Volumes"]) {
+    return NO;
+  }
+  return YES;
+}
+
+- (void)_selfCreateDirectory:(NSString *)directory uid:(uid_t)uid gid:(gid_t)gid permissions:(NSNumber *)permissions completion:(KBCompletion)completion {
+  NSError *err = nil;
+  NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+  attributes[NSFilePosixPermissions] = permissions;
+  attributes[NSFileOwnerAccountID] = [NSNumber numberWithInt:uid];
+  attributes[NSFileGroupOwnerAccountID] = [NSNumber numberWithInt:gid];
+
+  if (![NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:attributes error:&err]) {
+    completion(err);
+    return;
+  }
+  NSURL *directoryURL = [NSURL fileURLWithPath:directory];
+  OSStatus status = CSBackupSetItemExcluded((__bridge CFURLRef)directoryURL, YES, YES);
+  if (status != noErr) {
+    completion(KBMakeError(status, @"Error trying to exclude from backup"));
+    return;
+  }
+  completion(nil);
 }
 
 - (void)createMountDir:(KBCompletion)completion {
   uid_t uid = getuid();
   gid_t gid = getgid();
   NSNumber *permissions = [NSNumber numberWithShort:0600];
+  NSString *path = self.config.mountDir;
+
+  if (![self _isStandardKeybaseMountPath:path]) {
+    DDLogDebug(@"Since mount directory %@ isn't standard, creating it without helper", path);
+    [self _selfCreateDirectory:path uid:uid gid:gid permissions:permissions completion:completion];
+    return;
+  }
+
   NSDictionary *params = @{@"directory": self.config.mountDir, @"uid": @(uid), @"gid": @(gid), @"permissions": permissions, @"excludeFromBackup": @(YES)};
   DDLogDebug(@"Creating mount directory: %@", params);
-  [self.helperTool.helper sendRequest:@"createDirectory" params:@[params] completion:^(NSError *err, id value) {
+  [self.helperTool.helper sendRequest:@"createMountDirectory" params:@[params] completion:^(NSError *err, id value) {
     completion(err);
   }];
 }
@@ -160,6 +205,22 @@
   return YES;
 }
 
++ (BOOL)linkExists:(NSString *)linkPath {
+  NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:linkPath error:nil];
+  if (!attributes) {
+    return NO;
+  }
+  return [attributes[NSFileType] isEqual:NSFileTypeSymbolicLink];
+}
+
++ (NSString *)resolveLinkPath:(NSString *)linkPath {
+  if (![self linkExists:linkPath]) {
+    return nil;
+  }
+  return [NSFileManager.defaultManager destinationOfSymbolicLinkAtPath:linkPath error:nil];
+}
+
+
 + (BOOL)setFileListFavoriteEnabled:(BOOL)fileListFavoriteEnabled position:(NSInteger)position config:(KBEnvConfig *)config error:(NSError **)error {
   if (!config.mountDir) {
     if (error) *error = KBMakeError(0, @"No mount dir");
@@ -171,8 +232,16 @@
   // If we create a symlink though, all these problems are avoided. So we'll create a symlink to /keybase and add this
   // as the file list favorite item.
   NSString *symPath = [config dataPath:@"Keybase" options:0];
+  NSString *currPath = [self resolveLinkPath:symPath];
+  if (currPath && ![config.mountDir isEqualToString:currPath]) {
+    DDLogDebug(@"Removing old favorite: %@", currPath);
+    if (![[NSFileManager defaultManager] removeItemAtPath:symPath error:error]) {
+      return NO;
+    }
+  }
+
   if (![[NSFileManager defaultManager] fileExistsAtPath:symPath]) {
-    if ([[NSFileManager defaultManager] createSymbolicLinkAtPath:symPath withDestinationPath:config.mountDir error:error]) {
+    if (![[NSFileManager defaultManager] createSymbolicLinkAtPath:symPath withDestinationPath:config.mountDir error:error]) {
       return NO;
     }
   }

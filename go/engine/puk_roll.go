@@ -54,25 +54,24 @@ func (e *PerUserKeyRoll) SubConsumers() []libkb.UIConsumer {
 }
 
 // Run starts the engine.
-func (e *PerUserKeyRoll) Run(ctx *Context) (err error) {
-	defer e.G().CTrace(ctx.GetNetContext(), "PerUserKeyRoll", func() error { return err })()
-	return e.inner(ctx)
+func (e *PerUserKeyRoll) Run(mctx libkb.MetaContext) (err error) {
+	defer mctx.Trace("PerUserKeyRoll", func() error { return err })()
+	return e.inner(mctx)
 }
 
-func (e *PerUserKeyRoll) inner(ctx *Context) error {
+func (e *PerUserKeyRoll) inner(mctx libkb.MetaContext) error {
 	var err error
 
-	uid := e.G().GetMyUID()
+	uid := mctx.G().GetMyUID()
 	if uid.IsNil() {
 		return libkb.NoUIDError{}
 	}
 
 	me := e.args.Me
 	if me == nil {
-		e.G().Log.CDebugf(ctx.GetNetContext(), "PerUserKeyRoll load self")
+		mctx.Debug("PerUserKeyRoll load self")
 
-		loadArg := libkb.NewLoadUserArg(e.G()).
-			WithNetContext(ctx.GetNetContext()).
+		loadArg := libkb.NewLoadUserArgWithMetaContext(mctx).
 			WithUID(uid).
 			WithSelf(true).
 			WithPublicKeyOptional()
@@ -83,27 +82,27 @@ func (e *PerUserKeyRoll) inner(ctx *Context) error {
 	}
 	meUPAK := me.ExportToUserPlusAllKeys()
 
-	sigKey, err := e.G().ActiveDevice.SigningKey()
+	sigKey, err := mctx.ActiveDevice().SigningKey()
 	if err != nil {
 		return fmt.Errorf("signing key not found: (%v)", err)
 	}
-	encKey, err := e.G().ActiveDevice.EncryptionKey()
+	encKey, err := mctx.ActiveDevice().EncryptionKey()
 	if err != nil {
 		return fmt.Errorf("encryption key not found: (%v)", err)
 	}
 
-	pukring, err := e.G().GetPerUserKeyring()
+	pukring, err := mctx.G().GetPerUserKeyring(mctx.Ctx())
 	if err != nil {
 		return err
 	}
-	err = pukring.Sync(ctx.GetNetContext())
+	err = pukring.Sync(mctx)
 	if err != nil {
 		return err
 	}
 
 	// Generation of the new key
 	gen := pukring.CurrentGeneration() + keybase1.PerUserKeyGeneration(1)
-	e.G().Log.CDebugf(ctx.GetNetContext(), "PerUserKeyRoll creating gen: %v", gen)
+	mctx.Debug("PerUserKeyRoll creating gen: %v", gen)
 
 	pukSeed, err := libkb.GeneratePerUserKeySeed()
 	if err != nil {
@@ -112,14 +111,14 @@ func (e *PerUserKeyRoll) inner(ctx *Context) error {
 
 	var pukPrev *libkb.PerUserKeyPrev
 	if gen > 1 {
-		pukPrevInner, err := pukring.PreparePrev(ctx.GetNetContext(), pukSeed, gen)
+		pukPrevInner, err := pukring.PreparePrev(mctx, pukSeed, gen)
 		if err != nil {
 			return err
 		}
 		pukPrev = &pukPrevInner
 	}
 
-	pukReceivers, err := e.getPukReceivers(ctx, &meUPAK)
+	pukReceivers, err := e.getPukReceivers(mctx, &meUPAK)
 	if err != nil {
 		return err
 	}
@@ -128,32 +127,55 @@ func (e *PerUserKeyRoll) inner(ctx *Context) error {
 	}
 
 	// Create boxes of the new per-user-key
-	pukBoxes, err := pukring.PrepareBoxesForDevices(ctx.GetNetContext(),
+	pukBoxes, err := pukring.PrepareBoxesForDevices(mctx,
 		pukSeed, gen, pukReceivers, encKey)
 	if err != nil {
 		return err
 	}
 
-	e.G().Log.CDebugf(ctx.GetNetContext(), "PerUserKeyRoll make sigs")
-	sig, err := libkb.PerUserKeyProofReverseSigned(me, pukSeed, gen, sigKey)
+	mctx.Debug("PerUserKeyRoll make sigs")
+	sig, err := libkb.PerUserKeyProofReverseSigned(mctx, me, pukSeed, gen, sigKey)
 	if err != nil {
 		return err
 	}
 	// Seqno when the per-user-key will be signed in.
-	pukSeqno := me.GetSigChainLastKnownSeqno()
-
-	var sigsList []libkb.JSONPayload
-	sigsList = append(sigsList, sig)
+	pukSeqno := sig.Seqno
 
 	payload := make(libkb.JSONPayload)
-	payload["sigs"] = sigsList
+	payload["sigs"] = []libkb.JSONPayload{sig.Payload}
 
-	e.G().Log.CDebugf(ctx.NetContext, "PerUserKeyRoll pukBoxes:%v pukPrev:%v for generation %v",
+	mctx.Debug("PerUserKeyRoll pukBoxes:%v pukPrev:%v for generation %v",
 		len(pukBoxes), pukPrev != nil, gen)
 	libkb.AddPerUserKeyServerArg(payload, gen, pukBoxes, pukPrev)
 
-	e.G().Log.CDebugf(ctx.GetNetContext(), "PerUserKeyRoll post")
-	_, err = e.G().API.PostJSON(libkb.APIArg{
+	ekLib := mctx.G().GetEKLib()
+	var myUserEKBox *keybase1.UserEkBoxed
+	var newUserEKMetadata *keybase1.UserEkMetadata
+	if ekLib != nil {
+		merkleRoot, err := mctx.G().GetMerkleClient().FetchRootFromServer(mctx, libkb.EphemeralKeyMerkleFreshness)
+		if err != nil {
+			return err
+		}
+		sig, boxes, newMetadata, myBox, err := ekLib.PrepareNewUserEK(mctx, *merkleRoot, pukSeed)
+		if err != nil {
+			return err
+		}
+		// If there are no active deviceEKs, we can't publish this key. This
+		// should mostly only come up in tests.
+		if len(boxes) > 0 {
+			myUserEKBox = myBox
+			newUserEKMetadata = &newMetadata
+			userEKSection := make(libkb.JSONPayload)
+			userEKSection["sig"] = sig
+			userEKSection["boxes"] = boxes
+			payload["user_ek"] = userEKSection
+		} else {
+			mctx.Debug("skipping userEK publishing, there are no valid deviceEKs")
+		}
+	}
+
+	mctx.Debug("PerUserKeyRoll post")
+	_, err = mctx.G().API.PostJSON(mctx, libkb.APIArg{
 		Endpoint:    "key/multi",
 		SessionType: libkb.APISessionTypeREQUIRED,
 		JSONPayload: payload,
@@ -161,21 +183,32 @@ func (e *PerUserKeyRoll) inner(ctx *Context) error {
 	if err != nil {
 		return err
 	}
+	if err = libkb.MerkleCheckPostedUserSig(mctx, uid, pukSeqno, sig.LinkID); err != nil {
+		return err
+	}
 	e.DidNewKey = true
 
 	// Add the per-user-key locally
-	err = pukring.AddKey(ctx.GetNetContext(), gen, pukSeqno, pukSeed)
+	err = pukring.AddKey(mctx, gen, pukSeqno, pukSeed)
 	if err != nil {
 		return err
 	}
 
-	e.G().UserChanged(uid)
+	// Add the new userEK box to local storage, if it was created above.
+	if myUserEKBox != nil {
+		err = mctx.G().GetUserEKBoxStorage().Put(mctx, newUserEKMetadata.Generation, *myUserEKBox)
+		if err != nil {
+			mctx.Error("error while saving userEK box: %s", err)
+		}
+	}
+
+	mctx.G().UserChanged(mctx.Ctx(), uid)
 	return nil
 }
 
 // Get the receivers of the new per-user-key boxes.
 // Includes all the user's device subkeys.
-func (e *PerUserKeyRoll) getPukReceivers(ctx *Context, meUPAK *keybase1.UserPlusAllKeys) (res []libkb.NaclDHKeyPair, err error) {
+func (e *PerUserKeyRoll) getPukReceivers(mctx libkb.MetaContext, meUPAK *keybase1.UserPlusAllKeys) (res []libkb.NaclDHKeyPair, err error) {
 	for _, dk := range meUPAK.Base.DeviceKeys {
 		if dk.IsSibkey == false && !dk.IsRevoked {
 			receiver, err := libkb.ImportNaclDHKeyPairFromHex(dk.KID.String())

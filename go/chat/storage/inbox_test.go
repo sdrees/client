@@ -2,15 +2,19 @@ package storage
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"runtime"
 	"sort"
+	"strings"
 	"testing"
 
 	"encoding/hex"
 
-	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/chat/types"
 	"github.com/keybase/client/go/chat/utils"
 	"github.com/keybase/client/go/kbtest"
+	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/chat1"
 	"github.com/keybase/client/go/protocol/gregor1"
 	"github.com/keybase/client/go/protocol/keybase1"
@@ -18,17 +22,12 @@ import (
 )
 
 func setupInboxTest(t testing.TB, name string) (kbtest.ChatTestContext, *Inbox, gregor1.UID) {
-	ltc := setupCommonTest(t, name)
+	ctc := setupCommonTest(t, name)
 
-	tc := kbtest.ChatTestContext{
-		TestContext: ltc,
-		ChatG:       &globals.ChatContext{},
-	}
-	tc.Context().ServerCacheVersions = NewServerVersions(tc.Context())
-	u, err := kbtest.CreateAndSignupFakeUser("ib", ltc.G)
+	u, err := kbtest.CreateAndSignupFakeUser("ib", ctc.TestContext.G)
 	require.NoError(t, err)
 	uid := gregor1.UID(u.User.GetUID().ToBytes())
-	return tc, NewInbox(tc.Context(), uid), uid
+	return ctc, NewInbox(ctc.Context()), uid
 }
 
 func makeTlfID() chat1.TLFID {
@@ -54,7 +53,7 @@ func makeConvo(mtime gregor1.Time, rmsg chat1.MessageID, mmsg chat1.MessageID) t
 				MaxMsgid:  mmsg,
 			},
 			// Make it look like there's a visible message in here too
-			MaxMsgSummaries: []chat1.MessageSummary{{MessageType: chat1.MessageType_TEXT}},
+			MaxMsgSummaries: []chat1.MessageSummary{{MessageType: chat1.MessageType_TEXT, MsgID: 1}},
 		},
 	}
 	return c
@@ -82,7 +81,8 @@ func convListCompare(t *testing.T, l []types.RemoteConversation, r []types.Remot
 
 func TestInboxBasic(t *testing.T) {
 
-	_, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -92,8 +92,8 @@ func TestInboxBasic(t *testing.T) {
 	}
 
 	// Fetch with no query parameter
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	vers, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	vers, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, chat1.InboxVers(1), vers, "version mismatch")
@@ -101,23 +101,25 @@ func TestInboxBasic(t *testing.T) {
 	require.Equal(t, gregor1.Time(numConvs-1), res[0].GetMtime(), "order wrong")
 
 	// Fetch half of the messages (expect miss on first try)
-	vers, res, _, err = inbox.Read(context.TODO(), nil, &chat1.Pagination{
+	_, _, _, err = inbox.Read(context.TODO(), uid, nil, &chat1.Pagination{
 		Num: numConvs / 2,
 	})
 	require.IsType(t, MissError{}, err, "expected miss error")
-	require.NoError(t, inbox.Merge(context.TODO(), 2, utils.PluckConvs(convs), nil, &chat1.Pagination{
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 2, utils.PluckConvs(convs), nil, &chat1.Pagination{
 		Num: numConvs / 2,
 	}))
-	vers, res, _, err = inbox.Read(context.TODO(), nil, &chat1.Pagination{
+	vers, res, _, err = inbox.Read(context.TODO(), uid, nil, &chat1.Pagination{
 		Num: numConvs / 2,
 	})
 	require.NoError(t, err)
-	require.Equal(t, chat1.InboxVers(2), vers, "version mismatch")
+	// Merge in of 2 doesn't do anything, we still think we are at version 1 of the whole box
+	require.Equal(t, chat1.InboxVers(1), vers, "version mismatch")
 	convListCompare(t, convs[:numConvs/2], res, "half")
 }
 
 func TestInboxSummarize(t *testing.T) {
-	_, inbox, _ := setupInboxTest(t, "summarize")
+	tc, inbox, uid := setupInboxTest(t, "summarize")
+	defer tc.Cleanup()
 
 	conv := makeConvo(gregor1.Time(1), 1, 1)
 	maxMsgID := chat1.MessageID(6)
@@ -130,8 +132,8 @@ func TestInboxSummarize(t *testing.T) {
 		},
 	}}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{conv.Conv}, nil, nil))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{conv.Conv}, nil, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Zero(t, len(res[0].Conv.MaxMsgs))
 	require.Equal(t, 1, len(res[0].Conv.MaxMsgSummaries))
@@ -139,8 +141,8 @@ func TestInboxSummarize(t *testing.T) {
 }
 
 func TestInboxQueries(t *testing.T) {
-
-	_, inbox, _ := setupInboxTest(t, "queries")
+	tc, inbox, uid := setupInboxTest(t, "queries")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 20
@@ -162,8 +164,7 @@ func TestInboxQueries(t *testing.T) {
 
 	// Make three unread convos
 	makeUnread := func(ri *chat1.ConversationReaderInfo) {
-		ri.MaxMsgid = 5
-		ri.ReadMsgid = 3
+		ri.ReadMsgid = 0
 	}
 	makeUnread(convs[5].Conv.ReaderInfo)
 	makeUnread(convs[13].Conv.ReaderInfo)
@@ -195,13 +196,13 @@ func TestInboxQueries(t *testing.T) {
 		t.Logf("convID: %s", conv.GetConvID())
 	}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
 
 	// Merge in queries and try to read them back out
 	var q *chat1.GetInboxQuery
 	mergeReadAndCheck := func(t *testing.T, ref []types.RemoteConversation, name string) {
-		require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{}, q, nil))
-		_, res, _, err := inbox.Read(context.TODO(), q, nil)
+		require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{}, q, nil))
+		_, res, _, err := inbox.Read(context.TODO(), uid, q, nil)
 		require.NoError(t, err)
 		convListCompare(t, ref, res, name)
 	}
@@ -254,14 +255,14 @@ func TestInboxQueries(t *testing.T) {
 
 	t.Logf("check conv IDs queries work")
 	q = &chat1.GetInboxQuery{Before: &btime, ConvIDs: beforeConvIDs}
-	_, cres, _, err := inbox.Read(context.TODO(), q, nil)
+	_, cres, _, err := inbox.Read(context.TODO(), uid, q, nil)
 	require.NoError(t, err)
 	require.Equal(t, before, cres)
 }
 
 func TestInboxEmptySuperseder(t *testing.T) {
-
-	_, inbox, _ := setupInboxTest(t, "queries")
+	tc, inbox, uid := setupInboxTest(t, "queries")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 20
@@ -283,13 +284,13 @@ func TestInboxEmptySuperseder(t *testing.T) {
 		t.Logf("convID: %s", conv.GetConvID())
 	}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
 
 	// Merge in queries and try to read them back out
 	var q *chat1.GetInboxQuery
 	mergeReadAndCheck := func(t *testing.T, ref []types.RemoteConversation, name string) {
-		require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{}, q, nil))
-		_, res, _, err := inbox.Read(context.TODO(), q, nil)
+		require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{}, q, nil))
+		_, res, _, err := inbox.Read(context.TODO(), uid, q, nil)
 		require.NoError(t, err)
 		convListCompare(t, ref, res, name)
 	}
@@ -310,7 +311,9 @@ func TestInboxEmptySuperseder(t *testing.T) {
 	mergeReadAndCheck(t, superseded, "superseded")
 
 	// Now test OneChatTypePerTLF
-	_, inbox, _ = setupInboxTest(t, "queries2")
+	tc, inbox, uid = setupInboxTest(t, "queries2")
+	defer tc.Cleanup()
+
 	full = []types.RemoteConversation{}
 	superseded = []types.RemoteConversation{}
 	for i := len(convs) - 1; i >= 0; i-- {
@@ -321,7 +324,7 @@ func TestInboxEmptySuperseder(t *testing.T) {
 		}
 		full = append(full, convs[i])
 	}
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(full), nil, nil))
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(full), nil, nil))
 	for _, conv := range full {
 		superseded = append(superseded, conv)
 	}
@@ -333,7 +336,8 @@ func TestInboxEmptySuperseder(t *testing.T) {
 
 func TestInboxPagination(t *testing.T) {
 
-	_, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 50
@@ -345,14 +349,14 @@ func TestInboxPagination(t *testing.T) {
 	secondPage := convs[10:20]
 	thirdPage := convs[20:35]
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
 
 	// Get first page
 	t.Logf("first page")
-	require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{}, nil, &chat1.Pagination{
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{}, nil, &chat1.Pagination{
 		Num: 10,
 	}))
-	_, res, p, err := inbox.Read(context.TODO(), nil, &chat1.Pagination{
+	_, res, p, err := inbox.Read(context.TODO(), uid, nil, &chat1.Pagination{
 		Num: 10,
 	})
 	require.NoError(t, err)
@@ -361,11 +365,11 @@ func TestInboxPagination(t *testing.T) {
 
 	// Get the second page
 	t.Logf("second page")
-	require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{}, nil, &chat1.Pagination{
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{}, nil, &chat1.Pagination{
 		Num:  10,
 		Next: p.Next,
 	}))
-	_, res, p, err = inbox.Read(context.TODO(), nil, &chat1.Pagination{
+	_, res, p, err = inbox.Read(context.TODO(), uid, nil, &chat1.Pagination{
 		Num:  10,
 		Next: p.Next,
 	})
@@ -375,11 +379,11 @@ func TestInboxPagination(t *testing.T) {
 
 	// Get the third page
 	t.Logf("third page")
-	require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{}, nil, &chat1.Pagination{
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{}, nil, &chat1.Pagination{
 		Num:  15,
 		Next: p.Next,
 	}))
-	_, res, p, err = inbox.Read(context.TODO(), nil, &chat1.Pagination{
+	_, res, p, err = inbox.Read(context.TODO(), uid, nil, &chat1.Pagination{
 		Num:  15,
 		Next: p.Next,
 	})
@@ -389,11 +393,11 @@ func TestInboxPagination(t *testing.T) {
 
 	// Get the second page (through prev)
 	t.Logf("second page (redux)")
-	require.NoError(t, inbox.Merge(context.TODO(), 1, []chat1.Conversation{}, nil, &chat1.Pagination{
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{}, nil, &chat1.Pagination{
 		Num:      10,
 		Previous: p.Previous,
 	}))
-	_, res, p, err = inbox.Read(context.TODO(), nil, &chat1.Pagination{
+	_, res, p, err = inbox.Read(context.TODO(), uid, nil, &chat1.Pagination{
 		Num:      10,
 		Previous: p.Previous,
 	})
@@ -403,14 +407,9 @@ func TestInboxPagination(t *testing.T) {
 
 }
 
-func validateBadUpdate(t *testing.T, inbox *Inbox, f func() error) {
-	require.IsType(t, VersionMismatchError{}, f())
-	_, _, _, err := inbox.Read(context.TODO(), nil, nil)
-	require.IsType(t, MissError{}, err)
-}
-
 func TestInboxNewConversation(t *testing.T) {
-	_, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -423,38 +422,39 @@ func TestInboxNewConversation(t *testing.T) {
 	}
 
 	t.Logf("basic newconv")
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
 	newConv := makeConvo(gregor1.Time(11), 1, 1)
-	require.NoError(t, inbox.NewConversation(context.TODO(), 2, newConv.Conv))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewConversation(context.TODO(), uid, 2, newConv.Conv))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	convs = append([]types.RemoteConversation{newConv}, convs...)
 	convListCompare(t, convs, res, "newconv")
 
 	t.Logf("repeat conv")
-	require.NoError(t, inbox.NewConversation(context.TODO(), 3, newConv.Conv))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewConversation(context.TODO(), uid, 3, newConv.Conv))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	convListCompare(t, convs, res, "repeatconv")
 
 	t.Logf("supersede newconv")
 	newConv = makeConvo(gregor1.Time(12), 1, 1)
 	newConv.Conv.Metadata.Supersedes = append(newConv.Conv.Metadata.Supersedes, convs[6].Conv.Metadata)
-	require.NoError(t, inbox.NewConversation(context.TODO(), 4, newConv.Conv))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewConversation(context.TODO(), uid, 4, newConv.Conv))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	convs = append([]types.RemoteConversation{newConv}, convs...)
 	convListCompare(t, append(convs[:7], convs[8:]...), res, "newconv finalized")
 
 	require.Equal(t, numConvs+2, len(convs), "n convs")
 
-	err = inbox.NewConversation(context.TODO(), 10, newConv.Conv)
+	err = inbox.NewConversation(context.TODO(), uid, 10, newConv.Conv)
 	require.IsType(t, VersionMismatchError{}, err)
 }
 
 func TestInboxNewMessage(t *testing.T) {
 
-	_, inbox, uid := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -474,12 +474,12 @@ func TestInboxNewMessage(t *testing.T) {
 	conv := convs[5]
 	msg := makeInboxMsg(2, chat1.MessageType_TEXT)
 	msg.ClientHeader.Sender = uid1
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, convs[0].GetConvID(), res[0].GetConvID(), "conv not promoted")
-	require.NoError(t, inbox.NewMessage(context.TODO(), 2, conv.GetConvID(), msg))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 2, conv.GetConvID(), msg, nil))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, conv.GetConvID(), res[0].GetConvID(), "conv not promoted")
 	require.Equal(t, chat1.MessageID(2), res[0].Conv.ReaderInfo.MaxMsgid, "wrong max msgid")
@@ -491,31 +491,54 @@ func TestInboxNewMessage(t *testing.T) {
 
 	// Test incomplete active list
 	conv = convs[6]
-	require.NoError(t, inbox.NewMessage(context.TODO(), 3, conv.GetConvID(), msg))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 3, conv.GetConvID(), msg, nil))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []gregor1.UID{uid1, uid2, uid3}, res[0].Conv.Metadata.ActiveList, "active list")
 
 	// Send another one from a diff User
 	msg = makeInboxMsg(3, chat1.MessageType_TEXT)
 	msg.ClientHeader.Sender = uid2
-	require.NoError(t, inbox.NewMessage(context.TODO(), 4, conv.GetConvID(), msg))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 4, conv.GetConvID(), msg, nil))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, chat1.MessageID(3), res[0].Conv.ReaderInfo.MaxMsgid, "wrong max msgid")
 	require.Equal(t, chat1.MessageID(2), res[0].Conv.ReaderInfo.ReadMsgid, "wrong read msgid")
 	require.Equal(t, []gregor1.UID{uid2, uid1, uid3}, res[0].Conv.Metadata.ActiveList, "active list")
 	maxMsg, err = res[0].Conv.GetMaxMessage(chat1.MessageType_TEXT)
 	require.NoError(t, err)
-	require.Equal(t, chat1.MessageID(3), maxMsg.GetMessageID(), "max msg not updated")
+	require.Equal(t, chat1.MessageID(3), maxMsg.GetMessageID())
 
-	err = inbox.NewMessage(context.TODO(), 10, conv.GetConvID(), msg)
+	// Test delete mechanics
+	delMsg := makeInboxMsg(4, chat1.MessageType_TEXT)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 5, conv.GetConvID(), delMsg, nil))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
+	require.NoError(t, err)
+	maxMsg, err = res[0].Conv.GetMaxMessage(chat1.MessageType_TEXT)
+	require.NoError(t, err)
+	require.Equal(t, delMsg.GetMessageID(), maxMsg.GetMessageID())
+	delete := makeInboxMsg(5, chat1.MessageType_DELETE)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 0, conv.GetConvID(), delete, nil))
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 6, conv.GetConvID(), delete,
+		[]chat1.MessageSummary{msg.Summary()}))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
+	require.NoError(t, err)
+	maxMsg, err = res[0].Conv.GetMaxMessage(chat1.MessageType_TEXT)
+	require.NoError(t, err)
+	require.Equal(t, msg.GetMessageID(), maxMsg.GetMessageID())
+	delete = makeInboxMsg(6, chat1.MessageType_DELETE)
+	err = inbox.NewMessage(context.TODO(), uid, 7, conv.GetConvID(), delete, nil)
+	require.Error(t, err)
+	require.IsType(t, VersionMismatchError{}, err)
+
+	err = inbox.NewMessage(context.TODO(), uid, 10, conv.GetConvID(), msg, nil)
 	require.IsType(t, VersionMismatchError{}, err)
 }
 
 func TestInboxReadMessage(t *testing.T) {
 
-	_, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	uid2, err := hex.DecodeString("22")
 	require.NoError(t, err)
@@ -527,31 +550,32 @@ func TestInboxReadMessage(t *testing.T) {
 		convs = append(convs, makeConvo(gregor1.Time(i), 1, 1))
 	}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	_, _, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 
 	conv := convs[5]
 	msg := makeInboxMsg(2, chat1.MessageType_TEXT)
 	msg.ClientHeader.Sender = uid2
-	require.NoError(t, inbox.NewMessage(context.TODO(), 2, conv.GetConvID(), msg))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 2, conv.GetConvID(), msg, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, chat1.MessageID(2), res[0].Conv.ReaderInfo.MaxMsgid, "wrong max msgid")
 	require.Equal(t, chat1.MessageID(1), res[0].Conv.ReaderInfo.ReadMsgid, "wrong read msgid")
-	require.NoError(t, inbox.ReadMessage(context.TODO(), 3, conv.GetConvID(), 2))
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.ReadMessage(context.TODO(), uid, 3, conv.GetConvID(), 2))
+	_, res, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, chat1.MessageID(2), res[0].Conv.ReaderInfo.MaxMsgid, "wrong max msgid")
 	require.Equal(t, chat1.MessageID(2), res[0].Conv.ReaderInfo.ReadMsgid, "wrong read msgid")
 
-	err = inbox.ReadMessage(context.TODO(), 10, conv.GetConvID(), 3)
+	err = inbox.ReadMessage(context.TODO(), uid, 10, conv.GetConvID(), 3)
 	require.IsType(t, VersionMismatchError{}, err)
 }
 
 func TestInboxSetStatus(t *testing.T) {
 
-	_, inbox, uid := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -561,15 +585,15 @@ func TestInboxSetStatus(t *testing.T) {
 	}
 
 	conv := convs[5]
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	require.NoError(t, inbox.SetStatus(context.TODO(), 2, conv.GetConvID(),
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.SetStatus(context.TODO(), uid, 2, conv.GetConvID(),
 		chat1.ConversationStatus_IGNORED))
 
 	q := chat1.GetInboxQuery{
 		Status: []chat1.ConversationStatus{chat1.ConversationStatus_IGNORED},
 	}
-	require.NoError(t, inbox.Merge(context.TODO(), 2, []chat1.Conversation{}, &q, nil))
-	_, res, _, err := inbox.Read(context.TODO(), &q, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 2, []chat1.Conversation{}, &q, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, &q, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(res), "length")
 	require.Equal(t, conv.GetConvID(), res[0].GetConvID(), "id")
@@ -577,18 +601,19 @@ func TestInboxSetStatus(t *testing.T) {
 	t.Logf("sending new message to wake up conv")
 	msg := makeInboxMsg(3, chat1.MessageType_TEXT)
 	msg.ClientHeader.Sender = uid
-	require.NoError(t, inbox.NewMessage(context.TODO(), 3, conv.GetConvID(), msg))
-	_, res, _, err = inbox.Read(context.TODO(), &q, nil)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 3, conv.GetConvID(), msg, nil))
+	_, res, _, err = inbox.Read(context.TODO(), uid, &q, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(res), "ignore not unset")
 
-	err = inbox.SetStatus(context.TODO(), 10, conv.GetConvID(), chat1.ConversationStatus_BLOCKED)
+	err = inbox.SetStatus(context.TODO(), uid, 10, conv.GetConvID(), chat1.ConversationStatus_BLOCKED)
 	require.IsType(t, VersionMismatchError{}, err)
 }
 
 func TestInboxSetStatusMuted(t *testing.T) {
 
-	_, inbox, uid := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -598,15 +623,15 @@ func TestInboxSetStatusMuted(t *testing.T) {
 	}
 
 	conv := convs[5]
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	require.NoError(t, inbox.SetStatus(context.TODO(), 2, conv.GetConvID(),
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.SetStatus(context.TODO(), uid, 2, conv.GetConvID(),
 		chat1.ConversationStatus_MUTED))
 
 	q := chat1.GetInboxQuery{
 		Status: []chat1.ConversationStatus{chat1.ConversationStatus_MUTED},
 	}
-	require.NoError(t, inbox.Merge(context.TODO(), 2, []chat1.Conversation{}, &q, nil))
-	_, res, _, err := inbox.Read(context.TODO(), &q, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 2, []chat1.Conversation{}, &q, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, &q, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(res), "length")
 	require.Equal(t, conv.GetConvID(), res[0].GetConvID(), "id")
@@ -614,18 +639,19 @@ func TestInboxSetStatusMuted(t *testing.T) {
 	t.Logf("sending new message to wake up conv")
 	msg := makeInboxMsg(3, chat1.MessageType_TEXT)
 	msg.ClientHeader.Sender = uid
-	require.NoError(t, inbox.NewMessage(context.TODO(), 3, conv.GetConvID(), msg))
-	_, res, _, err = inbox.Read(context.TODO(), &q, nil)
+	require.NoError(t, inbox.NewMessage(context.TODO(), uid, 3, conv.GetConvID(), msg, nil))
+	_, res, _, err = inbox.Read(context.TODO(), uid, &q, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(res), "muted wrongly unset")
 
-	err = inbox.SetStatus(context.TODO(), 10, conv.GetConvID(), chat1.ConversationStatus_BLOCKED)
+	err = inbox.SetStatus(context.TODO(), uid, 10, conv.GetConvID(), chat1.ConversationStatus_BLOCKED)
 	require.IsType(t, VersionMismatchError{}, err)
 }
 
 func TestInboxTlfFinalize(t *testing.T) {
 
-	_, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -635,22 +661,23 @@ func TestInboxTlfFinalize(t *testing.T) {
 	}
 
 	conv := convs[5]
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	require.NoError(t, inbox.TlfFinalize(context.TODO(), 2, []chat1.ConversationID{conv.GetConvID()},
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.TlfFinalize(context.TODO(), uid, 2, []chat1.ConversationID{conv.GetConvID()},
 		chat1.ConversationFinalizeInfo{ResetFull: "reset"}))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, len(convs), len(res), "length")
 	require.Equal(t, conv.GetConvID(), res[5].GetConvID(), "id")
 	require.NotNil(t, res[5].Conv.Metadata.FinalizeInfo, "finalize info")
 
-	err = inbox.TlfFinalize(context.TODO(), 10, []chat1.ConversationID{conv.GetConvID()},
+	err = inbox.TlfFinalize(context.TODO(), uid, 10, []chat1.ConversationID{conv.GetConvID()},
 		chat1.ConversationFinalizeInfo{ResetFull: "reset"})
 	require.IsType(t, VersionMismatchError{}, err)
 }
 
 func TestInboxSync(t *testing.T) {
-	_, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -659,8 +686,8 @@ func TestInboxSync(t *testing.T) {
 		convs = append(convs, makeConvo(gregor1.Time(i), 1, 1))
 	}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 
 	var syncConvs []chat1.Conversation
@@ -671,11 +698,11 @@ func TestInboxSync(t *testing.T) {
 	newConv := makeConvo(gregor1.Time(60), 1, 1)
 	syncConvs = append(syncConvs, newConv.Conv)
 
-	vers, err := inbox.Version(context.TODO())
+	vers, err := inbox.Version(context.TODO(), uid)
 	require.NoError(t, err)
-	syncRes, err := inbox.Sync(context.TODO(), vers+1, syncConvs)
+	syncRes, err := inbox.Sync(context.TODO(), uid, vers+1, syncConvs)
 	require.NoError(t, err)
-	newVers, newRes, _, err := inbox.Read(context.TODO(), nil, nil)
+	newVers, newRes, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, vers+1, newVers)
 	require.Equal(t, len(res)+1, len(newRes))
@@ -684,22 +711,30 @@ func TestInboxSync(t *testing.T) {
 	require.Equal(t, chat1.ConversationStatus_MUTED, newRes[7].Conv.Metadata.Status)
 	require.Equal(t, chat1.ConversationStatus_UNFILED, newRes[4].Conv.Metadata.Status)
 	require.False(t, syncRes.TeamTypeChanged)
+	require.Len(t, syncRes.Expunges, 0)
 
 	syncConvs = nil
-	vers, err = inbox.Version(context.TODO())
+	vers, err = inbox.Version(context.TODO(), uid)
 	require.NoError(t, err)
 	convs[8].Conv.Metadata.TeamType = chat1.TeamType_COMPLEX
 	syncConvs = append(syncConvs, convs[8].Conv)
-	syncRes, err = inbox.Sync(context.TODO(), vers+1, syncConvs)
-	newVers, newRes, _, err = inbox.Read(context.TODO(), nil, nil)
+	convs[9].Conv.Expunge = chat1.Expunge{Upto: 3}
+	syncConvs = append(syncConvs, convs[9].Conv)
+	syncRes, err = inbox.Sync(context.TODO(), uid, vers+1, syncConvs)
+	require.NoError(t, err)
+	newVers, newRes, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, vers+1, newVers)
 	require.Equal(t, chat1.TeamType_COMPLEX, newRes[9].Conv.Metadata.TeamType)
 	require.True(t, syncRes.TeamTypeChanged)
+	require.Len(t, syncRes.Expunges, 1)
+	require.True(t, convs[9].Conv.GetConvID().Eq(syncRes.Expunges[0].ConvID))
+	require.Equal(t, convs[9].Conv.Expunge, syncRes.Expunges[0].Expunge)
 }
 
 func TestInboxServerVersion(t *testing.T) {
-	tc, inbox, _ := setupInboxTest(t, "basic")
+	tc, inbox, uid := setupInboxTest(t, "basic")
+	defer tc.Cleanup()
 
 	// Create an inbox with a bunch of convos, merge it and read it back out
 	numConvs := 10
@@ -708,8 +743,8 @@ func TestInboxServerVersion(t *testing.T) {
 		convs = append(convs, makeConvo(gregor1.Time(i), 1, 1))
 	}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	_, res, _, err := inbox.Read(context.TODO(), nil, nil)
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, numConvs, len(res))
 
@@ -719,18 +754,109 @@ func TestInboxServerVersion(t *testing.T) {
 	})
 	require.NoError(t, cerr)
 
-	_, res, _, err = inbox.Read(context.TODO(), nil, nil)
+	_, _, _, err = inbox.Read(context.TODO(), uid, nil, nil)
 	require.Error(t, err)
 	require.IsType(t, MissError{}, err)
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
-	idata, err := inbox.readDiskInbox(context.TODO())
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	idata, err := inbox.readDiskInbox(context.TODO(), uid, true)
 	require.NoError(t, err)
 	require.Equal(t, 5, idata.ServerVersion)
 }
 
-func TestMembershipUpdate(t *testing.T) {
+func TestInboxKBFSUpgrade(t *testing.T) {
+	tc, inbox, uid := setupInboxTest(t, "kbfs")
+	defer tc.Cleanup()
+	numConvs := 10
+	var convs []types.RemoteConversation
+	for i := numConvs - 1; i >= 0; i-- {
+		convs = append(convs, makeConvo(gregor1.Time(i), 1, 1))
+	}
+	conv := convs[5]
+	require.Equal(t, chat1.ConversationMembersType_KBFS, conv.Conv.GetMembersType())
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.UpgradeKBFSToImpteam(context.TODO(), uid, 2, conv.GetConvID()))
+	_, res, _, err := inbox.Read(context.TODO(), uid, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, len(convs), len(res), "length")
+	require.Equal(t, conv.GetConvID(), res[5].GetConvID(), "id")
+	require.Equal(t, chat1.ConversationMembersType_IMPTEAMUPGRADE, res[5].Conv.Metadata.MembersType)
+}
+
+func TestMobileSharedInbox(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip()
+	}
+	tc, inbox, uid := setupInboxTest(t, "shared")
+	defer tc.Cleanup()
+	tc.G.Env = libkb.NewEnv(libkb.AppConfig{
+		HomeDir:             tc.Context().GetEnv().GetHome(),
+		MobileSharedHomeDir: "x",
+	}, nil, tc.Context().GetLog)
+	require.NoError(t, os.MkdirAll(tc.G.Env.GetConfigDir(), os.ModePerm))
+	numConvs := 10
+	var convs []types.RemoteConversation
+	for i := numConvs - 1; i >= 0; i-- {
+		conv := makeConvo(gregor1.Time(i), 1, 1)
+		if i == 5 {
+			conv.Conv.Metadata.TeamType = chat1.TeamType_COMPLEX
+			conv.Conv.MaxMsgSummaries[0].TlfName = "team"
+		} else {
+			conv.Conv.MaxMsgSummaries[0].TlfName = fmt.Sprintf("msg:%d", i)
+		}
+		convs = append(convs, conv)
+	}
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
+	diskIbox, err := inbox.readDiskInbox(context.TODO(), uid, true)
+	require.NoError(t, err)
+	diskIbox.Conversations[4].LocalMetadata = &types.RemoteConversationMetadata{
+		TopicName: "mike",
+	}
+	require.NoError(t, inbox.writeDiskInbox(context.TODO(), uid, diskIbox))
+	sharedInbox, err := inbox.ReadShared(context.TODO(), uid)
+	require.NoError(t, err)
+	require.Equal(t, numConvs, len(sharedInbox))
+	convs = diskIbox.Conversations
+	for i := 0; i < numConvs; i++ {
+		require.Equal(t, convs[i].GetConvID().String(), sharedInbox[i].ConvID)
+		require.Equal(t, convs[i].GetName(), sharedInbox[i].Name)
+		if i == 4 {
+			require.True(t, strings.Contains(sharedInbox[i].Name, "#"))
+		}
+	}
+}
+
+func makeUID(t *testing.T) gregor1.UID {
+	b, err := libkb.RandBytes(16)
+	require.NoError(t, err)
+	return gregor1.UID(b)
+}
+
+func TestInboxMembershipDupUpdate(t *testing.T) {
 	ctc, inbox, uid := setupInboxTest(t, "membership")
+	defer ctc.Cleanup()
+
+	uid2 := makeUID(t)
+	conv := makeConvo(gregor1.Time(1), 1, 1)
+	conv.Conv.Metadata.AllList = []gregor1.UID{uid, uid2}
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, []chat1.Conversation{conv.Conv}, nil, nil))
+
+	otherJoinedConvs := []chat1.ConversationMember{chat1.ConversationMember{
+		Uid:    uid2,
+		ConvID: conv.GetConvID(),
+	}}
+	require.NoError(t, inbox.MembershipUpdate(context.TODO(), uid, 2, []chat1.Conversation{conv.Conv},
+		nil, otherJoinedConvs, nil, nil, nil))
+
+	_, res, err := inbox.ReadAll(context.TODO(), uid, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(res))
+	require.Equal(t, 2, len(res[0].Conv.Metadata.AllList))
+}
+
+func TestInboxMembershipUpdate(t *testing.T) {
+	ctc, inbox, uid := setupInboxTest(t, "membership")
+	defer ctc.Cleanup()
 
 	u2, err := kbtest.CreateAndSignupFakeUser("ib", ctc.G)
 	require.NoError(t, err)
@@ -755,7 +881,7 @@ func TestMembershipUpdate(t *testing.T) {
 		convs = append(convs, conv)
 	}
 
-	require.NoError(t, inbox.Merge(context.TODO(), 1, utils.PluckConvs(convs), nil, nil))
+	require.NoError(t, inbox.Merge(context.TODO(), uid, 1, utils.PluckConvs(convs), nil, nil))
 	var joinedConvs []types.RemoteConversation
 	numJoinedConvs := 5
 	for i := 0; i < numJoinedConvs; i++ {
@@ -779,11 +905,21 @@ func TestMembershipUpdate(t *testing.T) {
 		Uid:    uid4,
 		ConvID: otherResetConvID,
 	}}
-	require.NoError(t, inbox.MembershipUpdate(context.TODO(), 2, utils.PluckConvs(joinedConvs),
-		[]chat1.ConversationID{convs[5].GetConvID()}, otherJoinedConvs, otherRemovedConvs,
-		[]chat1.ConversationID{convs[6].GetConvID()}, otherResetConvs))
+	userRemovedConvID := convs[5].GetConvID()
+	userRemovedConvs := []chat1.ConversationMember{chat1.ConversationMember{
+		Uid:    uid,
+		ConvID: userRemovedConvID,
+	}}
+	userResetConvID := convs[6].GetConvID()
+	userResetConvs := []chat1.ConversationMember{chat1.ConversationMember{
+		Uid:    uid,
+		ConvID: userResetConvID,
+	}}
+	require.NoError(t, inbox.MembershipUpdate(context.TODO(), uid, 2, utils.PluckConvs(joinedConvs),
+		userRemovedConvs, otherJoinedConvs, otherRemovedConvs,
+		userResetConvs, otherResetConvs))
 
-	vers, res, err := inbox.ReadAll(context.TODO())
+	vers, res, err := inbox.ReadAll(context.TODO(), uid, true)
 	require.NoError(t, err)
 	require.Equal(t, chat1.InboxVers(2), vers)
 	for _, c := range res {
@@ -809,14 +945,29 @@ func TestMembershipUpdate(t *testing.T) {
 			allUsers := []gregor1.UID{uid, uid2, uid3, uid4}
 			sort.Sort(chat1.ByUID(allUsers))
 			require.Equal(t, allUsers, res[i].Conv.Metadata.AllList)
+			require.Zero(t, len(res[i].Conv.Metadata.ResetList))
 		} else if res[i].GetConvID().Eq(otherRemovedConvID) {
 			allUsers := []gregor1.UID{uid, uid4}
 			sort.Sort(chat1.ByUID(allUsers))
 			require.Equal(t, allUsers, res[i].Conv.Metadata.AllList)
+			require.Zero(t, len(res[i].Conv.Metadata.ResetList))
 		} else if res[i].GetConvID().Eq(otherResetConvID) {
 			allUsers := []gregor1.UID{uid, uid3, uid4}
 			sort.Sort(chat1.ByUID(allUsers))
 			resetUsers := []gregor1.UID{uid4}
+			require.Len(t, res[i].Conv.Metadata.AllList, len(allUsers))
+			require.Equal(t, allUsers, res[i].Conv.Metadata.AllList)
+			require.Equal(t, resetUsers, res[i].Conv.Metadata.ResetList)
+		} else if res[i].GetConvID().Eq(userRemovedConvID) {
+			allUsers := []gregor1.UID{uid3, uid4}
+			sort.Sort(chat1.ByUID(allUsers))
+			require.Len(t, res[i].Conv.Metadata.AllList, len(allUsers))
+			require.Equal(t, allUsers, res[i].Conv.Metadata.AllList)
+			require.Zero(t, len(res[i].Conv.Metadata.ResetList))
+		} else if res[i].GetConvID().Eq(userResetConvID) {
+			allUsers := []gregor1.UID{uid, uid3, uid4}
+			sort.Sort(chat1.ByUID(allUsers))
+			resetUsers := []gregor1.UID{uid}
 			require.Len(t, res[i].Conv.Metadata.AllList, len(allUsers))
 			require.Equal(t, allUsers, res[i].Conv.Metadata.AllList)
 			require.Equal(t, resetUsers, res[i].Conv.Metadata.ResetList)
@@ -827,4 +978,15 @@ func TestMembershipUpdate(t *testing.T) {
 			require.Equal(t, expected[i], res[i])
 		}
 	}
+}
+
+// TestInboxCacheOnLogout checks that calling OnLogout() clears the cache.
+func TestInboxCacheOnLogout(t *testing.T) {
+	uid := keybase1.MakeTestUID(3)
+	inboxMemCache.Put(gregor1.UID(uid), &inboxDiskData{})
+	require.NotEmpty(t, len(inboxMemCache.datMap))
+	err := inboxMemCache.OnLogout(libkb.NewMetaContextTODO(nil))
+	require.NoError(t, err)
+	require.Nil(t, inboxMemCache.Get(gregor1.UID(uid)))
+	require.Empty(t, len(inboxMemCache.datMap))
 }

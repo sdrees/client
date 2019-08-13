@@ -3,7 +3,6 @@
 
 // +build windows
 
-// npipe_windows.go
 package libkb
 
 import (
@@ -14,7 +13,7 @@ import (
 	"time"
 
 	"github.com/keybase/client/go/logger"
-	"github.com/keybase/npipe"
+	mspipe "github.com/keybase/go-winio"
 )
 
 func NewSocket(g *GlobalContext) (ret Socket, err error) {
@@ -32,10 +31,13 @@ func NewSocket(g *GlobalContext) (ret Socket, err error) {
 	if log == nil {
 		log = logger.NewNull()
 	}
+
+	// ownership tests fail when server is in same proces, as in tests
 	return SocketInfo{
 		log:       log,
 		bindFile:  s,
 		dialFiles: []string{s},
+		testOwner: g.Env.Test == nil,
 	}, nil
 }
 
@@ -52,11 +54,12 @@ func NewSocketWithFiles(
 
 func (s SocketInfo) BindToSocket() (ret net.Listener, err error) {
 	s.log.Info("Binding to pipe:%s", s.bindFile)
-	return npipe.Listen(s.bindFile)
+	return mspipe.ListenPipe(s.bindFile, nil)
 }
 
 func (s SocketInfo) DialSocket() (ret net.Conn, err error) {
-	pipe, err := npipe.DialTimeout(s.dialFiles[0], time.Duration(1)*time.Second)
+	timeout := time.Duration(1) * time.Second
+	pipe, err := mspipe.DialPipe(s.dialFiles[0], &timeout)
 	if err != nil {
 		// Be sure to return a nil interface, and not a nil npipe.PipeConn
 		// See https://keybase.atlassian.net/browse/CORE-2675 for when this
@@ -69,10 +72,20 @@ func (s SocketInfo) DialSocket() (ret net.Conn, err error) {
 		return nil, errors.New("bad npipe result; nil npipe.PipeConn but no error")
 	}
 
+	// Test ownership
+	if s.testOwner {
+		owner, err := IsPipeowner(s.log, s.dialFiles[0])
+		if err != nil {
+			return nil, err
+		}
+		if !owner.IsOwner {
+			return nil, errors.New("failed to verify pipe ownership")
+		}
+	}
 	// Success case
 	return pipe, err
 }
 
 func IsSocketClosedError(e error) bool {
-	return e == npipe.ErrClosed
+	return e == mspipe.ErrPipeListenerClosed
 }

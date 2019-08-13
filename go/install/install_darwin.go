@@ -5,6 +5,7 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -21,6 +22,7 @@ import (
 	kbnminstaller "github.com/keybase/client/go/kbnm/installer"
 	"github.com/keybase/client/go/launchd"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/logger"
 	"github.com/keybase/client/go/mounter"
 	"github.com/keybase/client/go/protocol/keybase1"
 )
@@ -47,6 +49,9 @@ const (
 	BrewKBFSLabel ServiceLabel = "homebrew.mxcl.kbfs"
 	// UnknownLabel is an empty/unknown label
 	UnknownLabel ServiceLabel = ""
+
+	// See osx/Installer/Installer.m : KBExitAuthCanceledError
+	installHelperExitCodeAuthCanceled int = 6
 )
 
 // KeybaseServiceStatus returns service status for Keybase service
@@ -412,6 +417,7 @@ func InstallAuto(context Context, binPath string, sourcePath string, timeout tim
 			ComponentNameHelper.String(),
 			ComponentNameFuse.String(),
 			ComponentNameMountDir.String(),
+			ComponentNameRedirector.String(),
 			ComponentNameKBFS.String(),
 			ComponentNameKBNM.String(),
 		}
@@ -425,7 +431,49 @@ func InstallAuto(context Context, binPath string, sourcePath string, timeout tim
 		}
 	}
 
-	return Install(context, binPath, sourcePath, components, false, timeout, log)
+	// A force unmount is needed to change from one mountpoint to another
+	// if the mount is in use after an upgrade, and install-auto is
+	// invoked from the updater.
+	forceUnmount := true
+	return Install(context, binPath, sourcePath, components, forceUnmount, timeout, log)
+}
+
+const mountsPresentErrorCode = 7 // See Installer/Installer.m
+
+func installFuse(runMode libkb.RunMode, log Log) error {
+	err := libnativeinstaller.InstallFuse(runMode, log)
+	switch e := err.(type) {
+	case nil:
+		return nil
+	case (*exec.ExitError):
+		if waitStatus, ok := e.Sys().(syscall.WaitStatus); ok {
+			if waitStatus.ExitStatus() != mountsPresentErrorCode {
+				return err
+			}
+			// Otherwise, continue with the logic after switch.
+		} else {
+			return err
+		}
+	default:
+		return err
+	}
+
+	log.Info("Can't install/upgrade fuse when mounts are present. " +
+		"Assuming it's the redirector and trying to uninstall it first.")
+	if err = libnativeinstaller.UninstallRedirector(runMode, log); err != nil {
+		log.Info("Uninstalling redirector failed. " +
+			"Fuse should be able to update next time the OS reboots.")
+		return err
+	}
+	defer libnativeinstaller.InstallRedirector(runMode, log)
+	log.Info(
+		"Uninstalling redirector succeeded. Trying to install KBFuse again.")
+	if err = libnativeinstaller.InstallFuse(runMode, log); err != nil {
+		log.Info("Installing fuse failed again. " +
+			"Fuse should be able to update next time the OS reboots.")
+		return err
+	}
+	return nil
 }
 
 // Install installs specified components
@@ -467,23 +515,72 @@ func Install(context Context, binPath string, sourcePath string, components []st
 		}
 	}
 
+	helperCanceled := false
 	if libkb.IsIn(string(ComponentNameHelper), components, false) {
 		err = libnativeinstaller.InstallHelper(context.GetRunMode(), log)
-		componentResults = append(componentResults, componentResult(string(ComponentNameHelper), err))
+		cr := componentResult(string(ComponentNameHelper), err)
+		componentResults = append(componentResults, cr)
 		if err != nil {
-			log.Errorf("Error installing Helper: %s", err)
+			log.Errorf("Error installing Helper: %v", err)
+		}
+		if cr.ExitCode == installHelperExitCodeAuthCanceled {
+			log.Debug("Auth canceled; uninstalling mountdir and fuse")
+			helperCanceled = true
+			// Unmount the user's KBFS directory.
+			mountDir, err := context.GetMountDir()
+			if err == nil {
+				err = UninstallKBFS(context, mountDir, true, log)
+			}
+			if err != nil {
+				log.Errorf("Error uninstalling KBFS: %s", err)
+			}
+
+			// For older systems, check `/keybase` too, just in case.
+			var oldMountDir string
+			switch context.GetRunMode() {
+			case libkb.ProductionRunMode:
+				oldMountDir = "/keybase"
+			case libkb.StagingRunMode:
+				oldMountDir = "/keybase.staging"
+			default:
+				oldMountDir = "/keybase.devel"
+			}
+			err = unmount(oldMountDir, true, log)
+			if err != nil {
+				log.Debug("Error unmounting old mount dir %s: %v", oldMountDir,
+					err)
+			}
+
+			err = libnativeinstaller.UninstallMountDir(
+				context.GetRunMode(), log)
+			if err != nil {
+				log.Errorf("Error uninstalling mount directory: %s", err)
+			}
+
+			err = libnativeinstaller.UninstallRedirector(
+				context.GetRunMode(), log)
+			if err != nil {
+				log.Errorf("Error stopping redirector: %s", err)
+			}
+
+			err = libnativeinstaller.UninstallFuse(context.GetRunMode(), log)
+			if err != nil {
+				log.Errorf("Error uninstalling FUSE: %s", err)
+			}
 		}
 	}
 
-	if libkb.IsIn(string(ComponentNameFuse), components, false) {
-		err = libnativeinstaller.InstallFuse(context.GetRunMode(), log)
+	if !helperCanceled &&
+		libkb.IsIn(string(ComponentNameFuse), components, false) {
+		err = installFuse(context.GetRunMode(), log)
 		componentResults = append(componentResults, componentResult(string(ComponentNameFuse), err))
 		if err != nil {
 			log.Errorf("Error installing KBFuse: %s", err)
 		}
 	}
 
-	if libkb.IsIn(string(ComponentNameMountDir), components, false) {
+	if !helperCanceled &&
+		libkb.IsIn(string(ComponentNameMountDir), components, false) {
 		err = libnativeinstaller.InstallMountDir(context.GetRunMode(), log)
 		componentResults = append(componentResults, componentResult(string(ComponentNameMountDir), err))
 		if err != nil {
@@ -496,6 +593,15 @@ func Install(context Context, binPath string, sourcePath string, components []st
 		componentResults = append(componentResults, componentResult(string(ComponentNameKBFS), err))
 		if err != nil {
 			log.Errorf("Error installing KBFS: %s", err)
+		}
+	}
+
+	if !helperCanceled &&
+		libkb.IsIn(string(ComponentNameRedirector), components, false) {
+		err = libnativeinstaller.InstallRedirector(context.GetRunMode(), log)
+		componentResults = append(componentResults, componentResult(string(ComponentNameRedirector), err))
+		if err != nil {
+			log.Errorf("Error starting redirector: %s", err)
 		}
 	}
 
@@ -619,6 +725,7 @@ func InstallKBFS(context Context, binPath string, force bool, skipMountIfNotAvai
 	if err != nil {
 		return err
 	}
+	// Unmount any existing KBFS directory for the user.
 	mountDir, err := context.GetMountDir()
 	if err != nil {
 		return err
@@ -681,6 +788,14 @@ func Uninstall(context Context, components []string, log Log) keybase1.Uninstall
 	componentResults := []keybase1.ComponentResult{}
 
 	log.Debug("Uninstalling components: %s", components)
+
+	if libkb.IsIn(string(ComponentNameRedirector), components, false) {
+		err = libnativeinstaller.UninstallRedirector(context.GetRunMode(), log)
+		componentResults = append(componentResults, componentResult(string(ComponentNameRedirector), err))
+		if err != nil {
+			log.Errorf("Error stopping the redirector: %s", err)
+		}
+	}
 
 	if libkb.IsIn(string(ComponentNameKBFS), components, false) {
 		var mountDir string
@@ -776,12 +891,13 @@ func UninstallKBFSOnStop(context Context, log Log) error {
 	if err != nil {
 		return err
 	}
+	log.Info("UninstallKBFSOnStop: uninstalling from mountdir: %s", mountDir)
 
 	if err := UninstallKBFS(context, mountDir, false, log); err != nil {
 		return err
 	}
 
-	log.Info("Uninstall mount: %s", mountDir)
+	log.Info("Uninstalled mount: %s", mountDir)
 	if err := libnativeinstaller.UninstallMountDir(runMode, log); err != nil {
 		return fmt.Errorf("Error uninstalling mount: %s", err)
 	}
@@ -789,17 +905,12 @@ func UninstallKBFSOnStop(context Context, log Log) error {
 	return nil
 }
 
-// UninstallKBFS uninstalls all KBFS services, unmounts and optionally removes the mount directory
-func UninstallKBFS(context Context, mountDir string, forceUnmount bool, log Log) error {
-	err := UninstallKBFSServices(context, log)
-	if err != nil {
-		return err
-	}
-
+func unmount(mountDir string, forceUnmount bool, log Log) error {
+	log.Debug("Checking if mounted: %s", mountDir)
 	if _, serr := os.Stat(mountDir); os.IsNotExist(serr) {
 		return nil
 	}
-	log.Debug("Checking if mounted: %s", mountDir)
+
 	mounted, err := mounter.IsMounted(mountDir, log)
 	if err != nil {
 		return err
@@ -818,8 +929,21 @@ func UninstallKBFS(context Context, mountDir string, forceUnmount bool, log Log)
 	if !empty {
 		return fmt.Errorf("Mount has files after unmounting: %s", mountDir)
 	}
-
 	return nil
+}
+
+// UninstallKBFS uninstalls all KBFS services, unmounts and optionally removes the mount directory
+func UninstallKBFS(context Context, mountDir string, forceUnmount bool, log Log) error {
+	err := UninstallKBFSServices(context, log)
+	if err != nil {
+		log.Warning("Couldn't stop KBFS: %+v", err)
+		// Continue despite the error, since the uninstall doesn't
+		// seem to be resilient against the "fallback" PID getting out
+		// of sync with the true KBFS PID.  TODO: fix the fallback PID
+		// logic?
+	}
+
+	return unmount(mountDir, forceUnmount, log)
 }
 
 // AutoInstallWithStatus runs the auto install and returns a result
@@ -987,7 +1111,7 @@ func componentResult(name string, err error) keybase1.ComponentResult {
 }
 
 // KBFSBinPath returns the path to the KBFS executable.
-// If binPath (directory) is specifed, it will override the default (which is in
+// If binPath (directory) is specified, it will override the default (which is in
 // the same directory where the keybase executable is).
 func KBFSBinPath(runMode libkb.RunMode, binPath string) (string, error) {
 	// If it's brew lookup path by formula name
@@ -1133,6 +1257,11 @@ func InstallLogPath() (string, error) {
 	return "", nil
 }
 
+// WatchdogLogPath doesn't exist on darwin as an independent log file (see desktop app log)
+func WatchdogLogPath(string) (string, error) {
+	return "", nil
+}
+
 // SystemLogPath is where privileged keybase processes log to on darwin
 func SystemLogPath() string {
 	return "/Library/Logs/keybase.system.log"
@@ -1210,17 +1339,23 @@ func fallbackKillProcess(context Context, log Log, label string, infoPath, pidPa
 	}
 	pid := string(bytes.TrimSpace(p))
 
+	found := false
 	if infoPath != "" {
 		serviceInfo, err := libkb.LoadServiceInfo(infoPath)
 		if err != nil {
 			log.Warning("error loading service info for %s in file %s: %s", svc.Label(), infoPath, err)
 			return err
 		}
-		if strconv.Itoa(serviceInfo.Pid) != pid {
-			log.Warning("service info pid %d does not match fallback pid %s, not killing anything", serviceInfo.Pid, pid)
-			return errors.New("fallback PID mismatch")
+		if serviceInfo != nil {
+			if strconv.Itoa(serviceInfo.Pid) != pid {
+				log.Warning("service info pid %d does not match fallback pid %s, not killing anything", serviceInfo.Pid, pid)
+				return errors.New("fallback PID mismatch")
+			}
+			found = true
 		}
-	} else if pidPath != "" {
+	}
+
+	if !found && pidPath != "" {
 		lp, err := ioutil.ReadFile(pidPath)
 		if err != nil {
 			return err
@@ -1230,7 +1365,10 @@ func fallbackKillProcess(context Context, log Log, label string, infoPath, pidPa
 			log.Warning("pid in file %s (%d) does not match fallback pid %s, not killing anything", pidPath, lpid, pid)
 			return errors.New("fallback PID mismatch")
 		}
-	} else {
+		found = true
+	}
+
+	if !found {
 		log.Warning("neither infoPath or pidPath specified, cannot verify fallback PID.")
 		return errors.New("unable to verify fallback PID")
 	}
@@ -1250,5 +1388,32 @@ func fallbackKillProcess(context Context, log Log, label string, infoPath, pidPa
 	}
 	log.Debug("fallback pid file %s for %s removed", fpid, svc.Label())
 
+	return nil
+}
+
+// StartUpdateIfNeeded starts to update the app if there's one available. It
+// calls `updater check` internally so it ignores the snooze.
+func StartUpdateIfNeeded(ctx context.Context, log logger.Logger) error {
+	updaterPath, err := UpdaterBinPath()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(updaterPath, "check")
+	// Run it in a new process group so when we are killed eventually by the
+	// updater, we don't bring down the updater too.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+	pid := -1
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	log.Debug("Started background updater process (%s). pid=%d", updaterPath, pid)
+	cmd.Wait()
+	// Ignore the exit status here as user may have hit "Ignore". If we are
+	// here without getting killed, it's likely user has hit "Ignore". Just
+	// just return `nil` and GUI would check for update info again where it'd
+	// know we don't need to update anymore.
 	return nil
 }

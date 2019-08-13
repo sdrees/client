@@ -5,6 +5,7 @@ package engine
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/keybase/client/go/libkb"
@@ -54,6 +55,10 @@ func subTestSignupEngine(t *testing.T, upgradePerUserKey bool) {
 		t.Fatal(err)
 	}
 
+	if err := AssertLoggedOut(tc); err != nil {
+		t.Fatal(err)
+	}
+
 	fu.LoginOrBust(tc)
 
 	if err = AssertDeviceID(tc.G); err != nil {
@@ -75,16 +80,13 @@ func subTestSignupEngine(t *testing.T, upgradePerUserKey bool) {
 		t.Fatal(err)
 	}
 
-	mockGetPassphrase := &GetPassphraseMock{
-		Passphrase: fu.Passphrase,
-	}
-	if err = tc.G.LoginState().LoginWithPrompt(fu.Username, nil, mockGetPassphrase, nil); err != nil {
+	secretUI := fu.NewSecretUI()
+	err = fu.LoginWithSecretUI(secretUI, tc.G)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	mockGetPassphrase.CheckLastErr(t)
-
-	if !mockGetPassphrase.Called {
+	if !secretUI.CalledGetPassphrase {
 		t.Errorf("secretUI.GetKeybasePassphrase() not called")
 	}
 
@@ -133,14 +135,14 @@ func TestSignupWithGPG(t *testing.T) {
 	}
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipGPG = false
-	s := NewSignupEngine(&arg, tc.G)
-	ctx := &Context{
+	s := NewSignupEngine(tc.G, &arg)
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	if err := RunEngine(s, ctx); err != nil {
+	if err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -150,29 +152,30 @@ func TestLocalKeySecurity(t *testing.T) {
 	defer tc.Cleanup()
 	fu := NewFakeUserOrBust(t, "se")
 	arg := MakeTestSignupEngineRunArg(fu)
-	s := NewSignupEngine(&arg, tc.G)
-	ctx := &Context{
+	s := NewSignupEngine(tc.G, &arg)
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	if err := RunEngine(s, ctx); err != nil {
+	if err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s); err != nil {
 		t.Fatal(err)
 	}
 
-	lks := libkb.NewLKSec(s.ppStream, s.uid, tc.G)
-	if err := lks.Load(nil); err != nil {
+	m := NewMetaContextForTest(tc)
+	lks := libkb.NewLKSec(s.ppStream, s.uid)
+	if err := lks.Load(m); err != nil {
 		t.Fatal(err)
 	}
 
 	text := "the people on the bus go up and down, up and down, up and down"
-	enc, err := lks.Encrypt([]byte(text))
+	enc, err := lks.Encrypt(m, []byte(text))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	dec, _, _, err := lks.Decrypt(nil, enc)
+	dec, _, _, err := lks.Decrypt(m, enc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +196,7 @@ func TestLocalKeySecurityStoreSecret(t *testing.T) {
 		t.Skip("No SecretStore on this platform")
 	}
 
-	_, err := secretStore.RetrieveSecret()
+	_, err := secretStore.RetrieveSecret(NewMetaContextForTest(tc))
 	if err == nil {
 		t.Fatal("User unexpectedly has secret")
 	}
@@ -202,12 +205,13 @@ func TestLocalKeySecurityStoreSecret(t *testing.T) {
 	arg.StoreSecret = true
 	s := SignupFakeUserWithArg(tc, fu, arg)
 
-	secret, err := s.lks.GetSecret(nil)
+	m := NewMetaContextForTest(tc)
+	secret, err := s.lks.GetSecret(m)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	storedSecret, err := secretStore.RetrieveSecret()
+	storedSecret, err := secretStore.RetrieveSecret(NewMetaContextForTest(tc))
 	if err != nil {
 		t.Error(err)
 	}
@@ -216,7 +220,7 @@ func TestLocalKeySecurityStoreSecret(t *testing.T) {
 		t.Errorf("Expected %v, got %v", secret, storedSecret)
 	}
 
-	err = tc.G.SecretStoreAll.ClearSecret(fu.NormalizedUsername())
+	err = tc.G.SecretStore().ClearSecret(NewMetaContextForTest(tc), fu.NormalizedUsername())
 	if err != nil {
 		t.Error(err)
 	}
@@ -243,20 +247,18 @@ func TestIssue280(t *testing.T) {
 			PrimaryBits: 768,
 			SubkeyBits:  768,
 		},
-		Ctx: tc.G,
 	}
 	arg.Gen.MakeAllIds(tc.G)
-	ctx := Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: secui,
 	}
-	eng := NewPGPKeyImportEngine(arg)
-	err := RunEngine(eng, &ctx)
+	eng := NewPGPKeyImportEngine(tc.G, arg)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, eng)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	return
 }
 
 func TestSignupGeneratesPaperKey(t *testing.T) {
@@ -271,7 +273,7 @@ func TestSignupPassphrases(t *testing.T) {
 	tc := SetupEngineTest(t, "signup")
 	defer tc.Cleanup()
 	CreateAndSignupFakeUserWithPassphrase(tc, "pass", "123456789012")
-	CreateAndSignupFakeUserWithPassphrase(tc, "pass", "123456")
+	CreateAndSignupFakeUserWithPassphrase(tc, "pass", "12345678")
 }
 
 func TestSignupShortPassphrase(t *testing.T) {
@@ -279,8 +281,8 @@ func TestSignupShortPassphrase(t *testing.T) {
 	defer tc.Cleanup()
 
 	fu := NewFakeUserOrBust(t, "sup")
-	fu.Passphrase = "1234"
-	ctx := &Context{
+	fu.Passphrase = "1234567"
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
@@ -288,12 +290,110 @@ func TestSignupShortPassphrase(t *testing.T) {
 	}
 	arg := MakeTestSignupEngineRunArg(fu)
 	t.Logf("signup arg: %+v", arg)
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err == nil {
 		t.Fatal("signup worked with short passphrase")
 	}
 	if _, ok := err.(libkb.PassphraseError); !ok {
 		t.Fatalf("error type: %T, expected libkb.PassphraseError", err)
 	}
+}
+
+func TestSignupNonAsciiDeviceName(t *testing.T) {
+	tc := SetupEngineTest(t, "signup")
+	defer tc.Cleanup()
+
+	testValues := []struct {
+		deviceName string
+		err        error
+	}{
+		{"perfectly-reasonable", nil},
+		{"definitely🙃not🐉ascii", libkb.DeviceBadNameError{}},
+	}
+
+	for _, testVal := range testValues {
+		fu, _ := NewFakeUser("sup")
+		arg := MakeTestSignupEngineRunArg(fu)
+		arg.DeviceName = testVal.deviceName
+		_, err := CreateAndSignupFakeUserSafeWithArg(tc.G, fu, arg)
+		require.IsType(t, err, testVal.err)
+	}
+}
+
+func TestSignupNOPWBadParams(t *testing.T) {
+	tc := SetupEngineTest(t, "signup_nopw")
+	defer tc.Cleanup()
+
+	fu, _ := NewFakeUser("sup")
+	arg := MakeTestSignupEngineRunArg(fu)
+	arg.StoreSecret = false
+	arg.GenerateRandomPassphrase = true
+	arg.Passphrase = ""
+	_, err := CreateAndSignupFakeUserSafeWithArg(tc.G, fu, arg)
+	require.Error(t, err)
+
+	// Make sure user has not signed up - the engine should fail before running
+	// signup_join.
+	loadArg := libkb.NewLoadUserByNameArg(tc.G, fu.Username).WithPublicKeyOptional()
+	_, err = libkb.LoadUser(loadArg)
+	require.Error(t, err)
+	require.IsType(t, libkb.NotFoundError{}, err)
+}
+
+func TestSignupWithoutSecretStore(t *testing.T) {
+	tc := SetupEngineTest(t, "signup_nopw")
+	defer tc.Cleanup()
+
+	// Setup memory-only secret store.
+	libkb.ReplaceSecretStoreForTests(tc, "" /* dataDir */)
+
+	fu, _ := NewFakeUser("sup")
+	arg := MakeTestSignupEngineRunArg(fu)
+	arg.StoreSecret = true
+	arg.GenerateRandomPassphrase = true
+	arg.Passphrase = ""
+	_, err := CreateAndSignupFakeUserSafeWithArg(tc.G, fu, arg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "persistent secret store is required")
+
+	// Make sure user has not signed up - the engine should fail before running
+	// signup_join.
+	loadArg := libkb.NewLoadUserByNameArg(tc.G, fu.Username).WithPublicKeyOptional()
+	_, err = libkb.LoadUser(loadArg)
+	require.Error(t, err)
+	require.IsType(t, libkb.NotFoundError{}, err)
+}
+
+func TestSignupWithBadSecretStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test uses chmod, skipping on Windows")
+	}
+
+	tc := SetupEngineTest(t, "signup_nopw")
+	defer tc.Cleanup()
+	tc.G.Env.Test.SecretStorePrimingDisabled = false
+
+	// Create a secret store that's read only - even though
+	// secret store exists, secrets cannot be stored.
+	td, cleanup := libkb.CreateReadOnlySecretStoreDir(tc)
+	defer cleanup()
+	libkb.ReplaceSecretStoreForTests(tc, td)
+
+	fu, _ := NewFakeUser("sup")
+	arg := MakeTestSignupEngineRunArg(fu)
+	arg.StoreSecret = true
+	arg.GenerateRandomPassphrase = true
+	arg.Passphrase = ""
+	_, err := CreateAndSignupFakeUserSafeWithArg(tc.G, fu, arg)
+	require.Error(t, err)
+	require.IsType(t, SecretStoreNotFunctionalError{}, err)
+	require.Contains(t, err.Error(), "permission denied")
+
+	// Make sure user has not signed up - the engine should fail before running
+	// signup_join.
+	loadArg := libkb.NewLoadUserByNameArg(tc.G, fu.Username).WithPublicKeyOptional()
+	_, err = libkb.LoadUser(loadArg)
+	require.Error(t, err)
+	require.IsType(t, libkb.NotFoundError{}, err)
 }

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -8,11 +9,14 @@ import (
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
 	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/protocol/keybase1"
 	"golang.org/x/net/context"
 )
 
 type CmdTeamListRequests struct {
 	libkb.Contextified
+	json bool
+	team string
 }
 
 func newCmdTeamListRequests(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
@@ -23,6 +27,16 @@ func newCmdTeamListRequests(cl *libcmdline.CommandLine, g *libkb.GlobalContext) 
 			cmd := NewCmdTeamListRequestsRunner(g)
 			cl.ChooseCommand(cmd, "list-requests", c)
 		},
+		Flags: []cli.Flag{
+			cli.BoolFlag{
+				Name:  "j, json",
+				Usage: "Output requests as JSON",
+			},
+			cli.StringFlag{
+				Name:  "t, team",
+				Usage: "List request for specific team",
+			},
+		},
 	}
 }
 
@@ -31,6 +45,8 @@ func NewCmdTeamListRequestsRunner(g *libkb.GlobalContext) *CmdTeamListRequests {
 }
 
 func (c *CmdTeamListRequests) ParseArgv(ctx *cli.Context) error {
+	c.json = ctx.Bool("json")
+	c.team = ctx.String("team")
 	return nil
 }
 
@@ -39,12 +55,34 @@ func (c *CmdTeamListRequests) Run() error {
 	if err != nil {
 		return err
 	}
-
-	reqs, err := cli.TeamListRequests(context.Background(), 0)
+	arg := keybase1.TeamListRequestsArg{}
+	if c.team != "" {
+		arg.TeamName = &c.team
+	}
+	reqs, err := cli.TeamListRequests(context.Background(), arg)
 	if err != nil {
 		return err
 	}
 
+	if c.json {
+		return c.outputJSON(reqs)
+	}
+
+	return c.outputTerminal(reqs)
+
+}
+
+func (c *CmdTeamListRequests) outputJSON(reqs []keybase1.TeamJoinRequest) error {
+	b, err := json.MarshalIndent(reqs, "", "    ")
+	if err != nil {
+		return err
+	}
+	dui := c.G().UI.GetDumbOutputUI()
+	_, err = dui.Printf(string(b) + "\n")
+	return err
+}
+
+func (c *CmdTeamListRequests) outputTerminal(reqs []keybase1.TeamJoinRequest) error {
 	dui := c.G().UI.GetTerminalUI()
 	if len(reqs) == 0 {
 		dui.Printf("No requests at this time.\n")
@@ -57,8 +95,10 @@ func (c *CmdTeamListRequests) Run() error {
 		fmt.Fprintf(tabw, "%s\t%s wants to join\n", req.Name, req.Username)
 	}
 	tabw.Flush()
-	dui.Printf("%s\n", strings.Repeat("-", 70))
-	dui.Printf("To handle requests, use `keybase team add-member` or `keybase team ignore-request`.\n")
+
+	werr := dui.ErrorWriter()
+	fmt.Fprintf(werr, "%s\n", strings.Repeat("-", 70))
+	fmt.Fprintf(werr, "To handle requests, use `keybase team add-member` or `keybase team ignore-request`.\n")
 
 	return nil
 }

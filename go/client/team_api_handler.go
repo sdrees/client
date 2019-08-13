@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -40,6 +39,7 @@ const (
 	listUserMethod      = "list-user-memberships"
 	removeMemberMethod  = "remove-member"
 	renameSubteamMethod = "rename-subteam"
+	listRequestsMethod  = "list-requests"
 )
 
 var validMethodsV1 = map[string]bool{
@@ -52,6 +52,7 @@ var validMethodsV1 = map[string]bool{
 	listUserMethod:      true,
 	removeMemberMethod:  true,
 	renameSubteamMethod: true,
+	listRequestsMethod:  true,
 }
 
 func (t *teamAPIHandler) handleV1(ctx context.Context, c Call, w io.Writer) error {
@@ -88,6 +89,8 @@ func (t *teamAPIHandler) handleV1(ctx context.Context, c Call, w io.Writer) erro
 		return t.removeMember(ctx, c, w)
 	case renameSubteamMethod:
 		return t.renameSubteam(ctx, c, w)
+	case listRequestsMethod:
+		return t.listRequests(ctx, c, w)
 	default:
 		return ErrInvalidMethod{name: c.Method, version: 1}
 	}
@@ -210,17 +213,23 @@ func (t *teamAPIHandler) createTeam(ctx context.Context, c Call, w io.Writer) er
 	if err != nil {
 		return t.encodeErr(c, err, w)
 	}
-	sendChatNotification := name.IsRootTeam()
 
+	type createResExportT struct {
+		ChatSent     bool `codec:"chatSent" json:"chatSent"`
+		CreatorAdded bool `codec:"creatorAdded" json:"creatorAdded"`
+	}
 	createRes, err := t.cli.TeamCreate(context.TODO(), keybase1.TeamCreateArg{
-		Name:                 name.String(),
-		SendChatNotification: sendChatNotification,
+		Name: name.String(),
 	})
 	if err != nil {
 		return t.encodeErr(c, err, w)
 	}
+	createResExport := createResExportT{
+		ChatSent:     createRes.ChatSent,
+		CreatorAdded: createRes.CreatorAdded,
+	}
 
-	return t.encodeResult(c, createRes, w)
+	return t.encodeResult(c, createResExport, w)
 }
 
 type editMemberOptions struct {
@@ -296,10 +305,7 @@ func (t *teamAPIHandler) leaveTeam(ctx context.Context, c Call, w io.Writer) err
 }
 
 func (t *teamAPIHandler) listSelfMemberships(ctx context.Context, c Call, w io.Writer) error {
-	arg := keybase1.TeamListArg{
-		All: true,
-	}
-	list, err := t.cli.TeamList(ctx, arg)
+	list, err := t.cli.TeamListTeammates(ctx, keybase1.TeamListTeammatesArg{})
 	if err != nil {
 		return t.encodeErr(c, err, w)
 	}
@@ -323,8 +329,7 @@ func (t *teamAPIHandler) listTeamMemberships(ctx context.Context, c Call, w io.W
 	}
 
 	arg := keybase1.TeamGetArg{
-		Name:        opts.Team,
-		ForceRepoll: opts.ForcePoll,
+		Name: opts.Team,
 	}
 	details, err := t.cli.TeamGet(ctx, arg)
 	if err != nil {
@@ -353,11 +358,11 @@ func (t *teamAPIHandler) listUserMemberships(ctx context.Context, c Call, w io.W
 		return t.encodeErr(c, err, w)
 	}
 
-	arg := keybase1.TeamListArg{
+	arg := keybase1.TeamListUnverifiedArg{
 		UserAssertion:        opts.UserAssertion,
 		IncludeImplicitTeams: opts.IncludeImplicitTeams,
 	}
-	list, err := t.cli.TeamList(ctx, arg)
+	list, err := t.cli.TeamListUnverified(ctx, arg)
 	if err != nil {
 		return t.encodeErr(c, err, w)
 	}
@@ -434,6 +439,38 @@ func (t *teamAPIHandler) renameSubteam(ctx context.Context, c Call, w io.Writer)
 	return t.encodeResult(c, nil, w)
 }
 
+type listRequestsOptions struct {
+	Team string `json:"team"`
+}
+
+func (c *listRequestsOptions) Check() error {
+	if c.Team == "" {
+		return nil
+	}
+
+	_, err := keybase1.TeamNameFromString(c.Team)
+	return err
+}
+
+func (t *teamAPIHandler) listRequests(ctx context.Context, c Call, w io.Writer) error {
+	var opts listRequestsOptions
+	if err := t.unmarshalOptions(c, &opts); err != nil {
+		return t.encodeErr(c, err, w)
+	}
+
+	arg := keybase1.TeamListRequestsArg{}
+	if opts.Team != "" {
+		arg.TeamName = &opts.Team
+	}
+
+	reqs, err := t.cli.TeamListRequests(ctx, arg)
+	if err != nil {
+		return t.encodeErr(c, err, w)
+	}
+
+	return t.encodeResult(c, reqs, w)
+}
+
 func (t *teamAPIHandler) requireOptionsV1(c Call) error {
 	if len(c.Params.Options) == 0 {
 		if c.Method != "list-self-memberships" {
@@ -445,36 +482,21 @@ func (t *teamAPIHandler) requireOptionsV1(c Call) error {
 }
 
 func (t *teamAPIHandler) encodeResult(call Call, result interface{}, w io.Writer) error {
-	reply := Reply{
-		Result: result,
-	}
-	return t.encodeReply(call, reply, w)
+	return encodeResult(call, result, w, t.indent)
 }
 
 func (t *teamAPIHandler) encodeErr(call Call, err error, w io.Writer) error {
-	reply := Reply{Error: &CallError{Message: err.Error()}}
-	return t.encodeReply(call, reply, w)
-}
-
-func (t *teamAPIHandler) encodeReply(call Call, reply Reply, w io.Writer) error {
-	reply.Jsonrpc = call.Jsonrpc
-	reply.ID = call.ID
-
-	enc := json.NewEncoder(w)
-	if t.indent {
-		enc.SetIndent("", "    ")
-	}
-	return enc.Encode(reply)
+	return encodeErr(call, err, w, t.indent)
 }
 
 func (t *teamAPIHandler) unmarshalOptions(c Call, opts Checker) error {
+	// Note: keeping this len check here because unmarshalOptions behaves differently:
+	// it runs opts.Check() when len(c.Params.Options) == 0 and unclear if
+	// that is the desired behavior for team API, so leaving this here for now.
 	if len(c.Params.Options) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(c.Params.Options, opts); err != nil {
-		return err
-	}
-	return opts.Check()
+	return unmarshalOptions(c, opts)
 }
 
 func mapRole(srole string) (keybase1.TeamRole, error) {
@@ -485,10 +507,6 @@ func mapRole(srole string) (keybase1.TeamRole, error) {
 
 	return role, nil
 
-}
-
-type Checker interface {
-	Check() error
 }
 
 func checkSubteam(name string) error {

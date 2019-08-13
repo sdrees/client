@@ -1,42 +1,82 @@
-## How to build the font icon
+## Building Keybase Icon Font
 
-## Phase 1: Update svgs
-1. Delete all svg files from this folder
-1. Go to the Icon font zeplin sheet (https://zpl.io/pbL9pM2)
-1. Export all the icons to this folder
-    1. On the right panel you can click the assets tab and download all SVGs into this folder.
-    1. Delete all non-icon font svgs from that folder (anything thats not 'kb-iconfont-.*')
-        * hint: `find . -type f ! -name 'kb-iconfont-*' -name '*.svg' -delete`
+### Dependencies
 
-## Phase 2: Get svg paths
-1. Go to https://icomoon.io
-1. Create a new empty project [Main Menu -> Manage projects -> New Project]
-1. Import all the svgs from phase 1 [Import icons]
-1. Download JSON [Right hamburger menu => Download JSON] and save as kb-icomoon-project-app.json
+[webfont-generator](https://github.com/sunflowerdeath/webfonts-generator)
 
-## Phase 3: Generate fonts
-1. run `yarn run generate-font-project` (this updates our Icon constants for you)
-1. On icomoon.io import the generated project [menu -> Projects -> Import Project -> kb-icomoon-project-generated.json]
-1. Generate font and download
-1. Unzip kb.zip into `./kb/` in `shared/images/iconfont`.
-1. run `yarn run apply-new-fonts`
-1. Delete `shared/images/iconfont/kb/`
+[fontforge](https://fontforge.github.io/en-US/downloadsj)
 
-## Phase 4: Fix Vertical Metrics
+- Mac: `brew install fontforge`
+- Window: Install the GUI application and the executable should be available via
+  the command line.
 
-Go [here](https://www.fontsquirrel.com/tools/webfont-generator)
+### Other Documentation
 
-1. choose expert
-1. upload `kb.ttf`
-1. only select trueType in the formats
-1. truetype hinting = keep existing
-1. turn off fix missing glyphs
-1. turn off subsetting
-1. remove the ‘-webfont’ as the suffix
-1. check the agree then download
-1. replace `kb.ttf` with the file of the same name from the downloaded zip file
+[Sketch Best Practices for SVG Export](./SKETCH.md)
 
-## Phase 5: Update the flowtype and fonts on both apps
+[Using Font Forge to Inspect Icon Font Output](./FONTFORGE.md)
 
-1. Go to `shared/`
-1. Run ```yarn run updated-fonts``` (it's okay if this doesn't do anything)
+### Instructions
+
+**Building Iconfont From Zeplin**
+
+1. Delete all icons from this folder
+2. Make sure you have `Display Optimized SVGs` selected in Zeplin (under Project > Assets on MacOS)<br/>
+   <img src="zeplin-settings.png" width="400" />
+3. Download iconfont svgs from this [zeplin sheet](https://zpl.io/29y4w5w)
+4. Optionally if there are PNG assets to update, download from this [zeplin sheet](https://zpl.io/VQoMDq4)
+   - Note: **Make sure you scroll all the way to the bottom of the asset panel on the right of the Zeplin sheets before exporting the assets, otherwise they might not load.**
+5. Move assets to the appropriate directory
+   - svg iconfonts: `client/shared/images/iconfont`
+   - png assets: `client/shared/images/icons`
+6. Generate the iconfont and update constants on both apps
+   - `yarn update-icon-font` Will generate a font file and update the constants
+     - font: `client/shared/fonts/kb.ttf`
+     - constants: `client/shared/common-adapters/icon.constants`
+   - `yarn update-icon-constants` will only update the constants
+
+**Testing A Single SVG**
+
+If you're modifying a single Sketch asset and want to see how the iconfont looks without uploading and redownloading from Zeplin, do the following:
+
+1. In Sketch, right-click on the top folder for the icon and `Copy SVG Code`
+2. Paste the SVG code into the matching svg file located in `client/shared/images/iconfont/{counter}-kb-iconfont-{name}-{size}.svg`
+3. Install `svgo` to manually optimize the SVG output from Sketch. This is exactly what Zeplin does before exporting assets as SVG
+4. Rewrite the SVG file `svgo -i {counter}-kb-iconfont-{name}-{size}.svg -o {counter}-kb-iconfont-{name}-{size}.svg`
+5. Update the iconfont `kb.ttf` with `yarn update-icon-font`
+6. The iconfont should now reflect the single SVG change. **Do not let the Sketch file(s) and the committed SVG assets get out of sync when testing a single SVG**
+
+### How SVGs Are Generated
+
+The complete SVG pipeline is as follows
+
+Sketch Assets → Zeplin → Export to SVG → Optimized with SVGO → Download
+
+It's important to note that the original Sketch assets determine the final SVG
+output after running through SVGO. Pay attention for strange overlapping/masking
+paths in the final SVGs or inverted colors. This is usually caused by something
+happening in Sketch.
+
+The naming convention of the SVG files is very important.
+
+`{counter}-kb-inconfont-{name-with-dashes}-{size}.svg`
+
+The counter is used to generate the unicode values for the characters in the
+iconfont. It is okay to have gaps in the counters. It is NOT ok to have
+multiple icons with the same counter.
+
+For instructions on adding/modifying icons look at the instructions in this
+[zeplin sheet](https://zpl.io/29y4w5w).
+
+### Common Errors
+
+1. Flow: `Cannot create Kb.Icon element because property 'iconfont-{name}' is missing in object [1] in property 'type'`
+
+   - This happens when an icon name reference via the `type` prop on a `Kb.Icon` component, but Flow cannot find the matching `type` in `icon.constants.js`
+   - Check the naming of the correct file in `images/iconfont/*.svg`
+   - Also ensure that the key in the object was not deleted on accident.
+
+2. Icon name doesn't match the icon being rendered.
+
+   - This can happen if there are multiple SVGs in this folder with the same counter - for example, if some icons were removed and others were added with their number.
+   - Ensure there are no duplicate counters in the SVG set.

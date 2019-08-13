@@ -8,6 +8,15 @@
   ],
   "types": [
     {
+      "type": "enum",
+      "name": "BlockStatus",
+      "symbols": [
+        "UNKNOWN_0",
+        "LIVE_1",
+        "ARCHIVED_2"
+      ]
+    },
+    {
       "type": "record",
       "name": "GetBlockRes",
       "fields": [
@@ -18,6 +27,14 @@
         {
           "type": "bytes",
           "name": "buf"
+        },
+        {
+          "type": "int",
+          "name": "size"
+        },
+        {
+          "type": "BlockStatus",
+          "name": "status"
         }
       ]
     },
@@ -72,6 +89,34 @@
         {
           "type": "BlockReference",
           "name": "failed"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "BlockIdCount",
+      "fields": [
+        {
+          "type": "BlockIdCombo",
+          "name": "id"
+        },
+        {
+          "type": "int",
+          "name": "liveCount"
+        }
+      ],
+      "lint": "ignore"
+    },
+    {
+      "type": "record",
+      "name": "ReferenceCountRes",
+      "fields": [
+        {
+          "type": {
+            "type": "array",
+            "items": "BlockIdCount"
+          },
+          "name": "counts"
         }
       ]
     },
@@ -146,6 +191,10 @@
         {
           "name": "folder",
           "type": "string"
+        },
+        {
+          "name": "sizeOnly",
+          "type": "boolean"
         }
       ],
       "response": "GetBlockRes"
@@ -226,6 +275,26 @@
         }
       ],
       "response": "DowngradeReferenceRes"
+    },
+    "getReferenceCount": {
+      "request": [
+        {
+          "name": "folder",
+          "type": "string"
+        },
+        {
+          "name": "ids",
+          "type": {
+            "type": "array",
+            "items": "BlockIdCombo"
+          }
+        },
+        {
+          "name": "status",
+          "type": "BlockStatus"
+        }
+      ],
+      "response": "ReferenceCountRes"
     },
     "getUserQuotaInfo": {
       "request": [],

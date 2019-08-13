@@ -8,13 +8,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"testing"
-
 	"github.com/keybase/client/go/externalstest"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/keybase1"
 	insecureTriplesec "github.com/keybase/go-triplesec-insecure"
 	"github.com/stretchr/testify/require"
+	context "golang.org/x/net/context"
+	"testing"
 )
 
 func SetupEngineTest(tb libkb.TestingTB, name string) libkb.TestContext {
@@ -26,7 +26,7 @@ func SetupEngineTest(tb libkb.TestingTB, name string) libkb.TestContext {
 		isProduction := func() bool {
 			return tc.G.Env.GetRunMode() == libkb.ProductionRunMode
 		}
-		return insecureTriplesec.NewCipher(passphrase, salt, warner, isProduction)
+		return insecureTriplesec.NewCipher(passphrase, salt, libkb.ClientTriplesecVersion, warner, isProduction)
 	}
 
 	return tc
@@ -67,9 +67,19 @@ func (fu FakeUser) NormalizedUsername() libkb.NormalizedUsername {
 	return libkb.NewNormalizedUsername(fu.Username)
 }
 
+func (fu *FakeUser) LoadUser(tc libkb.TestContext) error {
+	var err error
+	fu.User, err = libkb.LoadMe(libkb.NewLoadUserArg(tc.G))
+	return err
+}
+
 func (fu FakeUser) UID() keybase1.UID {
 	// All new-style names will have a 1-to-1 mapping
 	return libkb.UsernameToUID(fu.Username)
+}
+
+func (fu FakeUser) UserVersion() keybase1.UserVersion {
+	return keybase1.UserVersion{Uid: fu.UID(), EldestSeqno: 1}
 }
 
 func NewFakeUserOrBust(tb libkb.TestingTB, prefix string) (fu *FakeUser) {
@@ -99,17 +109,16 @@ func MakeTestSignupEngineRunArg(fu *FakeUser) SignupEngineRunArg {
 }
 
 func SignupFakeUserWithArg(tc libkb.TestContext, fu *FakeUser, arg SignupEngineRunArg) *SignupEngine {
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
-	if err != nil {
-		tc.T.Fatal(err)
-	}
+	s := NewSignupEngine(tc.G, &arg)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	err := RunEngine2(m, s)
+	require.NoError(tc.T, err)
 	fu.EncryptionKey = s.encryptionKey
 	return s
 }
@@ -137,25 +146,29 @@ func CreateAndSignupFakeUserPaper(tc libkb.TestContext, prefix string) *FakeUser
 	return fu
 }
 
-func CreateAndSignupFakeUserSafe(g *libkb.GlobalContext, prefix string) (*FakeUser, error) {
-	fu, err := NewFakeUser(prefix)
-	if err != nil {
-		return nil, err
-	}
-
-	arg := MakeTestSignupEngineRunArg(fu)
-	ctx := &Context{
+func CreateAndSignupFakeUserSafeWithArg(g *libkb.GlobalContext, fu *FakeUser, arg SignupEngineRunArg) (*FakeUser, error) {
+	uis := libkb.UIs{
 		LogUI:    g.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, g)
-	err = RunEngine(s, ctx)
+	s := NewSignupEngine(g, &arg)
+	err := RunEngine2(libkb.NewMetaContextTODO(g).WithUIs(uis), s)
 	if err != nil {
 		return nil, err
 	}
 	return fu, nil
+}
+
+func CreateAndSignupFakeUserSafe(g *libkb.GlobalContext, prefix string) (*FakeUser, error) {
+	fu, err := NewFakeUser(prefix)
+	if err != nil {
+		return nil, err
+	}
+	arg := MakeTestSignupEngineRunArg(fu)
+
+	return CreateAndSignupFakeUserSafeWithArg(g, fu, arg)
 }
 
 func CreateAndSignupFakeUserGPG(tc libkb.TestContext, prefix string) *FakeUser {
@@ -165,14 +178,14 @@ func CreateAndSignupFakeUserGPG(tc libkb.TestContext, prefix string) *FakeUser {
 	}
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipGPG = false
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
@@ -193,14 +206,14 @@ func CreateAndSignupFakeUserCustomArg(tc libkb.TestContext, prefix string, fmod 
 	fu = NewFakeUserOrBust(tc.T, prefix)
 	arg := MakeTestSignupEngineRunArg(fu)
 	fmod(&arg)
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
@@ -217,20 +230,46 @@ func CreateAndSignupFakeUserWithPassphrase(tc libkb.TestContext, prefix, passphr
 }
 
 func (fu *FakeUser) LoginWithSecretUI(secui libkb.SecretUI, g *libkb.GlobalContext) error {
-	ctx := &Context{
+	uis := libkb.UIs{
 		ProvisionUI: newTestProvisionUI(),
 		LogUI:       g.UI.GetLogUI(),
 		GPGUI:       &gpgtestui{},
 		SecretUI:    secui,
 		LoginUI:     &libkb.TestLoginUI{Username: fu.Username},
 	}
+	m := libkb.NewMetaContextTODO(g).WithUIs(uis)
 	li := NewLogin(g, libkb.DeviceTypeDesktop, fu.Username, keybase1.ClientType_CLI)
-	return RunEngine(li, ctx)
+	return RunEngine2(m, li)
 }
 
 func (fu *FakeUser) Login(g *libkb.GlobalContext) error {
 	s := fu.NewSecretUI()
 	return fu.LoginWithSecretUI(s, g)
+}
+
+type nullSecretUI struct{}
+
+func (n nullSecretUI) GetPassphrase(pinentry keybase1.GUIEntryArg, terminal *keybase1.SecretEntryArg) (keybase1.GetPassphraseRes, error) {
+	return keybase1.GetPassphraseRes{}, errors.New("nullSecretUI should never be called")
+}
+
+func (fu *FakeUser) SwitchTo(g *libkb.GlobalContext, withPassword bool) error {
+	var secui libkb.SecretUI
+	if withPassword {
+		secui = fu.NewSecretUI()
+	} else {
+		secui = nullSecretUI{}
+	}
+	uis := libkb.UIs{
+		ProvisionUI: newTestProvisionUI(),
+		LogUI:       g.UI.GetLogUI(),
+		GPGUI:       &gpgtestui{},
+		SecretUI:    secui,
+		LoginUI:     &libkb.TestLoginUI{Username: fu.Username},
+	}
+	m := libkb.NewMetaContextTODO(g).WithUIs(uis)
+	li := NewLoginWithUserSwitch(g, libkb.DeviceTypeDesktop, fu.Username, keybase1.ClientType_CLI, true)
+	return RunEngine2(m, li)
 }
 
 func (fu *FakeUser) LoginOrBust(tc libkb.TestContext) {
@@ -248,7 +287,8 @@ func (fu *FakeUser) NewCountSecretUI() *libkb.TestCountSecretUI {
 }
 
 func AssertProvisioned(tc libkb.TestContext) error {
-	prov, err := tc.G.LoginState().LoggedInProvisionedCheck()
+	m := NewMetaContextForTest(tc)
+	prov, err := isLoggedInWithError(m)
 	if err != nil {
 		return err
 	}
@@ -259,12 +299,13 @@ func AssertProvisioned(tc libkb.TestContext) error {
 }
 
 func AssertNotProvisioned(tc libkb.TestContext) error {
-	prov, err := tc.G.LoginState().LoggedInProvisionedCheck()
+	m := NewMetaContextForTest(tc)
+	prov, err := isLoggedInWithError(m)
 	if err != nil {
 		return err
 	}
 	if prov {
-		return errors.New("AssertNotProvisioned failed:  user is provisioned")
+		return errors.New("AssertNotProvisioned failed: user is provisioned")
 	}
 	return nil
 }
@@ -284,12 +325,11 @@ func AssertLoggedOut(tc libkb.TestContext) error {
 }
 
 func LoggedIn(tc libkb.TestContext) bool {
-	lin, _ := tc.G.LoginState().LoggedInLoad()
-	return lin
+	return tc.G.ActiveDevice.Valid()
 }
 
 func Logout(tc libkb.TestContext) {
-	if err := tc.G.Logout(); err != nil {
+	if err := tc.G.Logout(context.TODO()); err != nil {
 		tc.T.Fatalf("logout error: %s", err)
 	}
 }
@@ -307,22 +347,13 @@ func testEngineWithSecretStore(
 	tc := SetupEngineTest(t, "wss")
 	defer tc.Cleanup()
 
-	fu := CreateAndSignupFakeUser(tc, "wss")
-	tc.ResetLoginState()
+	fu := SignupFakeUserStoreSecret(tc, "wss")
+	tc.SimulateServiceRestart()
 
 	testSecretUI := libkb.TestSecretUI{
 		Passphrase:  fu.Passphrase,
 		StoreSecret: true,
 	}
-	runEngine(tc, fu, &testSecretUI)
-
-	if !testSecretUI.CalledGetPassphrase {
-		t.Fatal("GetPassphrase() unexpectedly not called")
-	}
-
-	tc.ResetLoginState()
-
-	testSecretUI = libkb.TestSecretUI{}
 	runEngine(tc, fu, &testSecretUI)
 
 	if testSecretUI.CalledGetPassphrase {
@@ -352,14 +383,14 @@ func SetupTwoDevicesWithHook(t *testing.T, nm string, hook func(tc *libkb.TestCo
 	arg := MakeTestSignupEngineRunArg(user)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: user.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    dev1.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: user.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, dev1.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(dev1.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(dev1).WithUIs(uis), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +405,7 @@ func SetupTwoDevicesWithHook(t *testing.T, nm string, hook func(tc *libkb.TestCo
 	secUI.Passphrase = loginUI.PaperPhrase
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: user.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       dev2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -382,7 +413,8 @@ func SetupTwoDevicesWithHook(t *testing.T, nm string, hook func(tc *libkb.TestCo
 		GPGUI:       &gpgtestui{},
 	}
 	eng := NewLogin(dev2.G, libkb.DeviceTypeDesktop, "", keybase1.ClientType_CLI)
-	if err := RunEngine(eng, ctx); err != nil {
+	m2 := NewMetaContextForTest(dev2).WithUIs(uis)
+	if err := RunEngine2(m2, eng); err != nil {
 		t.Fatal(err)
 	}
 
@@ -402,17 +434,21 @@ func SetupTwoDevicesWithHook(t *testing.T, nm string, hook func(tc *libkb.TestCo
 	return user, dev1, dev2, cleanup
 }
 
+func NewMetaContextForTest(tc libkb.TestContext) libkb.MetaContext {
+	return libkb.NewMetaContextForTest(tc)
+}
+func NewMetaContextForTestWithLogUI(tc libkb.TestContext) libkb.MetaContext {
+	return libkb.NewMetaContextForTestWithLogUI(tc)
+}
+
 func ResetAccount(tc libkb.TestContext, u *FakeUser) {
-	err := tc.G.LoginState().ResetAccount(u.Username)
-	if err != nil {
-		tc.T.Fatalf("In account reset: %s", err)
-	}
-	tc.T.Logf("Account reset for user %s", u.Username)
+	ResetAccountNoLogout(tc, u)
 	Logout(tc)
 }
 
 func ResetAccountNoLogout(tc libkb.TestContext, u *FakeUser) {
-	err := tc.G.LoginState().ResetAccount(u.Username)
+	m := NewMetaContextForTest(tc)
+	err := libkb.ResetAccount(m, u.NormalizedUsername(), u.Passphrase)
 	if err != nil {
 		tc.T.Fatalf("In account reset: %s", err)
 	}
@@ -422,16 +458,18 @@ func ResetAccountNoLogout(tc libkb.TestContext, u *FakeUser) {
 func ForcePUK(tc libkb.TestContext) {
 	arg := &PerUserKeyUpgradeArgs{}
 	eng := NewPerUserKeyUpgrade(tc.G, arg)
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI: tc.G.UI.GetLogUI(),
 	}
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		tc.T.Fatal(err)
 	}
 }
 
 func getUserSeqno(tc *libkb.TestContext, uid keybase1.UID) keybase1.Seqno {
-	res, err := tc.G.API.Get(libkb.APIArg{
+	mctx := NewMetaContextForTest(*tc)
+	res, err := tc.G.API.Get(mctx, libkb.APIArg{
 		Endpoint: "user/lookup",
 		Args: libkb.HTTPArgs{
 			"uid": libkb.UIDArg(uid),
@@ -445,4 +483,12 @@ func getUserSeqno(tc *libkb.TestContext, uid keybase1.UID) keybase1.Seqno {
 
 func checkUserSeqno(tc *libkb.TestContext, uid keybase1.UID, expected keybase1.Seqno) {
 	require.Equal(tc.T, expected, getUserSeqno(tc, uid))
+}
+
+func fakeSalt() []byte {
+	return []byte("fakeSALTfakeSALT")
+}
+
+func clearCaches(g *libkb.GlobalContext) {
+	g.ActiveDevice.ClearCaches()
 }

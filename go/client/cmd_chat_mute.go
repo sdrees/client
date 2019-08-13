@@ -25,6 +25,7 @@ func newCmdChatMute(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Comm
 		Action: func(c *cli.Context) {
 			cmd := &CmdChatMute{Contextified: libkb.NewContextified(g)}
 			cl.ChooseCommand(cmd, "mute", c)
+			cl.SetLogForward(libcmdline.LogForwardNone)
 		},
 		Flags: append(getConversationResolverFlags(), mustGetChatFlags("unmute")...),
 	}
@@ -64,6 +65,13 @@ func (c *CmdChatMute) Run() error {
 	if err != nil {
 		return err
 	}
+
+	if c.resolvingRequest.TlfName != "" {
+		if err = annotateResolvingRequest(c.G(), &c.resolvingRequest); err != nil {
+			return err
+		}
+	}
+
 	conversation, _, err := resolver.Resolve(ctx, c.resolvingRequest, chatConversationResolvingBehavior{
 		CreateIfNotExists: false,
 		MustNotExist:      false,

@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"errors"
 
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/libcmdline"
@@ -32,7 +33,7 @@ func newCmdTeamGenerateSeitan(cl *libcmdline.CommandLine, g *libkb.GlobalContext
 		Flags: []cli.Flag{
 			cli.StringFlag{
 				Name:  "r, role",
-				Usage: "team role (owner, admin, writer, reader) [required]",
+				Usage: "team role (admin, writer, reader) [required]",
 			},
 			cli.StringFlag{
 				Name:  "fullname",
@@ -62,6 +63,9 @@ func (c *CmdTeamGenerateSeitan) ParseArgv(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	if c.Role == keybase1.TeamRole_OWNER {
+		return errors.New("invalid team role, please use admin, writer, or reader")
+	}
 
 	c.FullName = ctx.String("fullname")
 	c.Number = ctx.String("number")
@@ -75,17 +79,17 @@ func (c *CmdTeamGenerateSeitan) Run() error {
 		return err
 	}
 
-	var labelSms keybase1.SeitanIKeyLabelSms
+	var labelSms keybase1.SeitanKeyLabelSms
 	labelSms.F = c.FullName
 	labelSms.N = c.Number
 
-	arg := keybase1.TeamCreateSeitanTokenArg{
+	arg := keybase1.TeamCreateSeitanTokenV2Arg{
 		Name:  c.Team,
 		Role:  c.Role,
-		Label: keybase1.NewSeitanIKeyLabelWithSms(labelSms),
+		Label: keybase1.NewSeitanKeyLabelWithSms(labelSms),
 	}
 
-	res, err := cli.TeamCreateSeitanToken(context.Background(), arg)
+	res, err := cli.TeamCreateSeitanTokenV2(context.Background(), arg)
 	if err != nil {
 		return err
 	}
@@ -104,7 +108,7 @@ func (c *CmdTeamGenerateSeitan) GetUsage() libkb.Usage {
 	}
 }
 
-const teamGenerateSeitanDoc = `"keybase team generate-token" allows you to create a one-time use,
+const teamGenerateSeitanDoc = `"keybase generate-invite-token" allows you to create a one-time use,
 expiring, cryptographically secure token that someone can use to join
 a team.
 

@@ -30,7 +30,7 @@ func testImplicitTeamRotateOnRevoke(t *testing.T, public bool) {
 	defer tt.cleanup()
 
 	alice := tt.addUser("alice")
-	bob := tt.addUser("bob")
+	bob := tt.addUserWithPaper("bob")
 
 	iTeamName := strings.Join([]string{alice.username, bob.username}, ",")
 
@@ -42,17 +42,28 @@ func testImplicitTeamRotateOnRevoke(t *testing.T, public bool) {
 	before, err := GetTeamForTestByID(context.TODO(), alice.tc.G, team, public)
 	require.NoError(t, err)
 	require.Equal(t, keybase1.PerTeamKeyGeneration(1), before.Generation())
-	secretBefore := before.Data.PerTeamKeySeeds[before.Generation()].Seed.ToBytes()
+	secretBefore := before.Data.PerTeamKeySeedsUnverified[before.Generation()].Seed.ToBytes()
 
 	bob.revokePaperKey()
-	alice.waitForRotateByID(team, keybase1.Seqno(2))
+
+	// We wait for different chain arrangements based on whether this was a public or private rotation
+	var visible, hidden keybase1.Seqno
+	if public {
+		visible = keybase1.Seqno(2)
+		hidden = keybase1.Seqno(0)
+	} else {
+		visible = keybase1.Seqno(1)
+		hidden = keybase1.Seqno(1)
+	}
+
+	alice.waitForAnyRotateByID(team, visible, hidden)
 
 	// check that key was rotated for team
 	after, err := GetTeamForTestByID(context.TODO(), alice.tc.G, team, public)
 	require.NoError(t, err)
 	require.Equal(t, keybase1.PerTeamKeyGeneration(2), after.Generation(), "generation after rotate")
 
-	secretAfter := after.Data.PerTeamKeySeeds[after.Generation()].Seed.ToBytes()
+	secretAfter := after.Data.PerTeamKeySeedsUnverified[after.Generation()].Seed.ToBytes()
 	if libkb.SecureByteArrayEq(secretAfter, secretBefore) {
 		t.Fatal("team secret did not change when rotated")
 	}
@@ -208,4 +219,296 @@ func pollForConditionWithTimeout(t *testing.T, timeout time.Duration, descriptio
 		pollCancel()
 		t.Fatalf("timed out waiting for condition: %v", description)
 	}
+}
+
+func trySBSConsolidation(t *testing.T, impteamExpr string, public bool) {
+	t.Logf("trySBSConsolidation(expr=%q, public=%t)", impteamExpr, public)
+
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	ann := tt.addUser("ann")
+	bob := tt.addUser("bob")
+	tt.logUserNames()
+
+	impteamName := fmt.Sprintf(impteamExpr, ann.username, bob.username, bob.username)
+	teamID, err := ann.lookupImplicitTeam(true /* create */, impteamName, public)
+	require.NoError(t, err)
+
+	t.Logf("Created team %s -> %s", impteamName, teamID)
+
+	bob.kickTeamRekeyd()
+	bob.proveRooter()
+	t.Logf("Bob (%s) proved rooter", bob.username)
+
+	expectedTeamName := fmt.Sprintf("%v,%v", ann.username, bob.username)
+	pollForConditionWithTimeout(t, 10*time.Second, "team consolidated to ann,bob", func(ctx context.Context) bool {
+		team, err := teams.Load(ctx, ann.tc.G, keybase1.LoadTeamArg{
+			ID:          teamID,
+			ForceRepoll: true,
+			Public:      public,
+		})
+		require.NoError(t, err)
+		displayName, err := team.ImplicitTeamDisplayName(context.Background())
+		require.NoError(t, err)
+		t.Logf("Got team back: %q (waiting for %q)", displayName.String(), expectedTeamName)
+		return displayName.String() == expectedTeamName
+	})
+
+	teamID2, err := ann.lookupImplicitTeam(false /* create */, expectedTeamName, public)
+	require.NoError(t, err)
+	require.Equal(t, teamID, teamID2)
+
+	_, err = teams.ResolveIDToName(context.Background(), ann.tc.G, teamID2)
+	require.NoError(t, err)
+
+	if public {
+		pam := tt.addUser("pam")
+		t.Logf("Signed up %s (%s) for public team check", pam.username, pam.uid)
+		teamID3, err := pam.lookupImplicitTeam(false /* create */, impteamName, true /* public */)
+		require.NoError(t, err)
+		require.Equal(t, teamID2, teamID3)
+
+		_, err = teams.Load(context.Background(), pam.tc.G, keybase1.LoadTeamArg{
+			ID:          teamID3,
+			ForceRepoll: true,
+			Public:      true,
+		})
+		require.NoError(t, err)
+
+		_, err = teams.ResolveIDToName(context.Background(), pam.tc.G, teamID3)
+		require.NoError(t, err)
+	}
+}
+
+func trySBSConsolidationPubAndPriv(t *testing.T, impteamExpr string) {
+	trySBSConsolidation(t, impteamExpr, true /* public */)
+	trySBSConsolidation(t, impteamExpr, false /* public */)
+}
+
+func TestImplicitSBSConsolidation(t *testing.T) {
+	trySBSConsolidationPubAndPriv(t, "%v,%v,%v@rooter")
+}
+
+func TestImplicitSBSPromotion(t *testing.T) {
+	trySBSConsolidationPubAndPriv(t, "%v,%v@rooter#%v")
+}
+
+func TestImplicitSBSConsolidation2(t *testing.T) {
+	// Test "downgrade" case, where it should not downgrade if social
+	// assertion is a reader. Result should still be "ann,bob", not
+	// "ann#bob".
+
+	trySBSConsolidationPubAndPriv(t, "%v,%v#%v@rooter")
+}
+
+func TestImplicitSBSPukless(t *testing.T) {
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	ann := tt.addUser("ann")
+	bob := tt.addPuklessUser("bob")
+	t.Logf("Signed ann (%s) and pukless bob (%s)", ann.username, bob.username)
+
+	impteamName := fmt.Sprintf("%s,%s@rooter", ann.username, bob.username)
+	teamID, err := ann.lookupImplicitTeam(true /* create */, impteamName, false)
+	require.NoError(t, err)
+
+	t.Logf("Created team %s -> %s", impteamName, teamID)
+
+	bob.proveRooter()
+
+	// Because of a bug in team provisional status checking combined
+	// with how lookupImplicitTeam works, this load is busted right
+	// now:
+
+	// Loading "alice,bob@rooter" resolves "alice" to "alice", and
+	// "bob@rooter" to "bob", and it "redirects" the load to
+	// "alice,bob". But "alice,bob" cannot be loaded because
+	// "alice,bob" implicit team will not exist until alice completes
+	// "bob@rooter" invite. Team server blocks team load until that to
+	// prevent races.
+
+	t.Logf(":: Trying to load %q", impteamName)
+	_, err = ann.lookupImplicitTeam(false /* create */, impteamName, false)
+	require.Error(t, err)
+	//require.Equal(t, teamID, teamID2)
+	t.Logf("Loading %s failed with: %v", impteamName, err)
+
+	// The following load call will not work as well. So this team is
+	// essentially locked until bob gets PUK and alice keys him in.
+
+	expectedTeamName := fmt.Sprintf("%v,%v", ann.username, bob.username)
+	t.Logf(":: Trying to load %q", expectedTeamName)
+	_, err = ann.lookupImplicitTeam(false /* create */, expectedTeamName, false)
+	require.Error(t, err)
+	t.Logf("Loading %s failed with: %v", expectedTeamName, err)
+
+	bob.kickTeamRekeyd()
+	bob.perUserKeyUpgrade()
+
+	pollForConditionWithTimeout(t, 10*time.Second, "team resolved to ann,bob", func(ctx context.Context) bool {
+		team, err := teams.Load(ctx, ann.tc.G, keybase1.LoadTeamArg{
+			ID:          teamID,
+			ForceRepoll: true,
+		})
+		require.NoError(t, err)
+		displayName, err := team.ImplicitTeamDisplayName(context.Background())
+		require.NoError(t, err)
+		t.Logf("Got team back: %s", displayName.String())
+		return displayName.String() == expectedTeamName
+	})
+
+	teamID3, err := ann.lookupImplicitTeam(false /* create */, expectedTeamName, false)
+	require.NoError(t, err)
+	require.Equal(t, teamID, teamID3)
+}
+
+func TestResolveSBSTeamWithConflict(t *testing.T) {
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	ann := tt.addUser("ann")
+	bob := tt.addUser("bob")
+
+	// Create two implicit teams that will become conflicted later:
+	// - alice,bob
+	// - alice,bob@rooter
+	impteamName1 := fmt.Sprintf("%s,%s", ann.username, bob.username)
+	_, err := ann.lookupImplicitTeam(true /* create */, impteamName1, false /* public */)
+	require.NoError(t, err)
+
+	impteamName2 := fmt.Sprintf("%s,%s@rooter", ann.username, bob.username)
+	_, err = ann.lookupImplicitTeam(true /* create */, impteamName2, false /* public */)
+	require.NoError(t, err)
+
+	// Make sure we can resolve them right now and get two different team IDs.
+	teamid1, err := ann.lookupImplicitTeam(false /* create */, impteamName1, false /* public */)
+	require.NoError(t, err)
+
+	teamid2, err := ann.lookupImplicitTeam(false /* create */, impteamName2, false /* public */)
+	require.NoError(t, err)
+
+	require.NotEqual(t, teamid1, teamid2)
+
+	// Make sure we can load these teams.
+	teamObj1 := ann.loadTeamByID(teamid1, true /* admin */)
+	teamObj2 := ann.loadTeamByID(teamid2, true /* admin */)
+
+	// Check display names with conflicts, teams are not in conflict right now
+	// (ImplicitTeamDisplayNameString returns display name with suffix).
+	name, err := teamObj1.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, impteamName1, name)
+	t.Logf("Team 1 display name is: %s", name)
+	name, err = teamObj2.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, impteamName2, name)
+	t.Logf("Team 2 (w/ rooter) display name is: %s", name)
+
+	// Bob proves rooter.
+	bob.kickTeamRekeyd()
+	bob.proveRooter()
+
+	// Wait till team2 resolves.
+	ann.pollForTeamSeqnoLinkWithLoadArgs(keybase1.LoadTeamArg{
+		ID:          teamid2,
+		ForceRepoll: true,
+	}, keybase1.Seqno(2))
+
+	// Make sure teams are still loadable by ID.
+	teamObj1 = ann.loadTeamByID(teamid1, true /* admin */)
+	teamObj2 = ann.loadTeamByID(teamid2, true /* admin */)
+
+	// Team1 display name with suffix should stay unchanged.
+	name, err = teamObj1.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	t.Logf("After resolution, team1 display name is: %s", name)
+	require.Equal(t, impteamName1, name)
+
+	// See if we can resolve implicit team by name without suffix and get the
+	// first team.
+	lookupTeamID, err := ann.lookupImplicitTeam(false /* create */, name, false /* public */)
+	require.NoError(t, err)
+	require.Equal(t, teamid1, lookupTeamID)
+
+	// Team 2 should be the one that gets conflict suffix.
+	name, err = teamObj2.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	t.Logf("After resolution, team2 display name is: %s", name)
+	require.Contains(t, name, "(conflicted copy")
+	require.Contains(t, name, "#1)")
+
+	// We should be able to resolve team2 by name with suffix. This is where
+	// the CORE-9732 cache bug was.
+	lookupTeamID, err = ann.lookupImplicitTeam(false /* create */, name, false /* public */)
+	require.NoError(t, err)
+	require.Equal(t, teamid2, lookupTeamID)
+}
+
+func TestResolveSBSConsolidatedTeamWithConflict(t *testing.T) {
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	ann := tt.addUser("ann")
+	bob := tt.addUser("bob")
+
+	// Create two implicit teams that will become conflicted later
+	// - alice,bob
+	// - alice,bob#bob@rooter
+	// The second team will consolidate to "alice,bob", but since there
+	// already is "alice,bob", it will become "conflicted copy #1".
+
+	impteamName1 := fmt.Sprintf("%s,%s", ann.username, bob.username)
+	_, err := ann.lookupImplicitTeam(true /* create */, impteamName1, false /* public */)
+	require.NoError(t, err)
+
+	impteamName2 := fmt.Sprintf("%s,%s#%s@rooter", ann.username, bob.username, bob.username)
+	_, err = ann.lookupImplicitTeam(true /* create */, impteamName2, false /* public */)
+	require.NoError(t, err)
+
+	// Make sure we can resolve them right now.
+	teamid1, err := ann.lookupImplicitTeam(false /* create */, impteamName1, false /* public */)
+	require.NoError(t, err)
+
+	teamid2, err := ann.lookupImplicitTeam(false /* create */, impteamName2, false /* public */)
+	require.NoError(t, err)
+
+	// Make sure we can load these teams.
+	teamObj1 := ann.loadTeamByID(teamid1, true /* admin */)
+	teamObj2 := ann.loadTeamByID(teamid2, true /* admin */)
+
+	name, err := teamObj1.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, impteamName1, name)
+	t.Logf("Team 1 display name is: %s", name)
+	name, err = teamObj2.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, impteamName2, name)
+	t.Logf("Team 2 (w/ rooter) display name is: %s", name)
+
+	// Bob proves rooter.
+	bob.kickTeamRekeyd()
+	bob.proveRooter()
+
+	// Wait till team2 resolves.
+	ann.pollForTeamSeqnoLinkWithLoadArgs(keybase1.LoadTeamArg{
+		ID:          teamid2,
+		ForceRepoll: true,
+	}, keybase1.Seqno(2))
+
+	// Make sure teams are still loadable by ID.
+	teamObj1 = ann.loadTeamByID(teamid1, true /* admin */)
+	teamObj2 = ann.loadTeamByID(teamid2, true /* admin */)
+
+	name, err = teamObj2.ImplicitTeamDisplayNameString(context.Background())
+	require.NoError(t, err)
+	t.Logf("Second team became: %s", name)
+	require.Contains(t, name, "(conflicted copy")
+	require.Contains(t, name, "#1)")
+
+	// See if we can lookup this team.
+	lookupTeamID, err := ann.lookupImplicitTeam(false /* create */, name, false /* public */)
+	require.NoError(t, err)
+	require.Equal(t, teamid2, lookupTeamID)
 }

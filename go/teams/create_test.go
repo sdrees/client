@@ -26,7 +26,7 @@ func createUserAndRootTeam(t *testing.T) (fu *kbtest.FakeUser, nm keybase1.TeamN
 
 	teamName := u.Username + "t"
 
-	err = CreateRootTeam(context.TODO(), tc.G, teamName, keybase1.TeamSettings{})
+	_, err = CreateRootTeam(context.TODO(), tc.G, teamName, keybase1.TeamSettings{})
 	require.NoError(t, err)
 
 	nm, err = keybase1.TeamNameFromString(teamName)
@@ -63,7 +63,7 @@ func TestCreateTeamAfterAccountReset(t *testing.T) {
 	}
 
 	teamName := u.Username + "T"
-	err = CreateRootTeam(context.TODO(), tc.G, teamName, keybase1.TeamSettings{})
+	_, err = CreateRootTeam(context.TODO(), tc.G, teamName, keybase1.TeamSettings{})
 	require.NoError(t, err)
 }
 
@@ -76,11 +76,11 @@ func TestCreateSubteam(t *testing.T) {
 
 	parentTeamName, err := keybase1.TeamNameFromString(u.Username + "T")
 	require.NoError(t, err)
-	err = CreateRootTeam(context.TODO(), tc.G, parentTeamName.String(), keybase1.TeamSettings{})
+	_, err = CreateRootTeam(context.TODO(), tc.G, parentTeamName.String(), keybase1.TeamSettings{})
 	require.NoError(t, err)
 
 	subteamBasename := "mysubteam"
-	_, err = CreateSubteam(context.TODO(), tc.G, subteamBasename, parentTeamName)
+	_, err = CreateSubteam(context.TODO(), tc.G, subteamBasename, parentTeamName, keybase1.TeamRole_NONE /* addSelfAs */)
 	require.NoError(t, err)
 
 	// Fetch the subteam we just created, to make sure it's there.
@@ -94,8 +94,18 @@ func TestCreateSubteam(t *testing.T) {
 	require.Equal(t, keybase1.Seqno(1), subteam.chain().GetLatestSeqno())
 
 	// creator of subteam should *not* be a member of the subteam, they
-	// need to explicitly join it.
+	// need to explicitly ask to create it with themself in it.
 	assertRole(tc, subteamFQName.String(), u.Username, keybase1.TeamRole_NONE)
+
+	// Test joining with addSelf=true
+
+	subteamBasename = "mysubteam2"
+	_, err = CreateSubteam(context.TODO(), tc.G, subteamBasename, parentTeamName, keybase1.TeamRole_ADMIN /* addSelfAs */)
+	require.NoError(t, err)
+
+	subteamFQName, err = parentTeamName.Append(subteamBasename)
+	require.NoError(t, err)
+	assertRole(tc, subteamFQName.String(), u.Username, keybase1.TeamRole_ADMIN)
 }
 
 func TestCreateSubSubteam(t *testing.T) {
@@ -107,11 +117,11 @@ func TestCreateSubSubteam(t *testing.T) {
 
 	parentTeamName, err := keybase1.TeamNameFromString(u.Username + "T")
 	require.NoError(t, err)
-	err = CreateRootTeam(context.TODO(), tc.G, parentTeamName.String(), keybase1.TeamSettings{})
+	_, err = CreateRootTeam(context.TODO(), tc.G, parentTeamName.String(), keybase1.TeamSettings{})
 	require.NoError(t, err)
 
 	subteamBasename := "bbb"
-	_, err = CreateSubteam(context.TODO(), tc.G, subteamBasename, parentTeamName)
+	_, err = CreateSubteam(context.TODO(), tc.G, subteamBasename, parentTeamName, keybase1.TeamRole_NONE /* addSelfAs */)
 	require.NoError(t, err)
 	subteamName, err := parentTeamName.Append(subteamBasename)
 	require.NoError(t, err)
@@ -119,7 +129,7 @@ func TestCreateSubSubteam(t *testing.T) {
 	assertRole(tc, subteamName.String(), u.Username, keybase1.TeamRole_NONE)
 
 	subsubteamBasename := "ccc"
-	_, err = CreateSubteam(context.TODO(), tc.G, subsubteamBasename, subteamName)
+	_, err = CreateSubteam(context.TODO(), tc.G, subsubteamBasename, subteamName, keybase1.TeamRole_NONE /* addSelfAs */)
 	require.NoError(t, err)
 
 	subsubteamName, err := parentTeamName.Append(subteamBasename)

@@ -42,19 +42,24 @@ const profileInject = {
       wrapper.insertBefore(button, lastButton);
     }
   },
-
   "facebook": function facebookInjectProfile(user) {
     const container = document.querySelector("#fbProfileCover .actions");
     if (!container) return;
 
+    user.extraReplyCls = "fixed-form"
     const button = renderProfileChatButton(user);
     container.insertBefore(button, container.firstChild);
   },
 
   "reddit": function redditInjectProfile(user) {
-    const container = document.querySelector("h1");
+    const designV1 = document.querySelector("h1");
+    const designV2 = document.querySelector(".s1j2p31r-7.hBgquV");
+    const container = designV1 || designV2;
     if (!container) return;
 
+    if (designV2) {
+      user.extraReplyCls = "fixed-form"
+    }
     const button = renderProfileChatButton(user);
     button.style = "display: block; margin: 4px 0;";
     container.parentNode.insertBefore(button, container.nextSibling);

@@ -30,6 +30,27 @@ protocol git {
     case V1 : GitLocalMetadataV1;
   }
 
+  record GitCommit {
+    string commitHash;
+    string message;
+    string authorName;
+    string authorEmail;
+    Time ctime; // unix time in milliseconds
+  }
+
+  enum GitPushType {
+    DEFAULT_0,
+    CREATEREPO_1,
+    // UNUSED_2, <- this was DELETEBRANCH_2, which we never used. Using isDelete flag in GitRefMetadata instead.
+    RENAMEREPO_3
+  }
+  record GitRefMetadata {
+    string refName;
+    array<GitCommit> commits;
+    boolean moreCommitsAvailable; // true if `commits` doesn't include all
+    boolean isDelete; // true if this is a branch/ref delete operation
+  }
+
   // GitLocalMetadata is the struct that local RPCs use to read and write repo
   // metadata. It's decoupled from GitLocalMetadataVersioned, which is the
   // format that we serialize and encrypt, in case we ever need to support
@@ -37,6 +58,9 @@ protocol git {
   // the only current variant, GitLocalMetadataV1.
   record GitLocalMetadata {
     GitRepoName repoName;
+    array<GitRefMetadata> refs;
+    GitPushType pushType;
+    GitRepoName previousRepoName; // filled in for renames
   }
 
   // Additional metadata maintained by the server, returned with query results.
@@ -49,8 +73,8 @@ protocol git {
   }
 
   // These RPCs are only exposed for testing. Public commands won't call it directly.
-  void putGitMetadata(Folder folder, RepoID repoID, GitLocalMetadata metadata, boolean notifyTeam);
-  void deleteGitMetadata(Folder folder, GitRepoName repoName);
+  void putGitMetadata(FolderHandle folder, RepoID repoID, GitLocalMetadata metadata, boolean notifyTeam);
+  void deleteGitMetadata(FolderHandle folder, GitRepoName repoName);
 
   enum GitRepoResultState {
     ERR_0,
@@ -63,18 +87,19 @@ protocol git {
   }
 
   record GitRepoInfo {
-    Folder folder;
+    FolderHandle folder;
     RepoID repoID;
     GitLocalMetadata localMetadata;
     GitServerMetadata serverMetadata;
     string repoUrl;
     string globalUniqueID;  // for the GUI's convenient bookkeeping
     boolean canDelete;
+    union { null, GitTeamRepoSettings } teamRepoSettings;
   }
 
   // fetch git repos for a single team / implicit team
   // (note that non-team TLFs are mapped to implicit teams on the core side of this)
-  array<GitRepoResult> getGitMetadata(Folder folder);
+  array<GitRepoResult> getGitMetadata(FolderHandle folder);
 
   // fetch git repos for all teams that the user has access to
   array<GitRepoResult> getAllGitMetadata();
@@ -96,4 +121,11 @@ protocol git {
 
   // GC a team repo
   void gcTeamRepo(GitRepoName repoName, TeamName teamName, boolean force);
+
+  record GitTeamRepoSettings {
+    union { null, string } channelName;
+    boolean chatDisabled;
+  }
+  GitTeamRepoSettings getTeamRepoSettings(FolderHandle folder, RepoID repoID);
+  void setTeamRepoSettings(FolderHandle folder, RepoID repoID, union { null, string } channelName, boolean chatDisabled);
 }

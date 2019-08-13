@@ -5,6 +5,7 @@ package chat
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/keybase/client/go/chat/signencrypt"
 	"github.com/keybase/client/go/chat/types"
 	"github.com/keybase/client/go/engine"
+	"github.com/keybase/client/go/ephemeral"
 	"github.com/keybase/client/go/externalstest"
 	"github.com/keybase/client/go/kbtest"
 	"github.com/keybase/client/go/libkb"
@@ -27,9 +29,8 @@ import (
 
 func cryptKey(t *testing.T) *keybase1.CryptKey {
 	kp, err := libkb.GenerateNaclDHKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	return &keybase1.CryptKey{
 		KeyGeneration: 1,
 		Key:           keybase1.Bytes32(*kp.Private),
@@ -38,23 +39,26 @@ func cryptKey(t *testing.T) *keybase1.CryptKey {
 
 func textMsg(t *testing.T, text string, mbVersion chat1.MessageBoxedVersion) chat1.MessagePlaintext {
 	uid, err := libkb.RandBytes(16)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	uid[15] = keybase1.UID_SUFFIX_2
 	return textMsgWithSender(t, text, gregor1.UID(uid), mbVersion)
 }
 
 func textMsgWithSender(t *testing.T, text string, uid gregor1.UID, mbVersion chat1.MessageBoxedVersion) chat1.MessagePlaintext {
 	header := chat1.MessageClientHeader{
-		Sender: uid,
+		Sender:      uid,
+		MessageType: chat1.MessageType_TEXT,
 	}
 	switch mbVersion {
-	case chat1.MessageBoxedVersion_V2:
+	case chat1.MessageBoxedVersion_V1:
+		// no-op
+	case chat1.MessageBoxedVersion_V2, chat1.MessageBoxedVersion_V3, chat1.MessageBoxedVersion_V4:
 		header.MerkleRoot = &chat1.MerkleRoot{
 			Seqno: 12,
 			Hash:  []byte{123, 117, 0, 99, 99, 79, 223, 37, 180, 168, 111, 107, 210, 227, 128, 35, 47, 158, 221, 210, 151, 242, 182, 199, 50, 29, 236, 93, 106, 149, 133, 221, 156, 216, 167, 79, 91, 28, 9, 196, 107, 173, 61, 248, 123, 97, 101, 34, 7, 15, 30, 80, 246, 162, 198, 12, 20, 19, 130, 151, 45, 2, 130, 170},
 		}
+	default:
+		panic("unrecognized version: " + mbVersion.String())
 	}
 	return textMsgWithHeader(t, text, header)
 }
@@ -75,13 +79,16 @@ func setupChatTest(t *testing.T, name string) (*kbtest.ChatTestContext, *Boxer) 
 		isProduction := func() bool {
 			return tc.G.Env.GetRunMode() == libkb.ProductionRunMode
 		}
-		return insecureTriplesec.NewCipher(passphrase, salt, warner, isProduction)
+		return insecureTriplesec.NewCipher(passphrase, salt, libkb.ClientTriplesecVersion, warner, isProduction)
 	}
 
 	ctc := kbtest.ChatTestContext{
 		TestContext: tc,
 		ChatG:       &globals.ChatContext{},
 	}
+	g := globals.NewContext(ctc.G, ctc.ChatG)
+	g.CtxFactory = NewCtxFactory(g)
+
 	return &ctc, NewBoxer(ctc.Context())
 }
 
@@ -89,18 +96,12 @@ func getSigningKeyPairForTest(t *testing.T, tc *kbtest.ChatTestContext, u *kbtes
 	var err error
 	if u == nil {
 		u, err = kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
-	kp, err := tc.G.Keyrings.GetSecretKeyWithPassphrase(nil, u.User, u.Passphrase, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	kp, err := tc.G.Keyrings.GetSecretKeyWithPassphrase(kbtest.NewMetaContextForTest(*tc), u.User, u.Passphrase, nil)
+	require.NoError(t, err)
 	signKP, ok := kp.(libkb.NaclSigningKeyPair)
-	if !ok {
-		t.Fatal("signing key not nacl")
-	}
+	require.True(t, ok)
 	return signKP
 }
 
@@ -123,12 +124,13 @@ func getActiveDevicesAndKeys(tc *kbtest.ChatTestContext, u *kbtest.FakeUser) ([]
 }
 
 func doRevokeDevice(tc *kbtest.ChatTestContext, u *kbtest.FakeUser, id keybase1.DeviceID, force bool) error {
-	revokeEngine := engine.NewRevokeDeviceEngine(engine.RevokeDeviceEngineArgs{ID: id, ForceSelf: force}, tc.G)
-	ctx := &engine.Context{
+	revokeEngine := engine.NewRevokeDeviceEngine(tc.G, engine.RevokeDeviceEngineArgs{ID: id, ForceSelf: force})
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: u.NewSecretUI(),
 	}
-	err := engine.RunEngine(revokeEngine, ctx)
+	m := libkb.NewMetaContextTODO(tc.G).WithUIs(uis)
+	err := engine.RunEngine2(m, revokeEngine)
 	return err
 }
 
@@ -143,16 +145,18 @@ func TestChatMessageBox(t *testing.T) {
 		msg := textMsg(t, "hello", mbVersion)
 		tc, boxer := setupChatTest(t, "box")
 		defer tc.Cleanup()
-		boxed, err := boxer.box(context.TODO(), msg, key, getSigningKeyPairForTest(t, tc, nil), mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, getSigningKeyPairForTest(t, tc, nil), mbVersion, nil)
+		require.NoError(t, err)
+
 		require.Equal(t, mbVersion, boxed.Version)
 		if len(boxed.BodyCiphertext.E) == 0 {
 			t.Error("after boxMessage, BodyCipherText.E is empty")
 		}
 	})
 }
+
+var convInfo = newBasicUnboxConversationInfo([]byte{0, 0, 1}, chat1.ConversationMembersType_KBFS, nil,
+	keybase1.TLFVisibility_PRIVATE)
 
 func TestChatMessageUnbox(t *testing.T) {
 	doWithMBVersions(func(mbVersion chat1.MessageBoxedVersion) {
@@ -163,18 +167,17 @@ func TestChatMessageUnbox(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 		outboxID := chat1.OutboxID{0xdc, 0x74, 0x6, 0x5d, 0xf9, 0x5f, 0x1c, 0x48}
 		msg.ClientHeader.OutboxID = &outboxID
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
 		require.NoError(t, err)
-		boxed = remarshalBoxed(t, *boxed)
+		boxed = remarshalBoxed(t, boxed)
 
 		if boxed.ClientHeader.OutboxID == msg.ClientHeader.OutboxID {
 			t.Fatalf("defective test: %+v   ==   %+v", boxed.ClientHeader.OutboxID, msg.ClientHeader.OutboxID)
@@ -185,20 +188,208 @@ func TestChatMessageUnbox(t *testing.T) {
 			Ctime: gregor1.ToTime(time.Now()),
 		}
 
-		unboxed, err := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
-		if err != nil {
-			t.Fatal(err)
-		}
+		unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+		require.NoError(t, err)
 		body := unboxed.MessageBody
-		if typ, _ := body.MessageType(); typ != chat1.MessageType_TEXT {
-			t.Errorf("body type: %d, expected %d", typ, chat1.MessageType_TEXT)
-		}
-		if body.Text().Body != text {
-			t.Errorf("body text: %q, expected %q", body.Text().Body, text)
-		}
+		typ, err := body.MessageType()
+		require.NoError(t, err)
+		require.Equal(t, typ, chat1.MessageType_TEXT)
+		require.Equal(t, body.Text().Body, text)
 		require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
 		require.NotNil(t, unboxed.BodyHash)
 	})
+}
+
+func TestChatMessageUnboxWithPairwiseMacs(t *testing.T) {
+	tc, boxer := setupChatTest(t, "unbox")
+	defer tc.Cleanup()
+
+	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+	require.NoError(t, err)
+
+	text := "hi"
+	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), chat1.MessageBoxedVersion_V3)
+	outboxID := chat1.OutboxID{0xdc, 0x74, 0x6, 0x5d, 0xf9, 0x5f, 0x1c, 0x48}
+	msg.ClientHeader.OutboxID = &outboxID
+	// Pairwise MACs rely on the sender's DeviceID in the header.
+	deviceID := make([]byte, libkb.DeviceIDLen)
+	err = tc.G.ActiveDevice.DeviceID().ToBytes(deviceID)
+	require.NoError(t, err)
+	msg.ClientHeader.SenderDevice = gregor1.DeviceID(deviceID)
+
+	signKP := getSigningKeyPairForTest(t, tc, u)
+
+	encryptionKeypair, err := tc.G.ActiveDevice.NaclEncryptionKey()
+	require.NoError(t, err)
+	pairwiseMACRecipients := []keybase1.KID{encryptionKeypair.GetKID()}
+
+	key := cryptKey(t)
+	boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, chat1.MessageBoxedVersion_V3, pairwiseMACRecipients)
+	require.NoError(t, err)
+	boxed = remarshalBoxed(t, boxed)
+	require.NotEqual(t, outboxID, boxed.ClientHeader.OutboxID)
+
+	// need to give it a server header...
+	boxed.ServerHeader = &chat1.MessageServerHeader{
+		Ctime: gregor1.ToTime(time.Now()),
+	}
+
+	unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+	require.NoError(t, err)
+
+	require.True(t, unboxed.ClientHeader.HasPairwiseMacs)
+	body := unboxed.MessageBody
+	typ, err := body.MessageType()
+	require.NoError(t, err)
+
+	require.Equal(t, typ, chat1.MessageType_TEXT)
+	require.Equal(t, body.Text().Body, text)
+
+	require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
+	require.NotNil(t, unboxed.BodyHash)
+}
+
+func TestChatMessageUnboxWithPairwiseMacsCorrupted(t *testing.T) {
+	tc, boxer := setupChatTest(t, "unbox")
+	defer tc.Cleanup()
+
+	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+	require.NoError(t, err)
+
+	text := "hi"
+	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), chat1.MessageBoxedVersion_V3)
+	outboxID := chat1.OutboxID{0xdc, 0x74, 0x6, 0x5d, 0xf9, 0x5f, 0x1c, 0x48}
+	msg.ClientHeader.OutboxID = &outboxID
+	// Pairwise MACs rely on the sender's DeviceID in the header.
+	deviceID := make([]byte, libkb.DeviceIDLen)
+	err = tc.G.ActiveDevice.DeviceID().ToBytes(deviceID)
+	require.NoError(t, err)
+
+	msg.ClientHeader.SenderDevice = gregor1.DeviceID(deviceID)
+	signKP := getSigningKeyPairForTest(t, tc, u)
+
+	encryptionKeypair, err := tc.G.ActiveDevice.NaclEncryptionKey()
+	require.NoError(t, err)
+	pairwiseMACRecipients := []keybase1.KID{encryptionKeypair.GetKID()}
+
+	key := cryptKey(t)
+	boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, chat1.MessageBoxedVersion_V3, pairwiseMACRecipients)
+	require.NoError(t, err)
+
+	boxed = remarshalBoxed(t, boxed)
+	require.NotEqual(t, outboxID, boxed.ClientHeader.OutboxID)
+
+	// need to give it a server header...
+	boxed.ServerHeader = &chat1.MessageServerHeader{
+		Ctime: gregor1.ToTime(time.Now()),
+	}
+
+	// CORRUPT THE AUTHENTICATOR!!!
+	for _, mac := range boxed.ClientHeader.PairwiseMacs {
+		mac[0] ^= 1
+	}
+
+	_, err = boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+	require.Error(t, err)
+
+	// Check that we get the right failure type.
+	permErr, ok := err.(PermanentUnboxingError)
+	require.True(t, ok)
+	_, ok = permErr.Inner().(InvalidMACError)
+	require.True(t, ok)
+}
+
+func TestChatMessageUnboxWithPairwiseMacsMissing(t *testing.T) {
+	tc, boxer := setupChatTest(t, "unbox")
+	defer tc.Cleanup()
+
+	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+	require.NoError(t, err)
+
+	text := "hi"
+	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), chat1.MessageBoxedVersion_V3)
+	outboxID := chat1.OutboxID{0xdc, 0x74, 0x6, 0x5d, 0xf9, 0x5f, 0x1c, 0x48}
+	msg.ClientHeader.OutboxID = &outboxID
+
+	// Pairwise MACs rely on the sender's DeviceID in the header.
+	deviceID := make([]byte, libkb.DeviceIDLen)
+	err = tc.G.ActiveDevice.DeviceID().ToBytes(deviceID)
+	require.NoError(t, err)
+	msg.ClientHeader.SenderDevice = gregor1.DeviceID(deviceID)
+
+	// Put a bogus key in the recipients list, instead of our own.
+	bogusKey, err := libkb.GenerateNaclDHKeyPair()
+	require.NoError(t, err)
+	pairwiseMACRecipients := []keybase1.KID{bogusKey.GetKID()}
+
+	key := cryptKey(t)
+	signKP := getSigningKeyPairForTest(t, tc, u)
+	boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, chat1.MessageBoxedVersion_V3, pairwiseMACRecipients)
+	require.NoError(t, err)
+	boxed = remarshalBoxed(t, boxed)
+	require.NotEqual(t, outboxID, boxed.ClientHeader.OutboxID)
+
+	// need to give it a server header...
+	boxed.ServerHeader = &chat1.MessageServerHeader{
+		Ctime: gregor1.ToTime(time.Now()),
+	}
+
+	_, err = boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+	require.Error(t, err)
+
+	// Check that we get the right failure type.
+	permErr, ok := err.(PermanentUnboxingError)
+	require.True(t, ok)
+	_, ok = permErr.Inner().(NotAuthenticatedForThisDeviceError)
+	require.True(t, ok)
+}
+
+func TestChatMessageUnboxWithPairwiseMacsV4DummySigner(t *testing.T) {
+	tc, boxer := setupChatTest(t, "unbox")
+	defer tc.Cleanup()
+
+	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+	require.NoError(t, err)
+
+	text := "hi"
+	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), chat1.MessageBoxedVersion_V4)
+	outboxID := chat1.OutboxID{0xdc, 0x74, 0x6, 0x5d, 0xf9, 0x5f, 0x1c, 0x48}
+	msg.ClientHeader.OutboxID = &outboxID
+
+	// Pairwise MACs rely on the sender's DeviceID in the header.
+	deviceID := make([]byte, libkb.DeviceIDLen)
+	err = tc.G.ActiveDevice.DeviceID().ToBytes(deviceID)
+	require.NoError(t, err)
+	msg.ClientHeader.SenderDevice = gregor1.DeviceID(deviceID)
+
+	// V4 messages require this keypair.
+	encryptionKeypair, err := tc.G.ActiveDevice.NaclEncryptionKey()
+	require.NoError(t, err)
+	pairwiseMACRecipients := []keybase1.KID{encryptionKeypair.GetKID()}
+
+	key := cryptKey(t)
+	signKP := dummySigningKey()
+	boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, chat1.MessageBoxedVersion_V4, pairwiseMACRecipients)
+	require.NoError(t, err)
+	boxed = remarshalBoxed(t, boxed)
+	require.NotEqual(t, outboxID, boxed.ClientHeader.OutboxID)
+
+	// need to give it a server header...
+	boxed.ServerHeader = &chat1.MessageServerHeader{
+		Ctime: gregor1.ToTime(time.Now()),
+	}
+
+	unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+	require.NoError(t, err)
+
+	require.True(t, unboxed.ClientHeader.HasPairwiseMacs)
+	body := unboxed.MessageBody
+	typ, err := body.MessageType()
+	require.NoError(t, err)
+	require.Equal(t, typ, chat1.MessageType_TEXT)
+	require.Equal(t, body.Text().Body, text)
+	require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
+	require.NotNil(t, unboxed.BodyHash)
 }
 
 func TestChatMessageMissingOutboxID(t *testing.T) {
@@ -211,23 +402,21 @@ func TestChatMessageMissingOutboxID(t *testing.T) {
 
 	// need a real user
 	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 	outboxID := chat1.OutboxID{0xdc, 0x74, 0x6, 0x5d, 0xf9, 0x5f, 0x1c, 0x48}
 	msg.ClientHeader.OutboxID = &outboxID
 
 	signKP := getSigningKeyPairForTest(t, tc, u)
 
-	boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
+	boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
 	require.NoError(t, err)
-	boxed = remarshalBoxed(t, *boxed)
+	boxed = remarshalBoxed(t, boxed)
 
 	if boxed.ClientHeader.OutboxID == msg.ClientHeader.OutboxID {
 		t.Fatalf("defective test: %+v   ==   %+v", boxed.ClientHeader.OutboxID, msg.ClientHeader.OutboxID)
 	}
-
 	// omit outbox id
 	boxed.ClientHeader.OutboxID = nil
 
@@ -236,7 +425,7 @@ func TestChatMessageMissingOutboxID(t *testing.T) {
 		Ctime: gregor1.ToTime(time.Now()),
 	}
 
-	_, uberr := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+	_, uberr := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 	require.Error(t, uberr)
 	ierr, ok := uberr.Inner().(HeaderMismatchError)
 	require.True(t, ok, "unexpected error: %T -> %T -> %v", uberr, uberr.Inner(), uberr)
@@ -252,9 +441,8 @@ func TestChatMessageInvalidBodyHash(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
@@ -266,10 +454,8 @@ func TestChatMessageInvalidBodyHash(t *testing.T) {
 			return sum[:]
 		}
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		// need to give it a server header...
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -279,10 +465,55 @@ func TestChatMessageInvalidBodyHash(t *testing.T) {
 		// put original hash fn back
 		boxer.hashV1 = origHashFn
 
-		_, ierr := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
-		if _, ok := ierr.Inner().(BodyHashInvalid); !ok {
-			t.Fatalf("unexpected error for invalid body hash: %s", ierr)
+		_, ierr := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+		_, ok := ierr.Inner().(BodyHashInvalid)
+		require.True(t, ok)
+	})
+}
+
+func TestChatMessageMismatchMessageType(t *testing.T) {
+	doWithMBVersions(func(mbVersion chat1.MessageBoxedVersion) {
+		tc, boxer := setupChatTest(t, "unbox")
+		defer tc.Cleanup()
+
+		world := NewChatMockWorld(t, "unbox", 4)
+		u := world.GetUsers()[0]
+		tc = world.Tcs[u.Username]
+		uid := u.User.GetUID().ToBytes()
+		tlf := kbtest.NewTlfMock(world)
+		ctx := newTestContextWithTlfMock(tc, tlf)
+
+		ni, err := tlf.LookupID(ctx, u.Username, false)
+		require.NoError(t, err)
+		header := chat1.MessageClientHeader{
+			Conv: chat1.ConversationIDTriple{
+				Tlfid: ni.ID,
+			},
+			Sender:      uid,
+			TlfPublic:   false,
+			TlfName:     u.Username,
+			MessageType: chat1.MessageType_TEXT,
 		}
+		msg := textMsgWithHeader(t, "MIKE", header)
+		msg.MessageBody = chat1.NewMessageBodyWithEdit(chat1.MessageEdit{})
+
+		signKP := getSigningKeyPairForTest(t, tc, u)
+		boxer.boxVersionForTesting = &mbVersion
+		boxed, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP, nil)
+		require.NoError(t, err)
+		boxed.ServerHeader = &chat1.MessageServerHeader{
+			Ctime: gregor1.ToTime(time.Now()),
+		}
+
+		convID := header.Conv.ToConversationID([2]byte{0, 0})
+		conv := chat1.Conversation{
+			Metadata: chat1.ConversationMetadata{
+				ConversationID: convID,
+			},
+		}
+		decmsg, err := boxer.UnboxMessage(ctx, boxed, conv, nil)
+		require.NoError(t, err)
+		require.False(t, decmsg.IsValid())
 	})
 }
 
@@ -298,7 +529,12 @@ func TestChatMessageUnboxInvalidBodyHash(t *testing.T) {
 		tlf := kbtest.NewTlfMock(world)
 		ctx := newTestContextWithTlfMock(tc, tlf)
 
+		ni, err := tlf.LookupID(ctx, u.Username, false)
+		require.NoError(t, err)
 		header := chat1.MessageClientHeader{
+			Conv: chat1.ConversationIDTriple{
+				Tlfid: ni.ID,
+			},
 			Sender:    uid,
 			TlfPublic: false,
 			TlfName:   u.Username,
@@ -315,11 +551,9 @@ func TestChatMessageUnboxInvalidBodyHash(t *testing.T) {
 			return sum[:]
 		}
 
-		boxer.boxWithVersion = mbVersion
-		boxed, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxer.boxVersionForTesting = &mbVersion
+		boxed, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP, nil)
+		require.NoError(t, err)
 
 		// need to give it a server header...
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -338,13 +572,9 @@ func TestChatMessageUnboxInvalidBodyHash(t *testing.T) {
 		}
 
 		// This should produce a permanent error. So err will be nil, but the decmsg will be state=error.
-		decmsg, err := boxer.UnboxMessage(ctx, *boxed, conv)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if decmsg.IsValid() {
-			t.Fatalf("message should not be unboxable")
-		}
+		decmsg, err := boxer.UnboxMessage(ctx, boxed, conv, nil)
+		require.NoError(t, err)
+		require.False(t, decmsg.IsValid())
 	})
 }
 
@@ -370,8 +600,8 @@ func TestChatMessageUnboxNoCryptKey(t *testing.T) {
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
-		boxer.boxWithVersion = mbVersion
-		_, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP)
+		boxer.boxVersionForTesting = &mbVersion
+		_, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP, nil)
 		require.Error(t, err)
 	})
 }
@@ -385,9 +615,7 @@ func TestChatMessageInvalidHeaderSig(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
@@ -400,10 +628,8 @@ func TestChatMessageInvalidHeaderSig(t *testing.T) {
 			return sig
 		}
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		require.True(t, called, "mangle must be called")
 
@@ -412,19 +638,17 @@ func TestChatMessageInvalidHeaderSig(t *testing.T) {
 			Ctime: gregor1.ToTime(time.Now()),
 		}
 
-		_, ierr := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+		_, ierr := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 		require.NotNil(t, ierr, "must have unbox error")
 		switch mbVersion {
 		case chat1.MessageBoxedVersion_V1:
-			if _, ok := ierr.Inner().(libkb.BadSigError); !ok {
-				t.Fatalf("unexpected error for invalid header signature: [%T] %s", ierr.Inner(), ierr)
-			}
+			_, ok := ierr.Inner().(libkb.BadSigError)
+			require.True(t, ok)
 		case chat1.MessageBoxedVersion_V2:
-			if _, ok := ierr.Inner().(signencrypt.Error); !ok {
-				t.Fatalf("unexpected error for invalid header signature: [%T] %s", ierr.Inner(), ierr)
-			}
+			_, ok := ierr.Inner().(signencrypt.Error)
+			require.True(t, ok)
 		default:
-			t.Fatalf("unexpected version: %v", mbVersion)
+			require.Fail(t, "unexpected version: %v", mbVersion)
 		}
 	})
 }
@@ -438,31 +662,24 @@ func TestChatMessageInvalidSenderKey(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 
 		// use a random signing key, not one of u's keys
 		signKP, err := libkb.GenerateNaclSigningKeyPair()
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		boxed.ServerHeader = &chat1.MessageServerHeader{
 			Ctime: gregor1.ToTime(time.Now()),
 		}
 
-		_, ierr := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+		_, ierr := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 		if ierr != nil {
-			if _, ok := ierr.Inner().(libkb.NoKeyError); !ok {
-				t.Fatalf("unexpected error for invalid sender key: %v", ierr)
-			}
+			_, ok := ierr.Inner().(libkb.NoKeyError)
+			require.True(t, ok)
 		}
 	})
 }
@@ -512,7 +729,7 @@ func TestChatMessageRevokedKeyThenSent(t *testing.T) {
 		// Sign a message using a key of u's that has been revoked
 		t.Logf("signing message")
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
 		require.NoError(t, err)
 
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -520,16 +737,28 @@ func TestChatMessageRevokedKeyThenSent(t *testing.T) {
 		}
 
 		// The message should not unbox
-		_, ierr := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+		_, ierr := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 		require.NotNil(t, ierr, "unboxing must err because key was revoked before send")
 		require.IsType(t, libkb.NoKeyError{}, ierr.Inner(), "unexpected error for revoked sender key: %v", ierr)
 
 		// Test key validity
-		found, validAtCtime, revoked, err := boxer.ValidSenderKey(context.TODO(), gregor1.UID(u.User.GetUID().ToBytes()), signKP.GetBinaryKID(), boxed.ServerHeader.Ctime)
-		require.NoError(t, err, "ValidSenderKey")
-		require.True(t, found, "revoked key should be found (v:%v r:%v)", found, revoked)
-		require.False(t, validAtCtime, "revoked key should be invalid (v:%v r:%v)", validAtCtime, revoked)
-		require.NotNil(t, revoked, "key should be revoked (v:%v r:%v)", validAtCtime, revoked)
+		revoked, err := boxer.ValidSenderKey(context.TODO(), gregor1.UID(u.User.GetUID().ToBytes()), signKP.GetBinaryKID(), boxed.ServerHeader.Ctime)
+		require.Error(t, err, "ValidSenderKey")
+		require.IsType(t, PermanentUnboxingError{}, err)
+		require.Equal(t, "key invalid for sender at message ctime",
+			err.(PermanentUnboxingError).Inner().(libkb.NoKeyError).Msg)
+		require.NotNil(t, revoked)
+
+		// test out quick mode and resolve
+		ctx := globals.CtxModifyUnboxMode(context.TODO(), types.UnboxModeQuick)
+		unboxed, ierr := boxer.unbox(ctx, boxed, convInfo, key, nil)
+		require.NoError(t, ierr)
+		require.NotNil(t, unboxed)
+		resolved, modified, err := boxer.ResolveSkippedUnboxed(ctx,
+			chat1.NewMessageUnboxedWithValid(*unboxed))
+		require.NoError(t, err)
+		require.True(t, resolved.IsError())
+		require.True(t, modified)
 	})
 }
 
@@ -567,7 +796,7 @@ func TestChatMessageSentThenRevokedSenderKey(t *testing.T) {
 		// Sign a message using a key of u's that has not yet been revoked
 		t.Logf("signing message")
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
 		require.NoError(t, err)
 
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -583,16 +812,26 @@ func TestChatMessageSentThenRevokedSenderKey(t *testing.T) {
 		require.NoError(t, err, "revoke device")
 
 		// The message should unbox but with senderDeviceRevokedAt set
-		unboxed, ierr := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+		unboxed, ierr := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 		require.Nil(t, ierr, "unboxing err")
 		require.NotNil(t, unboxed.SenderDeviceRevokedAt, "message should be noticed as signed by revoked key")
 
 		// Test key validity
-		found, validAtCtime, revoked, err := boxer.ValidSenderKey(context.TODO(), gregor1.UID(u.User.GetUID().ToBytes()), signKP.GetBinaryKID(), boxed.ServerHeader.Ctime)
+		revoked, err := boxer.ValidSenderKey(context.TODO(), gregor1.UID(u.User.GetUID().ToBytes()), signKP.GetBinaryKID(), boxed.ServerHeader.Ctime)
 		require.NoError(t, err, "ValidSenderKey")
-		require.True(t, found, "revoked key should be found (v:%v r:%v)", found, revoked)
-		require.True(t, validAtCtime, "revoked key should be valid at time (v:%v r:%v)", validAtCtime, revoked)
-		require.NotNil(t, revoked, "key should be revoked (v:%v r:%v)", validAtCtime, revoked)
+		require.NotNil(t, revoked)
+
+		// test quick mode and resolver
+		ctx := globals.CtxModifyUnboxMode(context.TODO(), types.UnboxModeQuick)
+		unboxed, ierr = boxer.unbox(ctx, boxed, convInfo, key, nil)
+		require.NoError(t, ierr)
+		require.Nil(t, unboxed.SenderDeviceRevokedAt)
+		resolved, modified, err := boxer.ResolveSkippedUnboxed(ctx,
+			chat1.NewMessageUnboxedWithValid(*unboxed))
+		require.NoError(t, err)
+		require.True(t, resolved.IsValid())
+		require.NotNil(t, resolved.Valid().SenderDeviceRevokedAt)
+		require.True(t, modified)
 	})
 }
 
@@ -609,20 +848,25 @@ func TestChatMessagePublic(t *testing.T) {
 		tlf := kbtest.NewTlfMock(world)
 		ctx := newTestContextWithTlfMock(tc, tlf)
 
+		ni, err := tlf.LookupID(ctx, u.Username, true)
+		require.NoError(t, err)
 		header := chat1.MessageClientHeader{
-			Sender:    uid,
-			TlfPublic: true,
-			TlfName:   u.Username,
+			Conv: chat1.ConversationIDTriple{
+				Tlfid: ni.ID,
+			},
+			Sender:      uid,
+			TlfPublic:   true,
+			TlfName:     u.Username,
+			MessageType: chat1.MessageType_TEXT,
 		}
 		msg := textMsgWithHeader(t, text, header)
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
-		boxer.boxWithVersion = mbVersion
-		boxed, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxer.boxVersionForTesting = &mbVersion
+		boxed, err := boxer.BoxMessage(ctx, msg, chat1.ConversationMembersType_KBFS, signKP, nil)
+		require.NoError(t, err)
+
 		_ = boxed
 
 		// need to give it a server header...
@@ -635,23 +879,19 @@ func TestChatMessagePublic(t *testing.T) {
 		conv := chat1.Conversation{
 			Metadata: chat1.ConversationMetadata{
 				ConversationID: convID,
+				Visibility:     keybase1.TLFVisibility_PUBLIC,
 			},
 		}
 
-		decmsg, err := boxer.UnboxMessage(ctx, *boxed, conv)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !decmsg.IsValid() {
-			t.Fatalf("decmsg is not valid")
-		}
+		decmsg, err := boxer.UnboxMessage(ctx, boxed, conv, nil)
+		require.NoError(t, err)
+		require.True(t, decmsg.IsValid())
+
 		body := decmsg.Valid().MessageBody
-		if typ, _ := body.MessageType(); typ != chat1.MessageType_TEXT {
-			t.Errorf("body type: %d, expected %d", typ, chat1.MessageType_TEXT)
-		}
-		if body.Text().Body != text {
-			t.Errorf("body text: %q, expected %q", body.Text().Body, text)
-		}
+		typ, err := body.MessageType()
+		require.NoError(t, err)
+		require.Equal(t, typ, chat1.MessageType_TEXT)
+		require.Equal(t, body.Text().Body, text)
 	})
 }
 
@@ -659,6 +899,9 @@ func TestChatMessagePublic(t *testing.T) {
 // This prevents one kind of misattribution within a tlf.
 // Device mismatches are probably tolerated.
 func TestChatMessageSenderMismatch(t *testing.T) {
+
+	var allUIDs []keybase1.UID
+
 	doWithMBVersions(func(mbVersion chat1.MessageBoxedVersion) {
 		key := cryptKey(t)
 		text := "hi"
@@ -667,18 +910,18 @@ func TestChatMessageSenderMismatch(t *testing.T) {
 
 		u2, err := kbtest.CreateAndSignupFakeUser("chat", tc.G)
 		require.NoError(t, err)
+		allUIDs = append(allUIDs, u2.GetUID())
 
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
 		require.NoError(t, err)
+		allUIDs = append(allUIDs, u.GetUID())
 
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		// need to give it a server header...
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -688,9 +931,23 @@ func TestChatMessageSenderMismatch(t *testing.T) {
 		// Set the outer sender to something else
 		boxed.ClientHeader.Sender = gregor1.UID(gregor1.UID(u2.User.GetUID().ToBytes()))
 
-		_, err = boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+		_, err = boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 		require.Error(t, err, "should not unbox with sender mismatch")
 	})
+
+	tc := libkb.SetupTest(t, "batch", 0)
+	defer tc.Cleanup()
+
+	// Just check that batch fetching of device encryption keys work.
+	// Use the 4 users we've collected in this test.
+	var uvs []keybase1.UserVersion
+	for _, uid := range allUIDs {
+		uvs = append(uvs, keybase1.UserVersion{Uid: uid})
+	}
+
+	keys, err := batchLoadEncryptionKIDs(context.TODO(), tc.G, uvs)
+	require.NoError(t, err, "no error")
+	require.Equal(t, len(keys), len(uvs), "one key per user")
 }
 
 // Test a message that deletes
@@ -703,9 +960,8 @@ func TestChatMessageDeletes(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 		deleteIDs := []chat1.MessageID{5, 6, 7}
 		msg.MessageBody = chat1.NewMessageBodyWithDelete(chat1.MessageDelete{MessageIDs: deleteIDs})
@@ -714,10 +970,8 @@ func TestChatMessageDeletes(t *testing.T) {
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		// need to give it a server header...
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -725,8 +979,8 @@ func TestChatMessageDeletes(t *testing.T) {
 			SupersededBy: 4,
 		}
 
-		unboxed, err := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
-		require.NoError(t, err, "deleted message should still unbox")
+		unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+		require.NoError(t, err)
 		body := unboxed.MessageBody
 		typ, err := body.MessageType()
 		require.NoError(t, err)
@@ -738,41 +992,40 @@ func TestChatMessageDeletes(t *testing.T) {
 // Test a message with a deleted body
 func TestChatMessageDeleted(t *testing.T) {
 	doWithMBVersions(func(mbVersion chat1.MessageBoxedVersion) {
-		key := cryptKey(t)
-		text := "hi"
-		tc, boxer := setupChatTest(t, "unbox")
-		defer tc.Cleanup()
+		for _, supersededBy := range []chat1.MessageID{0, 4} {
+			key := cryptKey(t)
+			text := "hi"
+			tc, boxer := setupChatTest(t, "unbox")
+			defer tc.Cleanup()
 
-		// need a real user
-		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
+			// need a real user
+			u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+			require.NoError(t, err)
+
+			msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
+
+			signKP := getSigningKeyPairForTest(t, tc, u)
+
+			boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+			require.NoError(t, err)
+
+			// need to give it a server header...
+			boxed.ServerHeader = &chat1.MessageServerHeader{
+				Ctime:        gregor1.ToTime(time.Now()),
+				SupersededBy: supersededBy,
+			}
+
+			// Delete the body
+			boxed.BodyCiphertext = chat1.EncryptedData{}
+
+			unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+			require.NoError(t, err, "deleted message should still unbox")
+			body := unboxed.MessageBody
+			typ, err := body.MessageType()
+			require.NoError(t, err)
+			require.Equal(t, typ, chat1.MessageType_NONE)
+			require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
 		}
-		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
-
-		signKP := getSigningKeyPairForTest(t, tc, u)
-
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// need to give it a server header...
-		boxed.ServerHeader = &chat1.MessageServerHeader{
-			Ctime:        gregor1.ToTime(time.Now()),
-			SupersededBy: 4,
-		}
-
-		// Delete the body
-		boxed.BodyCiphertext = chat1.EncryptedData{}
-
-		unboxed, err := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
-		require.NoError(t, err, "deleted message should still unbox")
-		body := unboxed.MessageBody
-		typ, err := body.MessageType()
-		require.NoError(t, err)
-		require.Equal(t, typ, chat1.MessageType_NONE)
-		require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
 	})
 }
 
@@ -786,17 +1039,14 @@ func TestChatMessageDeletedNotSuperseded(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		// need to give it a server header...
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -806,13 +1056,51 @@ func TestChatMessageDeletedNotSuperseded(t *testing.T) {
 		// Delete the body
 		boxed.BodyCiphertext.E = []byte{}
 
-		unboxed, err := boxer.unbox(context.TODO(), *boxed, chat1.ConversationMembersType_KBFS, key)
+		unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
 		// The server was not setting supersededBy on EDITs when their TEXT got deleted.
 		// So there are existing messages which have no supersededBy but are legitimately deleted.
 		// Tracked in CORE-4662
 		require.NoError(t, err, "suprisingly, should be able to unbox with deleted but no supersededby")
 		require.Equal(t, chat1.MessageBody{}, unboxed.MessageBody)
 	})
+}
+
+// Test a DeleteHistory message.
+func TestChatMessageDeleteHistory(t *testing.T) {
+	mbVersion := chat1.MessageBoxedVersion_V2
+	key := cryptKey(t)
+	text := "hi"
+	tc, boxer := setupChatTest(t, "unbox")
+	defer tc.Cleanup()
+
+	// need a real user
+	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+	require.NoError(t, err)
+
+	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
+	mdh := chat1.MessageDeleteHistory{Upto: chat1.MessageID(4)}
+	msg.MessageBody = chat1.NewMessageBodyWithDeletehistory(mdh)
+	msg.ClientHeader.DeleteHistory = &mdh
+
+	signKP := getSigningKeyPairForTest(t, tc, u)
+
+	boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+	require.NoError(t, err)
+
+	// need to give it a server header...
+	boxed.ServerHeader = &chat1.MessageServerHeader{
+		Ctime:        gregor1.ToTime(time.Now()),
+		SupersededBy: 4,
+	}
+
+	unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo, key, nil)
+	require.NoError(t, err)
+	body := unboxed.MessageBody
+	typ, err := body.MessageType()
+	require.NoError(t, err)
+	require.Equal(t, typ, chat1.MessageType_DELETEHISTORY)
+	require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
+	require.Equal(t, mdh, unboxed.MessageBody.Deletehistory())
 }
 
 func TestV1Message1(t *testing.T) {
@@ -831,8 +1119,8 @@ func TestV1Message1(t *testing.T) {
 	require.Equal(t, canned.encryptionKeyGeneration, boxed.KeyGeneration)
 
 	// Unbox
-	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), chat1.ConversationMembersType_KBFS,
-		canned.EncryptionKey(t))
+	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), convInfo,
+		canned.EncryptionKey(t), nil)
 	require.NoError(t, err)
 
 	// Check some features of the unboxed
@@ -868,7 +1156,7 @@ func TestV1Message1(t *testing.T) {
 	require.Equal(t, canned.headerHash, unboxed.HeaderHash.String())
 	require.NotNil(t, unboxed.HeaderSignature)
 	require.Equal(t, canned.VerifyKey(t), unboxed.HeaderSignature.K)
-	require.Nil(t, unboxed.VerificationKey) // nil for MB.V1
+	require.NotNil(t, unboxed.VerificationKey)
 	require.Nil(t, unboxed.SenderDeviceRevokedAt)
 }
 
@@ -888,8 +1176,8 @@ func TestV1Message2(t *testing.T) {
 	require.Equal(t, canned.encryptionKeyGeneration, boxed.KeyGeneration)
 
 	// Unbox
-	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), chat1.ConversationMembersType_KBFS,
-		canned.EncryptionKey(t))
+	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), convInfo,
+		canned.EncryptionKey(t), nil)
 	require.NoError(t, err)
 
 	// Check some features of the unboxed
@@ -923,7 +1211,7 @@ func TestV1Message2(t *testing.T) {
 	require.Equal(t, canned.headerHash, unboxed.HeaderHash.String())
 	require.NotNil(t, unboxed.HeaderSignature)
 	require.Equal(t, canned.VerifyKey(t), unboxed.HeaderSignature.K)
-	require.Nil(t, unboxed.VerificationKey) // nil for MB.V1
+	require.NotNil(t, unboxed.VerificationKey)
 	require.Nil(t, unboxed.SenderDeviceRevokedAt)
 }
 
@@ -946,8 +1234,8 @@ func TestV1Message3(t *testing.T) {
 	require.Nil(t, boxed.ClientHeader.Deletes)
 
 	// Unbox
-	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), chat1.ConversationMembersType_KBFS,
-		canned.EncryptionKey(t))
+	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), convInfo,
+		canned.EncryptionKey(t), nil)
 	require.NoError(t, err)
 
 	// Check some features of the unboxed
@@ -981,7 +1269,7 @@ func TestV1Message3(t *testing.T) {
 	require.Equal(t, canned.headerHash, unboxed.HeaderHash.String())
 	require.NotNil(t, unboxed.HeaderSignature)
 	require.Equal(t, canned.VerifyKey(t), unboxed.HeaderSignature.K)
-	require.Nil(t, unboxed.VerificationKey) // nil for MB.V1
+	require.NotNil(t, unboxed.VerificationKey)
 	require.Nil(t, unboxed.SenderDeviceRevokedAt)
 }
 
@@ -1004,8 +1292,8 @@ func TestV1Message4(t *testing.T) {
 	require.Nil(t, boxed.ClientHeader.Deletes)
 
 	// Unbox
-	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), chat1.ConversationMembersType_KBFS,
-		canned.EncryptionKey(t))
+	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), convInfo,
+		canned.EncryptionKey(t), nil)
 	require.NoError(t, err)
 
 	// Check some features of the unboxed
@@ -1043,7 +1331,7 @@ func TestV1Message4(t *testing.T) {
 	require.Equal(t, canned.headerHash, unboxed.HeaderHash.String())
 	require.NotNil(t, unboxed.HeaderSignature)
 	require.Equal(t, canned.VerifyKey(t), unboxed.HeaderSignature.K)
-	require.Nil(t, unboxed.VerificationKey) // nil for MB.V1
+	require.NotNil(t, unboxed.VerificationKey)
 	require.Nil(t, unboxed.SenderDeviceRevokedAt)
 }
 
@@ -1067,8 +1355,8 @@ func TestV1Message5(t *testing.T) {
 	require.Equal(t, expectedDeletesIDs, boxed.ClientHeader.Deletes)
 
 	// Unbox
-	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), chat1.ConversationMembersType_KBFS,
-		canned.EncryptionKey(t))
+	unboxed, err := boxer.unbox(context.TODO(), canned.AsBoxed(t), convInfo,
+		canned.EncryptionKey(t), nil)
 	require.NoError(t, err)
 
 	// Check some features of the unboxed
@@ -1105,7 +1393,7 @@ func TestV1Message5(t *testing.T) {
 	require.Equal(t, canned.headerHash, unboxed.HeaderHash.String())
 	require.NotNil(t, unboxed.HeaderSignature)
 	require.Equal(t, canned.VerifyKey(t), unboxed.HeaderSignature.K)
-	require.Nil(t, unboxed.VerificationKey) // nil for MB.V1
+	require.NotNil(t, unboxed.VerificationKey)
 	require.Nil(t, unboxed.SenderDeviceRevokedAt)
 }
 
@@ -1115,11 +1403,11 @@ func modifyBoxerForTesting(t *testing.T, boxer *Boxer, canned *cannedMessage) {
 		require.Equal(t, canned.SenderDeviceID(t), did)
 		return canned.senderUsername, canned.senderDeviceName, canned.senderDeviceType
 	}
-	boxer.testingValidSenderKey = func(ctx context.Context, uid gregor1.UID, verifyKey []byte, ctime gregor1.Time) (found, validAtCTime bool, revoked *gregor1.Time, unboxingErr UnboxingError) {
+	boxer.testingValidSenderKey = func(ctx context.Context, uid gregor1.UID, verifyKey []byte, ctime gregor1.Time) (revoked *gregor1.Time, unboxingErr types.UnboxingError) {
 		require.Equal(t, canned.SenderUID(t), uid)
 		require.Equal(t, canned.VerifyKey(t), verifyKey)
 		// ignore ctime, always report the key as still valid
-		return true, true, nil, nil
+		return nil, nil
 	}
 }
 
@@ -1143,16 +1431,15 @@ func TestChatMessageBodyHashReplay(t *testing.T) {
 
 		// need a real user
 		u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		signKP := getSigningKeyPairForTest(t, tc, u)
 
 		// Generate an encryption key and create a fake finder to fetch it.
 		key := cryptKey(t)
-		finder := NewKeyFinderMock([]keybase1.CryptKey{*key})
-		boxerContext := context.WithValue(context.Background(), kfKey, finder)
+		g := globals.NewContext(tc.G, tc.ChatG)
+		g.CtxFactory = newMockCtxFactory(g, []keybase1.CryptKey{*key})
+		boxerContext := globals.BackgroundChatCtx(context.TODO(), g)
 
 		// This message has an all zeros ConversationIDTriple, but that's fine. We
 		// can still extract the ConvID from it.
@@ -1163,10 +1450,8 @@ func TestChatMessageBodyHashReplay(t *testing.T) {
 				ConversationID: convID,
 			},
 		}
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
+		require.NoError(t, err)
 
 		// Need to give it a server header...
 		boxed.ServerHeader = &chat1.MessageServerHeader{
@@ -1175,18 +1460,18 @@ func TestChatMessageBodyHashReplay(t *testing.T) {
 		}
 
 		// Unbox the message once.
-		unboxed, err := boxer.UnboxMessage(boxerContext, *boxed, conv)
+		unboxed, err := boxer.UnboxMessage(boxerContext, boxed, conv, nil)
 		require.NoError(t, err)
 		requireValidMessage(t, unboxed, "we expected msg4 to succeed")
 
 		// Unbox it again. This should be fine.
-		unboxed, err = boxer.UnboxMessage(boxerContext, *boxed, conv)
+		unboxed, err = boxer.UnboxMessage(boxerContext, boxed, conv, nil)
 		require.NoError(t, err)
 		requireValidMessage(t, unboxed, "we expected msg4 to succeed the second time too")
 
 		// Now try to unbox it again with a different MessageID. This must fail.
 		boxed.ServerHeader.MessageID = 2
-		unboxed, err = boxer.UnboxMessage(boxerContext, *boxed, conv)
+		unboxed, err = boxer.UnboxMessage(boxerContext, boxed, conv, nil)
 		require.NoError(t, err)
 		requireErrorMessage(t, unboxed, "replay must be detected")
 	})
@@ -1205,8 +1490,9 @@ func TestChatMessagePrevPointerInconsistency(t *testing.T) {
 
 		// Generate an encryption key and create a fake finder to fetch it.
 		key := cryptKey(t)
-		finder := NewKeyFinderMock([]keybase1.CryptKey{*key})
-		boxerContext := context.WithValue(context.Background(), kfKey, finder)
+		g := globals.NewContext(tc.G, tc.ChatG)
+		g.CtxFactory = newMockCtxFactory(g, []keybase1.CryptKey{*key})
+		boxerContext := globals.BackgroundChatCtx(context.TODO(), g)
 
 		// Everything below will use the zero convID.
 		convID := chat1.ConversationIDTriple{}.ToConversationID([2]byte{0, 0})
@@ -1216,10 +1502,10 @@ func TestChatMessagePrevPointerInconsistency(t *testing.T) {
 			},
 		}
 
-		makeMsg := func(id chat1.MessageID, prevs []chat1.MessagePreviousPointer) *chat1.MessageBoxed {
+		makeMsg := func(id chat1.MessageID, prevs []chat1.MessagePreviousPointer) chat1.MessageBoxed {
 			msg := textMsgWithSender(t, "foo text", gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
 			msg.ClientHeader.Prev = prevs
-			boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
+			boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
 			require.NoError(t, err)
 			boxed.ServerHeader = &chat1.MessageServerHeader{
 				Ctime:     gregor1.ToTime(time.Now()),
@@ -1235,7 +1521,7 @@ func TestChatMessagePrevPointerInconsistency(t *testing.T) {
 		// Now unbox the first message. That caches its header hash. Leave the
 		// second one out of the cache for now though. (We'll use it to cause an
 		// error later.)
-		unboxed1, err := boxer.UnboxMessage(boxerContext, *boxed1, conv)
+		unboxed1, err := boxer.UnboxMessage(boxerContext, boxed1, conv, nil)
 		require.NoError(t, err)
 
 		// Create two more messages, which both have bad prev pointers. Msg3 has a
@@ -1265,16 +1551,16 @@ func TestChatMessagePrevPointerInconsistency(t *testing.T) {
 			},
 		})
 
-		unboxed, err := boxer.UnboxMessage(boxerContext, *boxed3, conv)
+		unboxed, err := boxer.UnboxMessage(boxerContext, boxed3, conv, nil)
 		require.NoError(t, err)
 		requireErrorMessage(t, unboxed, "msg3 has a known bad prev pointer and must fail to unbox")
 
-		unboxed, err = boxer.UnboxMessage(boxerContext, *boxed4, conv)
+		unboxed, err = boxer.UnboxMessage(boxerContext, boxed4, conv, nil)
 		require.NoError(t, err)
 		requireValidMessage(t, unboxed, "we expected msg4 to succeed")
 
 		// Now try to unbox msg2. Because of msg4's bad pointer, this should fail.
-		unboxed, err = boxer.UnboxMessage(boxerContext, *boxed2, conv)
+		unboxed, err = boxer.UnboxMessage(boxerContext, boxed2, conv, nil)
 		require.NoError(t, err)
 		requireErrorMessage(t, unboxed, "msg2 should fail to unbox, because of msg4's bad pointer")
 	})
@@ -1294,13 +1580,14 @@ func TestChatMessageBadConvID(t *testing.T) {
 
 		// Generate an encryption key and create a fake finder to fetch it.
 		key := cryptKey(t)
-		finder := NewKeyFinderMock([]keybase1.CryptKey{*key})
-		boxerContext := context.WithValue(context.Background(), kfKey, finder)
+		g := globals.NewContext(tc.G, tc.ChatG)
+		g.CtxFactory = newMockCtxFactory(g, []keybase1.CryptKey{*key})
+		boxerContext := globals.BackgroundChatCtx(context.TODO(), g)
 
 		// This message has an all zeros ConversationIDTriple, but that's fine. We
 		// can still extract the ConvID from it.
 		msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), mbVersion)
-		boxed, err := boxer.box(context.TODO(), msg, key, signKP, mbVersion)
+		boxed, err := boxer.box(context.TODO(), msg, key, nil, signKP, mbVersion, nil)
 		require.NoError(t, err)
 		boxed.ServerHeader = &chat1.MessageServerHeader{
 			Ctime:     gregor1.ToTime(time.Now()),
@@ -1319,46 +1606,13 @@ func TestChatMessageBadConvID(t *testing.T) {
 			},
 		}
 
-		unboxed, err := boxer.UnboxMessage(boxerContext, *boxed, badConv)
+		unboxed, err := boxer.UnboxMessage(boxerContext, boxed, badConv, nil)
 		require.NoError(t, err)
 		requireErrorMessage(t, unboxed, "expected a bad convID to fail the unboxing")
 	})
 }
 
-type KeyFinderMock struct {
-	cryptKeys []keybase1.CryptKey
-}
-
-var _ KeyFinder = (*KeyFinderMock)(nil)
-
-func NewKeyFinderMock(cryptKeys []keybase1.CryptKey) KeyFinder {
-	return &KeyFinderMock{cryptKeys}
-}
-
-func (k *KeyFinderMock) Find(ctx context.Context, tlfName string,
-	membersType chat1.ConversationMembersType, tlfPublic bool) (res types.NameInfo, err error) {
-	for _, key := range k.cryptKeys {
-		res.CryptKeys = append(res.CryptKeys, key)
-	}
-	return res, nil
-}
-
-func (k *KeyFinderMock) FindForEncryption(ctx context.Context,
-	tlfName string, teamID chat1.TLFID,
-	membersType chat1.ConversationMembersType, public bool) (res types.NameInfo, err error) {
-	return k.Find(ctx, tlfName, membersType, public)
-}
-
-func (k *KeyFinderMock) FindForDecryption(ctx context.Context,
-	tlfName string, teamID chat1.TLFID,
-	membersType chat1.ConversationMembersType, public bool,
-	keyGeneration int) (res types.NameInfo, err error) {
-	return k.Find(ctx, tlfName, membersType, public)
-}
-
-func (k *KeyFinderMock) SetNameInfoSourceOverride(ni types.NameInfoSource) {}
-
-func remarshalBoxed(t *testing.T, v chat1.MessageBoxed) *chat1.MessageBoxed {
+func remarshalBoxed(t *testing.T, v chat1.MessageBoxed) chat1.MessageBoxed {
 	// encode
 	mh := codec.MsgpackHandle{WriteExt: true}
 	var data []byte
@@ -1372,7 +1626,7 @@ func remarshalBoxed(t *testing.T, v chat1.MessageBoxed) *chat1.MessageBoxed {
 	dec := codec.NewDecoderBytes(data, &mh)
 	err = dec.Decode(&v2)
 	require.NoError(t, err)
-	return &v2
+	return v2
 }
 
 func TestRemarshalBoxed(t *testing.T) {
@@ -1384,7 +1638,7 @@ func TestRemarshalBoxed(t *testing.T) {
 	}
 
 	var boxed2 chat1.MessageBoxed
-	boxed2 = *remarshalBoxed(t, boxed1)
+	boxed2 = remarshalBoxed(t, boxed1)
 
 	require.NotEqual(t, chat1.MessageBoxed{}, boxed2, "second shouldn't be zeroed")
 	require.Equal(t, boxed1.ClientHeader.OutboxID == nil, boxed2.ClientHeader.OutboxID == nil, "obids should have same nility")
@@ -1397,4 +1651,182 @@ func TestRemarshalBoxed(t *testing.T) {
 	require.NotNil(t, boxed2.ClientHeader.OutboxID, "obid2 should not be nil")
 
 	require.Equal(t, boxed1.ClientHeader.OutboxID, boxed2.ClientHeader.OutboxID, "obids should have same value")
+}
+
+func randomTeamEK() types.EphemeralCryptKey {
+	randBytes, err := libkb.RandBytes(32)
+	if err != nil {
+		panic(err)
+	}
+	seed := libkb.MakeByte32(randBytes)
+	dhKey := (*ephemeral.TeamEKSeed)(&seed).DeriveDHKey()
+	return keybase1.NewTeamEphemeralKeyWithTeam(keybase1.TeamEk{
+		Seed: seed,
+		Metadata: keybase1.TeamEkMetadata{
+			Kid: dhKey.GetKID(),
+		},
+	})
+}
+
+func TestExplodingMessageUnbox(t *testing.T) {
+	tc, boxer := setupChatTest(t, "exploding")
+	defer tc.Cleanup()
+
+	key := cryptKey(t)
+	ephemeralKey := randomTeamEK()
+	text := "hello exploding"
+	// We need a user for unboxing to work.
+	u, err := kbtest.CreateAndSignupFakeUser("unbox", tc.G)
+	require.NoError(t, err)
+	msg := textMsgWithSender(t, text, gregor1.UID(u.User.GetUID().ToBytes()), chat1.MessageBoxedVersion_V3)
+
+	// Set the ephemeral metadata, to indicate that the messages is exploding.
+	msg.ClientHeader.EphemeralMetadata = &chat1.MsgEphemeralMetadata{
+		Lifetime: 99999,
+	}
+
+	// Box it! Note that we pass in the ephemeral/exploding key, and also set
+	// V3 explicitly.
+	boxed, err := boxer.box(context.TODO(), msg, key, ephemeralKey,
+		getSigningKeyPairForTest(t, tc, u), chat1.MessageBoxedVersion_V3, nil)
+	require.NoError(t, err)
+	require.Equal(t, chat1.MessageBoxedVersion_V3, boxed.Version)
+	require.True(t, len(boxed.BodyCiphertext.E) > 0)
+
+	// We need to give it a server header for unboxing...
+	boxed.ServerHeader = &chat1.MessageServerHeader{
+		Ctime: gregor1.ToTime(time.Now()),
+	}
+
+	// Unbox it!!!
+	unboxed, err := boxer.unbox(context.TODO(), boxed, convInfo,
+		key, ephemeralKey)
+	require.NoError(t, err)
+	body := unboxed.MessageBody
+	typ, err := body.MessageType()
+	require.NoError(t, err)
+	require.Equal(t, typ, chat1.MessageType_TEXT)
+	require.Equal(t, body.Text().Body, text)
+	require.Nil(t, unboxed.SenderDeviceRevokedAt, "message should not be from revoked device")
+	require.NotNil(t, unboxed.BodyHash)
+	require.True(t, unboxed.IsEphemeral())
+	require.NotNil(t, unboxed.EphemeralMetadata())
+	require.Equal(t, msg.EphemeralMetadata().Lifetime, unboxed.EphemeralMetadata().Lifetime)
+}
+
+func TestVersionErrorBasic(t *testing.T) {
+	// Test basic functionality for parsing the error message
+	// TODO remove this when we drop parsing
+	maxMessageBoxedVersion := chat1.MaxMessageBoxedVersion
+	err := NewMessageBoxedVersionError(maxMessageBoxedVersion)
+	e := chat1.MessageUnboxedError{
+		ErrType: err.ExportType(),
+		ErrMsg:  err.Error(),
+	}
+	require.True(t, e.ParseableVersion())
+
+	err2 := NewMessageBoxedVersionError(maxMessageBoxedVersion)
+	e2 := chat1.MessageUnboxedError{
+		ErrType:       err2.ExportType(),
+		ErrMsg:        err2.Error(),
+		VersionKind:   err2.VersionKind(),
+		VersionNumber: err2.VersionNumber(),
+		IsCritical:    err2.IsCritical(),
+	}
+	require.True(t, e2.ParseableVersion())
+
+	// not recoverable until we bump the max
+	err = NewMessageBoxedVersionError(maxMessageBoxedVersion + 1)
+	e = chat1.MessageUnboxedError{
+		ErrType: err.ExportType(),
+		ErrMsg:  err.Error(),
+	}
+	require.False(t, e.ParseableVersion())
+
+	chat1.MaxMessageBoxedVersion = maxMessageBoxedVersion + 1
+	defer func() { chat1.MaxMessageBoxedVersion = maxMessageBoxedVersion }()
+	require.True(t, e.ParseableVersion())
+}
+
+func TestVersionError(t *testing.T) {
+	tc, boxer := setupChatTest(t, "box")
+	defer tc.Cleanup()
+
+	// These tests will fail when we update the boxer code to accept new
+	// maximums. This forces
+	// chat1/extras.go#MessageUnboxedError.ParseableVersion to stay up to date
+	// for it's max accepted versions. Vx__ will also have to be updated in the
+	// checks below
+	assertErr := func(err types.UnboxingError) {
+		require.Error(t, err)
+		typ := err.ExportType()
+		switch typ {
+		case chat1.MessageUnboxedErrorType_BADVERSION, chat1.MessageUnboxedErrorType_BADVERSION_CRITICAL:
+			// pass
+		default:
+			require.Fail(t, "invalid error type (%s) for error: %s", typ, err.Error())
+		}
+
+		e := chat1.MessageUnboxedError{
+			ErrType: err.ExportType(),
+			ErrMsg:  err.Error(),
+		}
+		require.False(t, e.ParseableVersion())
+	}
+	maxMessageBoxedVersion := chat1.MaxMessageBoxedVersion + 1
+	maxHeaderVersion := chat1.MaxHeaderVersion + 1
+	maxBodyVersion := chat1.MaxBodyVersion + 1
+
+	key := cryptKey(t)
+	t.Logf("unbox")
+	_, err := boxer.unbox(context.Background(), chat1.MessageBoxed{Version: maxMessageBoxedVersion},
+		convInfo, key, nil)
+	assertErr(err)
+
+	t.Logf("unversionHeaderMBV2")
+	hv2 := chat1.HeaderPlaintextUnsupported{}
+	hp := chat1.MessageServerHeader{}
+	_, _, err = boxer.unversionHeaderMBV2(context.Background(), &hp, chat1.HeaderPlaintext{Version__: maxHeaderVersion, V2__: &hv2})
+	assertErr(err)
+
+	t.Logf("unversionBody")
+	bv2 := chat1.BodyPlaintextUnsupported{}
+	_, err = boxer.unversionBody(context.Background(), chat1.BodyPlaintext{Version__: maxBodyVersion, V2__: &bv2})
+	assertErr(err)
+}
+
+func TestMakeOnePairwiseMAC(t *testing.T) {
+	var mySecret [32]byte
+	copy(mySecret[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	var theirSecret [32]byte
+	copy(theirSecret[:], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	myKey, err := libkb.MakeNaclDHKeyPairFromSecret(mySecret)
+	require.NoError(t, err)
+	theirKey, err := libkb.MakeNaclDHKeyPairFromSecret(theirSecret)
+	require.NoError(t, err)
+
+	mac := makeOnePairwiseMAC(*myKey.Private, theirKey.Public, []byte("hello world"))
+
+	// We used the following Python program to get the expected output of this
+	// test case. If we tweak something about the MAC, please tweak this Python
+	// example to match, rather than just pasting in whatever the new answer
+	// happens to be. This is important for making sure our MAC contains
+	// exactly the inputs its supposed to.
+	//
+	// #! /usr/bin/python3
+	// from hashlib import sha256
+	// import hmac
+	// from nacl.public import PrivateKey, Box  # https://github.com/pyca/pynacl
+	// my_key = PrivateKey(b"a" * 32)
+	// their_key = PrivateKey(b"b" * 32)
+	// raw_shared = Box(my_key, their_key.public_key).shared_key()
+	// context = b"Derived-Chat-Pairwise-HMAC-SHA256-1"
+	// derived_shared = sha256(context + b"\0" + raw_shared).digest()
+	// derived_shared = hmac.new(key=raw_shared, msg=context, digestmod=sha256).digest()
+	// mac = hmac.new(key=derived_shared, msg=b"hello world", digestmod=sha256).digest()
+	// print(mac.hex())
+	expected := "ec6d999902fa02a1e96b0a2d97526999db49843f3e2d961e7a398d53f9a910e0"
+
+	require.Equal(t, expected, hex.EncodeToString(mac))
 }

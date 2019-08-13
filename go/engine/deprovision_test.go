@@ -9,7 +9,17 @@ import (
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/stretchr/testify/require"
+	context "golang.org/x/net/context"
 )
+
+func forceOpenDBs(tc libkb.TestContext) {
+	// We need to ensure these dbs are open since we test that we can delete
+	// them on deprovision
+	err := tc.G.LocalDb.ForceOpen()
+	require.NoError(tc.T, err)
+	err = tc.G.LocalChatDb.ForceOpen()
+	require.NoError(tc.T, err)
+}
 
 func assertFileExists(t libkb.TestingTB, path string) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -61,35 +71,37 @@ func assertDeprovisionWithSetup(tc libkb.TestContext, targ assertDeprovisionWith
 	fu := NewFakeUserOrBust(tc.T, "dpr")
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
-	arg.StoreSecret = tc.G.SecretStoreAll != nil
-	ctx := &Context{
+	arg.StoreSecret = tc.G.SecretStore() != nil
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
 
-	if tc.G.SecretStoreAll != nil {
+	m := NewMetaContextForTest(tc)
+	if tc.G.SecretStore() != nil {
 		secretStore := libkb.NewSecretStore(tc.G, fu.NormalizedUsername())
-		_, err := secretStore.RetrieveSecret()
+		_, err := secretStore.RetrieveSecret(m)
 		if err != nil {
 			tc.T.Fatal(err)
 		}
 	}
 
+	forceOpenDBs(tc)
 	dbPath := tc.G.Env.GetDbFilename()
-	sessionPath := tc.G.Env.GetSessionFilename()
+	chatDBPath := tc.G.Env.GetChatDbFilename()
 	secretKeysPath := tc.G.SKBFilenameForUser(fu.NormalizedUsername())
 	numKeys := getNumKeys(tc, *fu)
 	expectedNumKeys := numKeys
 
 	assertFileExists(tc.T, dbPath)
-	assertFileExists(tc.T, sessionPath)
+	assertFileExists(tc.T, chatDBPath)
 	assertFileExists(tc.T, secretKeysPath)
 	if !isUserInConfigFile(tc, *fu) {
 		tc.T.Fatalf("User %s is not in the config file %s", fu.Username, tc.G.Env.GetConfigFilename())
@@ -105,13 +117,14 @@ func assertDeprovisionWithSetup(tc libkb.TestContext, targ assertDeprovisionWith
 	if targ.makeAndRevokePaperKey {
 		t := tc.T
 		t.Logf("generate a paper key (targ)")
-		ctx := &Context{
+		uis := libkb.UIs{
 			LogUI:    tc.G.UI.GetLogUI(),
 			LoginUI:  &libkb.TestLoginUI{},
 			SecretUI: &libkb.TestSecretUI{},
 		}
 		eng := NewPaperKey(tc.G)
-		err := RunEngine(eng, ctx)
+		m := NewMetaContextForTest(tc).WithUIs(uis)
+		err := RunEngine2(m, eng)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, len(eng.Passphrase()), "empty passphrase")
 
@@ -125,11 +138,12 @@ func assertDeprovisionWithSetup(tc libkb.TestContext, targ assertDeprovisionWith
 	}
 
 	e := NewDeprovisionEngine(tc.G, fu.Username, true /* doRevoke */)
-	ctx = &Context{
+	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: fu.NewSecretUI(),
 	}
-	if err := RunEngine(e, ctx); err != nil {
+	m = m.WithUIs(uis)
+	if err := RunEngine2(m, e); err != nil {
 		tc.T.Fatal(err)
 	}
 	expectedNumKeys -= 2
@@ -138,17 +152,18 @@ func assertDeprovisionWithSetup(tc libkb.TestContext, targ assertDeprovisionWith
 		tc.T.Error("Unexpectedly still logged in")
 	}
 
-	if tc.G.SecretStoreAll != nil {
+	if tc.G.SecretStore() != nil {
 		secretStore := libkb.NewSecretStore(tc.G, fu.NormalizedUsername())
-		secret, err := secretStore.RetrieveSecret()
+		secret, err := secretStore.RetrieveSecret(m)
 		if err == nil {
 			tc.T.Errorf("Unexpectedly got secret %v", secret)
 		}
 	}
 
 	assertFileDoesNotExist(tc.T, dbPath)
-	assertFileDoesNotExist(tc.T, sessionPath)
+	assertFileDoesNotExist(tc.T, chatDBPath)
 	assertFileDoesNotExist(tc.T, secretKeysPath)
+
 	if isUserInConfigFile(tc, *fu) {
 		tc.T.Fatalf("User %s is still in the config file %s", fu.Username, tc.G.Env.GetConfigFilename())
 	}
@@ -174,13 +189,9 @@ func testDeprovision(t *testing.T, upgradePerUserKey bool) {
 	tc := SetupEngineTest(t, "deprovision")
 	defer tc.Cleanup()
 	tc.Tp.DisableUpgradePerUserKey = !upgradePerUserKey
-	if tc.G.SecretStoreAll == nil {
+	if tc.G.SecretStore() == nil {
 		t.Fatal("Need a secret store for this test")
 	}
-	assertDeprovisionWithSetup(tc, assertDeprovisionWithSetupArg{})
-
-	// Now, test deprovision codepath with no secret store
-	tc.G.SecretStoreAll = nil
 	assertDeprovisionWithSetup(tc, assertDeprovisionWithSetupArg{})
 }
 
@@ -195,16 +206,11 @@ func TestDeprovisionAfterRevokePaperPUK(t *testing.T) {
 func testDeprovisionAfterRevokePaper(t *testing.T, upgradePerUserKey bool) {
 	tc := SetupEngineTest(t, "deprovision")
 	defer tc.Cleanup()
+
 	tc.Tp.DisableUpgradePerUserKey = !upgradePerUserKey
-	if tc.G.SecretStoreAll == nil {
+	if tc.G.SecretStore() == nil {
 		t.Fatal("Need a secret store for this test")
 	}
-	assertDeprovisionWithSetup(tc, assertDeprovisionWithSetupArg{
-		makeAndRevokePaperKey: true,
-	})
-
-	// Now, test deprovision codepath with no secret store
-	tc.G.SecretStoreAll = nil
 	assertDeprovisionWithSetup(tc, assertDeprovisionWithSetupArg{
 		makeAndRevokePaperKey: true,
 	})
@@ -217,34 +223,36 @@ func assertDeprovisionLoggedOut(tc libkb.TestContext) {
 	fu := NewFakeUserOrBust(tc.T, "dpr")
 	arg := MakeTestSignupEngineRunArg(fu)
 
-	arg.StoreSecret = tc.G.SecretStoreAll != nil
-	ctx := &Context{
+	arg.StoreSecret = tc.G.SecretStore() != nil
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
 
-	if tc.G.SecretStoreAll != nil {
+	m := NewMetaContextForTest(tc)
+	if tc.G.SecretStore() != nil {
 		secretStore := libkb.NewSecretStore(tc.G, fu.NormalizedUsername())
-		_, err := secretStore.RetrieveSecret()
+		_, err := secretStore.RetrieveSecret(m)
 		if err != nil {
 			tc.T.Fatal(err)
 		}
 	}
 
+	forceOpenDBs(tc)
 	dbPath := tc.G.Env.GetDbFilename()
-	sessionPath := tc.G.Env.GetSessionFilename()
+	chatDBPath := tc.G.Env.GetChatDbFilename()
 	secretKeysPath := tc.G.SKBFilenameForUser(fu.NormalizedUsername())
 	numKeys := getNumKeys(tc, *fu)
 
 	assertFileExists(tc.T, dbPath)
-	assertFileExists(tc.T, sessionPath)
+	assertFileExists(tc.T, chatDBPath)
 	assertFileExists(tc.T, secretKeysPath)
 	if !isUserInConfigFile(tc, *fu) {
 		tc.T.Fatalf("User %s is not in the config file %s", fu.Username, tc.G.Env.GetConfigFilename())
@@ -260,14 +268,15 @@ func assertDeprovisionLoggedOut(tc libkb.TestContext) {
 	// Unlike the first test, this time we log out before we run the
 	// deprovision. We should be able to do a deprovision with revocation
 	// disabled.
-	tc.G.Logout()
+	tc.G.Logout(context.TODO())
 
 	e := NewDeprovisionEngine(tc.G, fu.Username, false /* doRevoke */)
-	ctx = &Context{
+	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: fu.NewSecretUI(),
 	}
-	if err := RunEngine(e, ctx); err != nil {
+	m = m.WithUIs(uis)
+	if err := RunEngine2(m, e); err != nil {
 		tc.T.Fatal(err)
 	}
 
@@ -275,16 +284,16 @@ func assertDeprovisionLoggedOut(tc libkb.TestContext) {
 		tc.T.Error("Unexpectedly still logged in")
 	}
 
-	if tc.G.SecretStoreAll != nil {
+	if tc.G.SecretStore() != nil {
 		secretStore := libkb.NewSecretStore(tc.G, fu.NormalizedUsername())
-		secret, err := secretStore.RetrieveSecret()
+		secret, err := secretStore.RetrieveSecret(m)
 		if err == nil {
 			tc.T.Errorf("Unexpectedly got secret %v", secret)
 		}
 	}
 
 	assertFileDoesNotExist(tc.T, dbPath)
-	assertFileDoesNotExist(tc.T, sessionPath)
+	assertFileDoesNotExist(tc.T, chatDBPath)
 	assertFileDoesNotExist(tc.T, secretKeysPath)
 	if isUserInConfigFile(tc, *fu) {
 		tc.T.Fatalf("User %s is still in the config file %s", fu.Username, tc.G.Env.GetConfigFilename())
@@ -302,13 +311,9 @@ func assertDeprovisionLoggedOut(tc libkb.TestContext) {
 func TestDeprovisionLoggedOut(t *testing.T) {
 	tc := SetupEngineTest(t, "deprovision")
 	defer tc.Cleanup()
-	if tc.G.SecretStoreAll == nil {
+	if tc.G.SecretStore() == nil {
 		t.Fatalf("Need a secret store for this test")
 	}
-	assertDeprovisionLoggedOut(tc)
-
-	// Now, test codepath with no secret store
-	tc.G.SecretStoreAll = nil
 	assertDeprovisionLoggedOut(tc)
 }
 
@@ -319,34 +324,35 @@ func assertCurrentDeviceRevoked(tc libkb.TestContext) {
 	fu := NewFakeUserOrBust(tc.T, "dpr")
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
-	arg.StoreSecret = tc.G.SecretStoreAll != nil
-	ctx := &Context{
+	arg.StoreSecret = tc.G.SecretStore() != nil
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  &libkb.TestLoginUI{Username: fu.Username},
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
 
-	if tc.G.SecretStoreAll != nil {
+	if tc.G.SecretStore() != nil {
 		secretStore := libkb.NewSecretStore(tc.G, fu.NormalizedUsername())
-		_, err := secretStore.RetrieveSecret()
+		_, err := secretStore.RetrieveSecret(NewMetaContextForTest(tc))
 		if err != nil {
 			tc.T.Fatal(err)
 		}
 	}
 
+	forceOpenDBs(tc)
 	dbPath := tc.G.Env.GetDbFilename()
-	sessionPath := tc.G.Env.GetSessionFilename()
+	chatDBPath := tc.G.Env.GetChatDbFilename()
 	secretKeysPath := tc.G.SKBFilenameForUser(fu.NormalizedUsername())
 	numKeys := getNumKeys(tc, *fu)
 
 	assertFileExists(tc.T, dbPath)
-	assertFileExists(tc.T, sessionPath)
+	assertFileExists(tc.T, chatDBPath)
 	assertFileExists(tc.T, secretKeysPath)
 	if !isUserInConfigFile(tc, *fu) {
 		tc.T.Fatalf("User %s is not in the config file %s", fu.Username, tc.G.Env.GetConfigFilename())
@@ -367,11 +373,12 @@ func assertCurrentDeviceRevoked(tc libkb.TestContext) {
 	}
 
 	e := NewDeprovisionEngine(tc.G, fu.Username, true /* doRevoke */)
-	ctx = &Context{
+	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: fu.NewSecretUI(),
 	}
-	if err := RunEngine(e, ctx); err != nil {
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, e); err != nil {
 		tc.T.Fatal(err)
 	}
 
@@ -379,16 +386,16 @@ func assertCurrentDeviceRevoked(tc libkb.TestContext) {
 		tc.T.Error("Unexpectedly still logged in")
 	}
 
-	if tc.G.SecretStoreAll != nil {
+	if tc.G.SecretStore() != nil {
 		secretStore := libkb.NewSecretStore(tc.G, fu.NormalizedUsername())
-		secret, err := secretStore.RetrieveSecret()
+		secret, err := secretStore.RetrieveSecret(NewMetaContextForTest(tc))
 		if err == nil {
 			tc.T.Errorf("Unexpectedly got secret %v", secret)
 		}
 	}
 
 	assertFileDoesNotExist(tc.T, dbPath)
-	assertFileDoesNotExist(tc.T, sessionPath)
+	assertFileDoesNotExist(tc.T, chatDBPath)
 	assertFileDoesNotExist(tc.T, secretKeysPath)
 	if isUserInConfigFile(tc, *fu) {
 		tc.T.Fatalf("User %s is still in the config file %s", fu.Username, tc.G.Env.GetConfigFilename())
@@ -406,13 +413,10 @@ func assertCurrentDeviceRevoked(tc libkb.TestContext) {
 func TestCurrentDeviceRevoked(t *testing.T) {
 	tc := SetupEngineTest(t, "deprovision")
 	defer tc.Cleanup()
-	if tc.G.SecretStoreAll == nil {
+
+	if tc.G.SecretStore() == nil {
 		t.Fatalf("Need a secret store for this test")
 	}
-	assertCurrentDeviceRevoked(tc)
-
-	// Now, test codepath with no secret store
-	tc.G.SecretStoreAll = nil
 	assertCurrentDeviceRevoked(tc)
 }
 
@@ -428,18 +432,12 @@ func TestDeprovisionLastDevicePUK(t *testing.T) {
 func testDeprovisionLastDevice(t *testing.T, upgradePerUserKey bool) {
 	tc := SetupEngineTest(t, "deprovision")
 	defer tc.Cleanup()
+
 	tc.Tp.DisableUpgradePerUserKey = !upgradePerUserKey
-	if tc.G.SecretStoreAll == nil {
+	if tc.G.SecretStore() == nil {
 		t.Fatal("Need a secret store for this test")
 	}
 	fu := assertDeprovisionWithSetup(tc, assertDeprovisionWithSetupArg{
-		revokePaperKey: true,
-	})
-	assertNumDevicesAndKeys(tc, fu, 0, 0)
-
-	// Now, test deprovision codepath with no secret store
-	tc.G.SecretStoreAll = nil
-	fu = assertDeprovisionWithSetup(tc, assertDeprovisionWithSetupArg{
 		revokePaperKey: true,
 	})
 	assertNumDevicesAndKeys(tc, fu, 0, 0)

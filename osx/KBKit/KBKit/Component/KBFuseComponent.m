@@ -156,7 +156,7 @@ typedef void (^KBOnFuseStatus)(NSError *error, KBRFuseStatus *fuseStatus);
     // Upgrades currently unsupported for Fuse if there are mounts
     if (cs.installAction == KBRInstallActionUpgrade && [self hasKBFuseMounts:fuseStatus]) {
       DDLogError(@"Fuse needs upgrade but not supported yet if mounts are present");
-      completion(nil);
+      completion(KBMakeError(KBErrorCodeFuseKextMountsPresent, @"mounts are present"));
       return;
     }
 
@@ -202,6 +202,13 @@ typedef void (^KBOnFuseStatus)(NSError *error, KBRFuseStatus *fuseStatus);
 
 - (void)uninstall:(KBCompletion)completion {
   NSDictionary *params = @{@"destination": self.destination, @"kextID": self.kextID};
+
+  if (![self.helperTool exists]) {
+    DDLogDebug(@"FUSE wasn't installed (no helper), so no-op");
+    completion(nil);
+    return;
+  }
+
   DDLogDebug(@"Helper: kextUninstall(%@)", params);
   [self.helperTool.helper sendRequest:@"kextUninstall" params:@[params] completion:^(NSError *error, id value) {
     completion(error);
@@ -266,7 +273,9 @@ typedef void (^KBOnFuseStatus)(NSError *error, KBRFuseStatus *fuseStatus);
 }
 
 - (NSString *)kextPath {
-  return @"/Library/Filesystems/kbfuse.fs/Contents/Extensions/10.10/kbfuse.kext";
+  NSProcessInfo *pInfo = [NSProcessInfo processInfo];
+  NSOperatingSystemVersion version = [pInfo operatingSystemVersion];
+  return [NSString stringWithFormat:@"/Library/Filesystems/kbfuse.fs/Contents/Extensions/%ld.%ld/kbfuse.kext", version.majorVersion, version.minorVersion];
 }
 
 @end

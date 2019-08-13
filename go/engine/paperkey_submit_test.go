@@ -8,6 +8,7 @@ import (
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/keybase1"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPaperKeySubmit(t *testing.T) {
@@ -16,21 +17,22 @@ func TestPaperKeySubmit(t *testing.T) {
 
 	tc.G.SetService()
 	listener := &nlistener{}
-	tc.G.NotifyRouter.SetListener(listener)
+	tc.G.NotifyRouter.AddListener(listener)
 
 	// signup and get the paper key
 	fu := NewFakeUserOrBust(t, "paper")
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: fu.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	if err := RunEngine(s, ctx); err != nil {
+	s := NewSignupEngine(tc.G, &arg)
+	m := NewMetaContextForTest(tc).WithUIs(uis)
+	if err := RunEngine2(m, s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,38 +47,32 @@ func TestPaperKeySubmit(t *testing.T) {
 
 	fu.LoginOrBust(tc)
 
-	assertPaperKeyCached(tc, false)
+	assertPaperKeyCached(m, t, false)
 
 	// submit the paper key
-	ctx = &Context{
-		LogUI: tc.G.UI.GetLogUI(),
-	}
+	m = NewMetaContextForTestWithLogUI(tc)
 	eng := NewPaperKeySubmit(tc.G, paperkey)
-	if err := RunEngine(eng, ctx); err != nil {
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 
-	assertPaperKeyCached(tc, true)
+	assertPaperKeyCached(m, t, true)
 
 	if len(listener.paperEncKIDs) != 1 {
 		t.Fatalf("num paperkey notifications: %d, expected 1", len(listener.paperEncKIDs))
 	}
-	if listener.paperEncKIDs[0].NotEqual(eng.pair.encKey.GetKID()) {
-		t.Errorf("enc kid from notify: %s, expected %s", listener.paperEncKIDs[0], eng.pair.encKey.GetKID())
+	if listener.paperEncKIDs[0].NotEqual(eng.deviceWithKeys.EncryptionKey().GetKID()) {
+		t.Errorf("enc kid from notify: %s, expected %s", listener.paperEncKIDs[0], eng.deviceWithKeys.EncryptionKey().GetKID())
 	}
 }
 
-func assertPaperKeyCached(tc libkb.TestContext, wantCached bool) {
-	var sk, ek libkb.GenericKey
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		sk = a.GetUnlockedPaperSigKey()
-		ek = a.GetUnlockedPaperEncKey()
-	}, "assertPaperKeyCached")
-
-	isCached := sk != nil && ek != nil
-	if isCached != wantCached {
-		tc.T.Fatalf("paper key cached: %v, expected %v", isCached, wantCached)
+func assertPaperKeyCached(m libkb.MetaContext, t *testing.T, wantCached bool) {
+	device := m.ActiveDevice().ProvisioningKey(m)
+	var isCached bool
+	if device != nil {
+		isCached = device.HasBothKeys()
 	}
+	require.Equal(t, isCached, wantCached)
 }
 
 type nlistener struct {

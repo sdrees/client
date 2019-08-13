@@ -18,6 +18,8 @@ import (
 
 func TestCachedUserLoad(t *testing.T) {
 	tc := SetupTest(t, "GetUPAKLoader()", 1)
+	defer tc.Cleanup()
+
 	fakeClock := clockwork.NewFakeClock()
 	tc.G.SetClock(fakeClock)
 
@@ -66,10 +68,17 @@ func TestCachedUserLoad(t *testing.T) {
 	if !info.InCache || !info.TimedOut || info.StaleVersion || !info.LoadedLeaf || info.LoadedUser {
 		t.Fatalf("wrong info: %+v", info)
 	}
+
+	require.True(t, IsUserByUsernameOffline(NewMetaContextForTest(tc), "t_alice"))
+	require.False(t, IsUserByUsernameOffline(NewMetaContextForTest(tc), "t_alice_xxx"))
+	// This hardcoded user was put into the TestUIDMapper, so it should return a result
+	require.True(t, IsUserByUsernameOffline(NewMetaContextForTest(tc), "max"))
 }
 
 func TestCheckKIDForUID(t *testing.T) {
 	tc := SetupTest(t, "CheckKIDForUID", 1)
+	defer tc.Cleanup()
+
 	fakeClock := clockwork.NewFakeClock()
 	tc.G.SetClock(fakeClock)
 
@@ -83,20 +92,20 @@ func TestCheckKIDForUID(t *testing.T) {
 	rebeccaUID := keybase1.UID("99337e411d1004050e9e7ee2cf1a6219")
 	rebeccaKIDRevoked := keybase1.KID("0120e177772304cd9ec833ceb88eeb6e32a667151d9e4fb09df433a846d05e6c40350a")
 
-	found, revokedAt, deleted, err := tc.G.GetUPAKLoader().CheckKIDForUID(nil, georgeUID, georgeKIDSibkey)
+	found, revokedAt, deleted, err := tc.G.GetUPAKLoader().CheckKIDForUID(context.Background(), georgeUID, georgeKIDSibkey)
 	if !found || (revokedAt != nil) || deleted || (err != nil) {
 		t.Fatalf("bad CheckKIDForUID response")
 	}
-	found, revokedAt, deleted, err = tc.G.GetUPAKLoader().CheckKIDForUID(nil, georgeUID, georgeKIDSubkey)
+	found, revokedAt, deleted, err = tc.G.GetUPAKLoader().CheckKIDForUID(context.Background(), georgeUID, georgeKIDSubkey)
 	if !found || (revokedAt != nil) || deleted || (err != nil) {
 		t.Fatalf("bad CheckKIDForUID response")
 	}
-	found, revokedAt, deleted, err = tc.G.GetUPAKLoader().CheckKIDForUID(nil, georgeUID, kbKIDSibkey)
+	found, revokedAt, deleted, err = tc.G.GetUPAKLoader().CheckKIDForUID(context.Background(), georgeUID, kbKIDSibkey)
 	if found || (revokedAt != nil) || deleted || (err != nil) {
 		t.Fatalf("bad CheckKIDForUID response")
 	}
 
-	found, revokedAt, deleted, err = tc.G.GetUPAKLoader().CheckKIDForUID(nil, rebeccaUID, rebeccaKIDRevoked)
+	found, revokedAt, deleted, err = tc.G.GetUPAKLoader().CheckKIDForUID(context.Background(), rebeccaUID, rebeccaKIDRevoked)
 	if !found || (revokedAt == nil) || deleted || (err != nil) {
 		t.Fatalf("bad CheckKIDForUID response")
 	}
@@ -105,6 +114,7 @@ func TestCheckKIDForUID(t *testing.T) {
 func TestCacheFallbacks(t *testing.T) {
 	tc := SetupTest(t, "LookupUsernameAndDevice", 1)
 	defer tc.Cleanup()
+
 	fakeClock := clockwork.NewFakeClock()
 	tc.G.SetClock(fakeClock)
 
@@ -144,7 +154,7 @@ func TestLookupUsernameAndDevice(t *testing.T) {
 	test := func() {
 		uid := keybase1.UID("eb72f49f2dde6429e5d78003dae0c919")
 		did := keybase1.DeviceID("e5f7f7ca6b6277de4d2c45f57b767f18")
-		un, name, typ, err := tc.G.GetUPAKLoader().LookupUsernameAndDevice(nil, uid, did)
+		un, name, typ, err := tc.G.GetUPAKLoader().LookupUsernameAndDevice(context.Background(), uid, did)
 		require.NoError(t, err)
 		require.Equal(t, un.String(), "t_tracy", "tracy was right")
 		require.Equal(t, name, "work", "right device name")
@@ -171,7 +181,7 @@ func TestLookupUID(t *testing.T) {
 	test := func() {
 		uid := keybase1.UID("eb72f49f2dde6429e5d78003dae0c919")
 		un := NewNormalizedUsername("t_tracy")
-		uid2, err := tc.G.GetUPAKLoader().LookupUID(nil, un)
+		uid2, err := tc.G.GetUPAKLoader().LookupUID(context.Background(), un)
 		require.NoError(t, err)
 		require.Equal(t, uid, uid2)
 	}
@@ -189,12 +199,13 @@ func TestLookupUID(t *testing.T) {
 func TestLookupUsername(t *testing.T) {
 	tc := SetupTest(t, "LookupUsernameAndDevice", 1)
 	defer tc.Cleanup()
+
 	uid := keybase1.UID("eb72f49f2dde6429e5d78003dae0c919")
-	un, err := tc.G.GetUPAKLoader().LookupUsername(nil, uid)
+	un, err := tc.G.GetUPAKLoader().LookupUsername(context.Background(), uid)
 	require.NoError(t, err)
 	require.Equal(t, un, NewNormalizedUsername("t_tracy"), "tracy came back")
 	badUID := keybase1.UID("eb72f49f2dde6429e5d78003dae0b919")
-	_, err = tc.G.GetUPAKLoader().LookupUsername(nil, badUID)
+	_, err = tc.G.GetUPAKLoader().LookupUsername(context.Background(), badUID)
 	require.Error(t, err)
 }
 

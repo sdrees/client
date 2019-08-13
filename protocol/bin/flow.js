@@ -1,62 +1,90 @@
-// @noflow
 'use strict'
 const prettier = require('prettier')
-const json5 = require('json5')
 const promise = require('bluebird')
 const fs = promise.promisifyAll(require('fs'))
 const path = require('path')
-const codeGenerators = require('./js-code-generators.js')
 const camelcase = require('camelcase')
 const colors = require('colors')
+const json5 = require('json5')
+const enabledCalls = json5.parse(fs.readFileSync(path.join(__dirname, 'enabled-calls.json')))
 
-// load prettier rules from eslintrc
-const prettierOptions = json5.parse(
-  fs.readFileSync(path.join(__dirname, '../../.eslintrc'), {encoding: 'utf8'})
-).rules['prettier/prettier'][1]
-
-// Allow extra wide
-prettierOptions.printWidth = 9999
+// Sanity check this json file
+Object.keys(enabledCalls).forEach(rpc =>
+  Object.keys(enabledCalls[rpc]).forEach(type => {
+    if (!['engineSaga', 'promise', 'incoming'].includes(type)) {
+      console.log(colors.red('ERROR! Invalid enabled call?\n\n '), rpc, type)
+      process.exit(1)
+    }
+  })
+)
 
 var projects = {
   chat1: {
-    root: './json/chat1',
-    import: "import * as Gregor1 from './flow-types-gregor'\nimport * as Keybase1 from './flow-types'",
-    out: 'js/flow-types-chat.js',
-    incomingMaps: {},
-    seenTypes: {},
+    customResponseIncomingMaps: {},
     enums: {},
+    import: ['Gregor1', 'Keybase1', 'Stellar1'],
+    incomingMaps: {},
+    notEnabled: [],
+    out: 'rpc-chat-gen',
+    root: './json/chat1',
+    seenTypes: {},
   },
   keybase1: {
-    root: 'json/keybase1',
-    out: 'js/flow-types.js',
-    import: "import * as Gregor1 from './flow-types-gregor'\n",
-    incomingMaps: {},
-    seenTypes: {},
+    customResponseIncomingMaps: {},
     enums: {},
+    import: ['Gregor1'],
+    incomingMaps: {},
+    notEnabled: [],
+    out: 'rpc-gen',
+    root: 'json/keybase1',
+    seenTypes: {},
   },
   gregor1: {
-    root: './json/gregor1',
-    out: 'js/flow-types-gregor.js',
-    incomingMaps: {},
-    seenTypes: {},
+    customResponseIncomingMaps: {},
     enums: {},
+    import: [],
+    incomingMaps: {},
+    notEnabled: [],
+    out: 'rpc-gregor-gen',
+    root: './json/gregor1',
+    seenTypes: {},
+  },
+  stellar1: {
+    customResponseIncomingMaps: {},
+    enums: {},
+    import: ['Keybase1'],
+    incomingMaps: {},
+    notEnabled: [],
+    out: 'rpc-stellar-gen',
+    root: './json/stellar1',
+    seenTypes: {},
   },
 }
 
 const reduceArray = arr => arr.reduce((acc, cur) => acc.concat(cur), [])
 
-Object.keys(projects).forEach(key => {
-  const project = projects[key]
-  fs
-    .readdirAsync(project.root)
-    .filter(jsonOnly)
-    .map(file => load(file, project))
-    .map(json => analyze(json, project))
-    .reduce((acc, typeDefs) => acc.concat(typeDefs), [])
-    .then(t => t.filter(key => key && key.length))
-    .then(t => t.sort())
-    .then(makeRpcUnionType)
-    .then(typeDefs => write(typeDefs, project))
+const keys = Object.keys(projects)
+Promise.all(
+  keys.map(key => {
+    const project = projects[key]
+    return fs
+      .readdirAsync(project.root)
+      .filter(jsonOnly)
+      .map(file => load(file, project))
+      .map(json => analyze(json, project))
+      .reduce((map, next) => {
+        map.consts = {...map.consts, ...next.consts}
+        map.types = {...map.types, ...next.types}
+        map.messages = {...map.messages, ...next.messages}
+        return map
+      }, {})
+      .then(typeDefs => {
+        writeFlow(typeDefs, project)
+      })
+  })
+).then(() => {
+  writeAll()
+  writeActions()
 })
 
 function jsonOnly(file) {
@@ -69,9 +97,11 @@ function load(file, project) {
 
 function analyze(json, project) {
   lintJSON(json)
-  return reduceArray(
-    [].concat(analyzeEnums(json, project), analyzeTypes(json, project), analyzeMessages(json, project))
-  )
+  return {
+    consts: analyzeEnums(json, project),
+    types: analyzeTypes(json, project),
+    messages: analyzeMessages(json, project),
+  }
 }
 
 function fixCase(s) {
@@ -84,7 +114,7 @@ function analyzeEnums(json, project) {
     .map(t => {
       var en = {}
 
-      t.symbols.forEach(function(s) {
+      t.symbols.forEach(s => {
         const parts = s.split('_')
         const val = parseInt(parts.pop(), 10)
         const name = fixCase(parts.join('_'))
@@ -94,57 +124,62 @@ function analyzeEnums(json, project) {
       project.enums[t.name] = en
 
       return {
-        name: `${json.protocol}${t.name}`,
+        name: t.name,
         map: en,
       }
     })
-    .reduce((acc, t) => {
-      return acc.concat([
-        `\nexport const ${decapitalize(t.name)} = {
+    .reduce((map, t) => {
+      map[decapitalize(t.name)] = `\nexport enum ${t.name} {
   ${Object.keys(t.map)
-    .map(k => {
-      return `${k}: ${t.map[k]}`
-    })
+    .map(k => `${k} = ${t.map[k]}`)
     .join(',\n  ')},
-}`,
-      ])
-    }, [])
+}`
+      return map
+    }, {})
 }
 
 function analyzeTypes(json, project) {
-  return json.types.map(t => {
+  return json.types.reduce((map, t) => {
     if (project.seenTypes[t.name]) {
-      return null
+      return map
     }
 
     project.seenTypes[t.name] = true
 
     switch (t.type) {
       case 'record':
-        return [`\nexport type ${t.name} = ${parseRecord(t)}`]
+        map[t.name] = `export type ${t.name} = ${parseRecord(t)}`
+        break
       case 'enum':
-        return [`\nexport type ${t.name} =${parseEnum(t)}`]
+        break
       case 'variant':
-        return [`\nexport type ${t.name} =${parseVariant(t, project)}`]
+        {
+          const parsed = parseVariant(t, project)
+          if (parsed) {
+            map[t.name] = `export type ${t.name} =${parsed}`
+          }
+        }
+        break
       case 'fixed':
-        return [`\nexport type ${t.name} = any`]
-      default:
-        return null
+        map[t.name] = `export type ${t.name} = string | null`
+        break
     }
-  })
+    return map
+  }, {})
 }
 
-function figureType(type) {
+function figureType(type, prefix = '') {
   if (!type) {
     return 'null' // keep backwards compat with old script
   }
+
   if (type instanceof Array) {
     if (type.length === 2) {
       if (type[0] === null) {
-        return `?${capitalize(type[1])}`
+        return `${prefix}${capitalize(type[1])} | null`
       }
       if (type[1] === null) {
-        return `?${capitalize(type[0])}`
+        return `${prefix}${capitalize(type[0])} | null`
       }
     }
 
@@ -152,7 +187,7 @@ function figureType(type) {
   } else if (typeof type === 'object') {
     switch (type.type) {
       case 'array':
-        return `?Array<${capitalize(type.items)}>`
+        return `Array<${prefix}${capitalize(type.items)}> | null`
       case 'map':
         return `{[key: string]: ${figureType(type.values)}}`
       default:
@@ -161,7 +196,7 @@ function figureType(type) {
     }
   }
 
-  return capitalize(type)
+  return prefix + capitalize(type)
 }
 
 function capitalize(s) {
@@ -170,89 +205,107 @@ function capitalize(s) {
 
 function analyzeMessages(json, project) {
   // ui means an incoming rpc. simple regexp to filter this but it might break in the future if
-  // the core side doesn't have a consisten naming convention. (must be case insensitive to pass correctly)
+  // the core side doesn't have a consistent naming convention. (must be case insensitive to pass correctly)
   const isUIProtocol =
     ['notifyCtl'].indexOf(json.protocol) === -1 &&
     !!json.protocol.match(/^(notify.*|.*ui|logsend)$/i) &&
     !json.protocol.match(/NotifyFSRequest/)
 
-  return Object.keys(json.messages).map(m => {
+  return Object.keys(json.messages).reduce((map, m) => {
     const message = json.messages[m]
-
     lintMessage(m, message)
 
-    const params = (incoming, prefix) =>
-      message.request
-        .filter(r => incoming || r.name !== 'sessionID') // We have the engine handle this under the hood
-        .map(r => {
-          const rtype = figureType(r.type)
-          return `${prefix}${r.name}${r.hasOwnProperty('default') || rtype.startsWith('?') ? '?' : ''}: ${rtype}`
-        })
-        .join(',\n')
-
+    const arr = message.request
+      .filter(r => r.name !== 'sessionID') // We have the engine handle this under the hood
+      .map(r => {
+        const rtype = figureType(r.type)
+        return `readonly ${r.name}${
+          r.hasOwnProperty('default') || rtype.endsWith('| null') ? '?' : ''
+        }: ${rtype}`
+      })
+    const noParams = !arr.length
+    const inParam = noParams ? 'void' : `{${arr.join(',')}}`
     const name = `${json.protocol}${capitalize(m)}`
-    const responseType = figureType(message.response)
-    const response = responseType === 'null' ? null : `type ${capitalize(name)}Result = ${responseType}`
-
-    const isNotify = message.hasOwnProperty('notify')
-    let r = null
-    if (!isNotify) {
-      const type = responseType === 'null' ? '' : `result: ${capitalize(name)}Result`
-      if (type) {
-        r = `,response: {error: RPCErrorHandler, result: (${type}) => void}`
-      } else {
-        r = `,response: CommonResponseHandler`
-      }
-    } else {
-      r = ` /* , response: {} // Notify call
-    */`
-    }
-
-    let p = params(true, '      ')
-    if (p) {
-      p = `${p}    `
-    }
-
-    if (isUIProtocol) {
-      project.incomingMaps[`keybase.1.${json.protocol}.${m}`] = `(params: ${p ? `{|${p}|}` : 'void'}${r}) => void`
-    }
-
-    r = ''
-    if (responseType !== 'null') {
-      r = `, response: ${capitalize(name)}Result`
-    }
-
-    p = params(false, '  ')
-    if (p) {
-      p = `${p}`
-    }
-
-    const paramType = p ? `\nexport type ${capitalize(name)}RpcParam = {|${p}|}` : ''
-    const callbackType = r ? `{callback?: ?(err: ?any${r}) => void}` : 'RequestErrorCallback'
-    const innerParamType = p ? `{param: ${capitalize(name)}RpcParam}` : null
+    const outParam = figureType(message.response)
     const methodName = `'${json.namespace}.${json.protocol}.${m}'`
-    const rpcPromise = isUIProtocol
-      ? ''
-      : codeGenerators.rpcPromiseGen(methodName, name, callbackType, innerParamType, responseType)
-    const rpcChannelMap = isUIProtocol
-      ? ''
-      : codeGenerators.rpcChannelMap(methodName, name, callbackType, innerParamType, responseType)
-    return [paramType, response, rpcPromise, rpcChannelMap]
-  })
+    const isUIMethod = isUIProtocol || enabledCall(methodName, 'incoming')
+
+    if (isUIMethod) {
+      project.incomingMaps[
+        methodName
+      ] = `(params: MessageTypes[${methodName}]['inParam'] & {sessionID: number}) => IncomingReturn`
+      if (!message.hasOwnProperty('notify')) {
+        project.customResponseIncomingMaps[
+          methodName
+        ] = `(params: MessageTypes[${methodName}]['inParam'] & {sessionID: number}, response: {error: IncomingErrorCallback, result: (res: MessageTypes[${methodName}]['outParam']) => void}) => IncomingReturn`
+      }
+    }
+
+    const rpcPromise = isUIMethod ? '' : rpcPromiseGen(methodName, name, false)
+    const rpcPromiseType = isUIMethod ? '' : rpcPromiseGen(methodName, name, true)
+    const engineSaga = isUIMethod ? '' : engineSagaGen(methodName, name, false)
+    const engineSagaType = isUIMethod ? '' : engineSagaGen(methodName, name, true)
+
+    const cleanName = methodName.substring(1, methodName.length - 1)
+    if (!enabledCalls[cleanName]) {
+      project.notEnabled.push(methodName)
+    }
+
+    // Must be an rpc we use
+    if (rpcPromiseType || engineSagaType || isUIMethod) {
+      map[methodName] = {
+        inParam,
+        outParam: outParam === 'null' ? 'void' : outParam,
+        rpcPromise,
+        rpcPromiseType,
+        engineSaga,
+        engineSagaType,
+      }
+    }
+    return map
+  }, {})
+}
+
+function enabledCall(methodName, type) {
+  const cleanName = methodName.substring(1, methodName.length - 1)
+  return enabledCalls[cleanName] && enabledCalls[cleanName][type]
+}
+
+function engineSagaGen(methodName, name, justType) {
+  if (!enabledCall(methodName, 'engineSaga')) {
+    return ''
+  }
+  return justType
+    ? `declare export function ${name}RpcSaga (p: {params: MessageTypes[${methodName}]['inParam'], incomingCallMap: IncomingCallMapType, customResponseIncomingCallMap?: CustomResponseIncomingCallMap, waitingKey?: WaitingKey}): CallEffect<void, () => void, Array<void>>`
+    : `export const ${name}RpcSaga = (p: {params: MessageTypes[${methodName}]['inParam'], incomingCallMap: IncomingCallMapType, customResponseIncomingCallMap?: CustomResponseIncomingCallMap, waitingKey?: WaitingKey}) => call(getEngineSaga(), {method: ${methodName}, params: p.params, incomingCallMap: p.incomingCallMap, customResponseIncomingCallMap: p.customResponseIncomingCallMap, waitingKey: p.waitingKey})`
+}
+
+function rpcPromiseGen(methodName, name, justType) {
+  if (!enabledCall(methodName, 'promise')) {
+    return ''
+  }
+  return justType
+    ? `declare export function ${name}RpcPromise (params: MessageTypes[${methodName}]['inParam'], waitingKey?: WaitingKey): Promise<MessageTypes[${methodName}]['outParam']>`
+    : `export const ${name}RpcPromise = (params: MessageTypes[${methodName}]['inParam'], waitingKey?: WaitingKey) => new Promise<MessageTypes[${methodName}]['outParam']>((resolve, reject) => engine()._rpcOutgoing({method: ${methodName}, params, callback: (error, result) => error ? reject(error) : resolve(result), waitingKey}))`
+}
+
+function maybeIfNot(s) {
+  if (s.endsWith('| null')) return s
+  return `${s} | null`
 }
 
 // Type parsing
 function parseInnerType(t) {
   if (!t) {
-    t = 'null' // keep backwards compat with old script
+    return 'void' // keep backwards compat with old script
   }
+
   if (t.constructor === Array) {
-    if (t.length === 2 && t.indexOf(null) >= 0) {
-      return parseMaybe(t)
+    if (t.length === 2 && t[0] === null) {
+      return maybeIfNot(figureType(t[1]))
+    } else {
+      return parseUnion(t)
     }
-    return parseUnion(t)
-  } else if (t === 'null') {
-    return 'void'
   }
 
   switch (t.type) {
@@ -272,11 +325,6 @@ function parseEnum(t) {
   return parseUnion(t.symbols.map(s => `${parseEnumSymbol(s)} // ${s}\n`))
 }
 
-function parseMaybe(t) {
-  var maybeType = t.filter(x => x !== null)[0]
-  return `?${maybeType}`
-}
-
 function parseUnion(unionTypes) {
   return unionTypes.map(parseInnerType).join(' | ')
 }
@@ -290,15 +338,17 @@ function parseRecord(t) {
   const fields = t.fields
     .map(f => {
       const innerType = parseInnerType(f.type)
-      const innerOptional = innerType[0] === '?'
-      const capsInnerType = innerOptional ? `?${capitalize(innerType.substr(1))}` : capitalize(innerType)
+      const innerOptional = innerType.endsWith('| null')
+      const capsInnerType = capitalize(innerType)
+      const name = f.mpackkey || f.name
+      const comment = f.mpackkey ? ` /* ${f.name} */ ` : ''
 
       // If we have a maybe type, let's also make the key optional
-      return `${f.name}${innerOptional ? '?' : ''}: ${capsInnerType},`
+      return `readonly ${name}${comment}${innerOptional ? '?' : ''}: ${capsInnerType},`
     })
     .join('')
 
-  return `{|${fields}|}`
+  return `{${fields}}`
 }
 
 function parseVariant(t, project) {
@@ -307,88 +357,229 @@ function parseVariant(t, project) {
     project = projects[parts.shift()]
   }
 
+  const rootType = t.switch.type
+  const rootEnum = project.enums[rootType]
+
+  let unhandled = new Set(Object.keys(rootEnum))
   var type = parts.shift()
-  return (
-    t.cases
-      .map(c => {
-        if (c.label.def) {
-          const bodyStr = c.body ? `, 'default': ?${c.body}` : ''
-          return `{ ${t.switch.name}: any${bodyStr} }`
-        } else {
-          var label = fixCase(c.label.name)
-          const bodyStr = c.body ? `, ${label}: ?${capitalize(c.body)}` : ''
-          return `{ ${t.switch.name}: ${project.enums[type][label]}${bodyStr} }`
+  const cases = t.cases
+    .map(c => {
+      if (c.label.def) {
+        return null
+      } else {
+        var label = fixCase(c.label.name)
+        unhandled.delete(label)
+        let bodyType = ''
+        if (c.body === null) {
+          bodyType = 'null'
+        } else if (typeof c.body === 'string') {
+          bodyType = capitalize(c.body)
+        } else if (c.body.type === 'array') {
+          bodyType = `Array<${capitalize(c.body.items)}>`
         }
-      })
-      .join(' | ')
-  )
+        const bodyStr = c.body ? `, ${label}: ${bodyType} | null` : ''
+        return `{ ${t.switch.name}: ${type}.${label}${bodyStr} }`
+      }
+    })
+    .filter(Boolean)
+
+  const otherCases = [...unhandled].map(label => `{ ${t.switch.name}: ${type}.${label}}`)
+  const s = [...cases, ...otherCases].join(' | ')
+
+  return s || 'void'
 }
 
-function makeRpcUnionType(typeDefs) {
-  const rpcTypes = typeDefs
-    .map(t => {
-      const m = t.match(/(\w*Rpc) \(/)
-      return m && m[1]
-    })
-    .filter(t => t)
-    .reduce((acc, t) => {
-      const clean = t.trim()
-      return acc.indexOf(clean) === -1 ? acc.concat([clean]) : acc
-    }, [])
-    .sort()
-    .join('|')
-
-  if (rpcTypes) {
-    const unionRpcType = `\nexport type rpc =
-    ${rpcTypes}`
-    return typeDefs.concat(unionRpcType)
+function writeActions() {
+  const staticActions = {
+    disconnected: {},
+    connected: {},
   }
 
-  return typeDefs
+  const seenProjects = {}
+
+  const data = {
+    actions: Object.keys(projects).reduce((map, p) => {
+      const callMap = projects[p].incomingMaps
+      callMap &&
+        Object.keys(callMap).reduce((map, method) => {
+          const name = method
+            .replace(/'/g, '')
+            .split('.')
+            .map((p, idx) => (idx ? capitalize(p) : p))
+            .join('')
+
+          seenProjects[p] = true
+          let response = ''
+          if (projects[p].customResponseIncomingMaps[method]) {
+            response = `, response: {error: ${p}Types.IncomingErrorCallback, result: (param: ${p}Types.MessageTypes[${method}]['outParam']) => void}`
+          }
+
+          map[name] = {
+            params: `${p}Types.MessageTypes[${method}]['inParam'] & {sessionID: number}${response}`,
+          }
+          return map
+        }, map)
+      return map
+    }, staticActions),
+  }
+
+  const toWrite = JSON.stringify(
+    {
+      prelude: Object.keys(seenProjects).map(
+        p => `import * as ${p}Types from '../constants/types/${projects[p].out}'`
+      ),
+      ...data,
+    },
+    null,
+    4
+  )
+  fs.writeFileSync(`js/engine-gen.json`, toWrite)
 }
-// TODO add back these eslint overrides after prettier is in no-unused-vars,no-use-before-define,prettier/prettier
+
+function writeAll() {
+  const imports = Object.keys(projects)
+    .map(
+      p => `import {
+  CustomResponseIncomingCallMap as ${p}CustomResponseIncomingCallMap,
+  IncomingCallMapType as ${p}IncomingCallMap,
+} from './${projects[p].out}'
+`
+    )
+    .join('\n')
+
+  const exports = `
+  export type IncomingCallMapType = ${Object.keys(projects)
+    .map(p => `${p}IncomingCallMap`)
+    .join(' & ')}
+  export type CustomResponseIncomingCallMapType = ${Object.keys(projects)
+    .map(p => `${p}CustomResponseIncomingCallMap`)
+    .join(' & ')}
+  `
+  const toWrite = [imports, exports].join('\n')
+  const destinationFile = `types/rpc-all-gen.tsx` // Only used by prettier so we can set an override in .prettierrc
+  const formatted = prettier.format(toWrite, {
+    ...prettier.resolveConfig.sync(destinationFile),
+    parser: 'typescript',
+  })
+  fs.writeFileSync(`js/rpc-all-gen.tsx`, formatted)
+}
+
+function writeFlow(typeDefs, project) {
+  const importMap = {
+    Gregor1: "import * as Gregor1 from './rpc-gregor-gen'",
+    Keybase1: "import * as Keybase1 from './rpc-gen'",
+    Stellar1: "import * as Stellar1 from './rpc-stellar-gen'",
+  }
+  const typePrelude = `/* eslint-disable */
+
+// This file is auto-generated by client/protocol/Makefile.
+import {call, Effect} from 'redux-saga/effects'
+import {getEngine as engine, getEngineSaga} from '../../engine/require'
+${project.import.map(n => importMap[n] || '').join('\n')}
+${project.import.map(n => `export {${n}}`).join('\n')}
+export type Bool = boolean
+export type Boolean = boolean
+export type Bytes = Buffer
+export type Double = number
+export type Int = number
+export type Int64 = number
+export type Long = number
+export type String = string
+export type Uint = number
+export type Uint64 = number
+type WaitingKey = string | Array<string>
+export type IncomingErrorCallback = (err: {code?: number, desc?: string} | null) => void
+type IncomingReturn = Effect | null | void | false | Array<Effect | null | void | false>
+
+// Dummy calls to avoid undelcared warnings in TS strict mode
+export const _doNotUse = (w: WaitingKey, i: IncomingReturn) => console.log('why did you call this function?', w, i, call(() => {}), engine(), getEngineSaga())
+`
+  const consts = Object.keys(typeDefs.consts).map(k => typeDefs.consts[k])
+  const types = Object.keys(typeDefs.types).map(k => typeDefs.types[k])
+  const messagePromise = Object.keys(typeDefs.messages).map(k => typeDefs.messages[k].rpcPromise)
+  const messageEngineSaga = Object.keys(typeDefs.messages).map(k => typeDefs.messages[k].engineSaga)
+  const callMapType = Object.keys(project.incomingMaps).length ? 'IncomingCallMapType' : 'void'
+  const incomingMap = `\nexport type IncomingCallMapType = {
+    ${Object.keys(project.incomingMaps)
+      .map(im => `  ${im}?: ${project.incomingMaps[im]}`)
+      .join(',')}
+    }`
+
+  const customResponseCallMapType = Object.keys(project.customResponseIncomingMaps).length
+    ? 'CustomResponseIncomingCallMap'
+    : 'void'
+  const customResponseIncomingMap = `\nexport type CustomResponseIncomingCallMap = {
+    ${Object.keys(project.customResponseIncomingMaps)
+      .map(im => `  ${im}?: ${project.customResponseIncomingMaps[im]}`)
+      .join(',')}
+    }`
+
+  const messageTypesData = Object.keys(typeDefs.messages)
+    .map(k => {
+      const data = typeDefs.messages[k]
+      const types = {}
+      return `  ${k}: {
+    inParam: ${data.inParam},
+    outParam: ${data.outParam || 'void'},
+  },`
+    })
+    .sort()
+    .join('\n')
+
+  const messageTypes = `\nexport type MessageTypes = {
+${messageTypesData}
+}`
+
+  const data = [
+    messageTypes,
+    ...[...consts, ...types].sort(),
+    incomingMap,
+    customResponseIncomingMap,
+    ...[...messagePromise, ...messageEngineSaga].sort(),
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const notEnabled = `// Not enabled calls. To enable add to enabled-calls.json:\n// ${project.notEnabled.join(
+    '\n// '
+  )}`
+
+  const toWrite = [typePrelude, data, notEnabled].join('\n')
+  const destinationFile = `types/${project.out}` // Only used by prettier so we can set an override in .prettierrc
+  const formatted = prettier.format(toWrite, {
+    ...prettier.resolveConfig.sync(destinationFile),
+    parser: 'typescript',
+  })
+  fs.writeFileSync(`js/${project.out}.tsx`, formatted)
+}
+
 function write(typeDefs, project) {
   // Need any for weird flow issue where it gets confused by multiple
   // incoming call map types
-  const callMapType = Object.keys(project.incomingMaps).length ? 'IncomingCallMapType' : 'any'
-  const typePrelude = `// @flow
-/* eslint-disable */
+  const callMapType = Object.keys(project.incomingMaps).length ? 'IncomingCallMapType' : 'void'
+
+  const typePrelude = `/* eslint-disable */
 
 // This file is auto-generated by client/protocol/Makefile.
-${project.import || ''}
-import engine, {EngineChannel} from '../../engine'
-import {RPCError} from '../../util/errors'
-import {putOnChannelMap, createChannelMap, closeChannelMap} from '../../util/saga'
-import {Buffer} from 'buffer'
-import type {ChannelConfig, ChannelMap} from './saga'
+// Not enabled: calls need to be turned on in enabled-calls.json
+import {call, CallEffect} from 'redux-saga/effects'
+import {getEngine as engine, getEngineSaga} from '../../engine/require'
+`
+  const consts = Object.keys(typeDefs.consts).map(k => typeDefs.consts[k])
+  const messagePromise = Object.keys(typeDefs.messages).map(k => typeDefs.messages[k].rpcPromise)
+  const messageEngineSaga = Object.keys(typeDefs.messages).map(k => typeDefs.messages[k].engineSaga)
+  const data = [...consts, ...messagePromise, ...messageEngineSaga]
+    .filter(Boolean)
+    .sort()
+    .join('\n')
 
-type Bool = boolean;
-type Boolean = boolean
-type Bytes = Buffer
-type Double = number
-type Int = number
-type Int64 = number
-type Long = number
-type String = string
-type Uint = number
-type Uint64 = number
-type WaitingHandlerType = (waiting: boolean) => void
-
-const engineRpcOutgoing = (method: string, params: any, callbackOverride: any, incomingCallMapOverride: any) => engine()._rpcOutgoing(method, params, callbackOverride, incomingCallMapOverride)
-
-type RequestCommon = { waitingHandler?: WaitingHandlerType, incomingCallMap?: ${callMapType} }
-type RequestErrorCallback = { callback?: ?(err: ?RPCError) => void }
-type RPCErrorHandler = (err: RPCError) => void
-type CommonResponseHandler = { error: RPCErrorHandler, result: (...rest: Array<void>) => void }`
-
-  const incomingMap =
-    `\nexport type IncomingCallMapType = {|` +
-    Object.keys(project.incomingMaps).map(im => `  '${im}'?: ${project.incomingMaps[im]}`).join(',') +
-    '|}\n'
-  const toWrite = [typePrelude, codeGenerators.channelMapPrelude, typeDefs.join('\n'), incomingMap].join('\n')
-  // const formatted = prettier.format(toWrite, prettierOptions)
-  // TODO disabling prettier short term
-  fs.writeFileSync(project.out, /*formatted*/ toWrite)
+  const toWrite = [typePrelude, data].join('\n')
+  const destinationFile = `types/${project.out}` // Only used by prettier so we can set an override in .prettierrc
+  const formatted = prettier.format(toWrite, {
+    ...prettier.resolveConfig.sync(destinationFile),
+    parser: 'typescript',
+  })
+  fs.writeFileSync(`js/${project.out}.tsx`, formatted)
 }
 
 function decapitalize(s) {
@@ -500,7 +691,7 @@ function lintJSON(json) {
 
 function lintError(s, lint) {
   if (lint === 'ignore') {
-    console.log('Ignoring lint error:', colors.yellow(s))
+    // console.log('Ignoring lint error:', colors.yellow(s))
   } else {
     console.log(colors.red(s))
     process.exit(1)

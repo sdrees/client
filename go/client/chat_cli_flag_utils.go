@@ -11,6 +11,7 @@ import (
 
 	"github.com/keybase/cli"
 	"github.com/keybase/client/go/chat/globals"
+	"github.com/keybase/client/go/chat/search"
 	"github.com/keybase/client/go/chat/utils"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/chat1"
@@ -52,7 +53,7 @@ var chatFlags = map[string]cli.Flag{
 	"number": cli.IntFlag{
 		Name:  "number,n",
 		Usage: `Limit number of items`,
-		Value: 5,
+		Value: 15,
 	},
 	"unread-first": cli.IntFlag{
 		Name:  "unread-first",
@@ -93,6 +94,55 @@ var chatFlags = map[string]cli.Flag{
 	"unmute": cli.BoolFlag{
 		Name:  "u, unmute",
 		Usage: "Unmute the conversation",
+	},
+	"exploding-lifetime": cli.DurationFlag{
+		Name: "exploding-lifetime",
+		Usage: fmt.Sprintf(`Make this message an exploding message and set the lifetime for the given duration.
+	The maximum lifetime is %v (one week) and the minimum lifetime is %v. Cannot be used in conjunction with --public.`,
+			libkb.MaxEphemeralContentLifetime, libkb.MinEphemeralContentLifetime),
+	},
+}
+
+var chatSearchFlags = []cli.Flag{
+	cli.IntFlag{
+		Name:  "max-hits",
+		Value: 10,
+		Usage: fmt.Sprintf("Specify the maximum number of search hits to get. Maximum value is %d.", search.MaxAllowedSearchHits),
+	},
+	cli.StringFlag{
+		Name:  "sent-to",
+		Value: "",
+		Usage: "Filter search results to @ mentions of the given username",
+	},
+	cli.StringFlag{
+		Name:  "sent-by",
+		Value: "",
+		Usage: "Filter search results by the username of the sender.",
+	},
+	cli.StringFlag{
+		Name:  "sent-before",
+		Value: "",
+		Usage: "Filter search results by the message creation time. Mutually exclusive with sent-after.",
+	},
+	cli.StringFlag{
+		Name:  "sent-after",
+		Value: "",
+		Usage: "Filter search results by the message creation time. Mutually exclusive with sent-before.",
+	},
+	cli.IntFlag{
+		Name:  "B, before-context",
+		Value: 0,
+		Usage: "Print number messages of leading context before each match.",
+	},
+	cli.IntFlag{
+		Name:  "A, after-context",
+		Value: 0,
+		Usage: "Print number of messages of trailing context after each match.",
+	},
+	cli.IntFlag{
+		Name:  "C, context",
+		Value: 2,
+		Usage: "Print number of messages of leading and trailing context surrounding each match.",
 	},
 }
 
@@ -162,10 +212,10 @@ func annotateResolvingRequest(g *libkb.GlobalContext, req *chatConversationResol
 	if err != nil {
 		return err
 	}
-	switch *userOrTeamResult {
+	switch userOrTeamResult {
 	case keybase1.UserOrTeamResult_USER:
 		if g.Env.GetChatMemberType() == "impteam" {
-			req.MembersType = chat1.ConversationMembersType_IMPTEAM
+			req.MembersType = chat1.ConversationMembersType_IMPTEAMNATIVE
 		} else {
 			req.MembersType = chat1.ConversationMembersType_KBFS
 		}
@@ -185,13 +235,15 @@ func annotateResolvingRequest(g *libkb.GlobalContext, req *chatConversationResol
 	return nil
 }
 
-func makeChatCLIConversationFetcher(ctx *cli.Context, tlfName string, markAsRead bool) (fetcher chatCLIConversationFetcher, err error) {
+func makeChatCLIConversationFetcher(ctx *cli.Context, tlfName string, markAsRead bool) (fetcher chatCLIConvFetcher, err error) {
 	fetcher.query.MessageTypes = []chat1.MessageType{
 		chat1.MessageType_TEXT,
 		chat1.MessageType_ATTACHMENT,
 		chat1.MessageType_JOIN,
 		chat1.MessageType_LEAVE,
 		chat1.MessageType_SYSTEM,
+		chat1.MessageType_SENDPAYMENT,
+		chat1.MessageType_REQUESTPAYMENT,
 	}
 	fetcher.query.Limit = chat1.UnreadFirstNumLimit{
 		NumRead: 2,
@@ -206,7 +258,7 @@ func makeChatCLIConversationFetcher(ctx *cli.Context, tlfName string, markAsRead
 	fetcher.query.MarkAsRead = markAsRead
 
 	if fetcher.resolvingRequest, err = parseConversationResolvingRequest(ctx, tlfName); err != nil {
-		return chatCLIConversationFetcher{}, err
+		return chatCLIConvFetcher{}, err
 	}
 
 	return fetcher, nil

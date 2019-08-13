@@ -1,64 +1,36 @@
-/* eslint-disable flowtype/require-valid-file-annotation */
 /* Our bundler for the desktop app.
  * We build:
  * Electron main thread / render threads for the main window and remote windows (menubar, trackers, etc)
- * if isDumb we render just the dumb sheet
- * is isVisDiff we render screenshots
  */
-import DashboardPlugin from 'webpack-dashboard/plugin'
-import UglifyJSPlugin from 'uglifyjs-webpack-plugin'
-import getenv from 'getenv'
+import TerserPlugin from 'terser-webpack-plugin'
 import merge from 'webpack-merge'
 import path from 'path'
 import webpack from 'webpack'
+import HtmlWebpackPlugin from 'html-webpack-plugin'
 
-// External parameters which control the config
-const isDev = process.env.NODE_ENV !== 'production'
-const flags = {
-  // webpack dev server has issues serving mixed hot/not hot so we have to build non-hot things separately
-  isBeforeHot: getenv.boolish('BEFORE_HOT', false),
-  isDev,
-  isDumb: getenv.boolish('DUMB', false),
-  isHot: getenv.boolish('HOT', false),
-  isShowingDashboard: !getenv.boolish('NO_SERVER', !isDev),
-  isVisDiff: getenv.boolish('VISDIFF', false),
-}
+// When we start the hot server we want to build the main/dll without hot reloading statically
+const config = (_, {mode}) => {
+  const isDev = mode !== 'production'
+  const isHot = isDev && !!process.env['HOT']
+  const isStats = !!process.env['STATS']
 
-console.log('Flags: ', flags)
+  !isStats && console.error('Flags: ', {isDev, isHot})
 
-// The common config all other derive from
-const makeCommonConfig = () => {
-  const makeRules = () => {
+  const makeRules = nodeThread => {
     const fileLoaderRule = {
       loader: 'file-loader',
-      options: {
-        name: '[name].[ext]',
-      },
+      options: {name: '[name].[ext]'},
     }
 
     const babelRule = {
       loader: 'babel-loader',
       options: {
-        // Have to do this or it'll inherit babelrcs from the root and pull in things we don't want
-        babelrc: false,
         cacheDirectory: true,
-        plugins: [
-          ['transform-builtin-extend', {globals: ['Error']}], // we override Error sometimes
-          'transform-flow-strip-types', // ignore flow
-          'transform-object-rest-spread', // not supported by electrons node yet
-          'babel-plugin-transform-class-properties', // not supported by electrons node yet
-        ],
+        ignore: [/\.(native|ios|android)\.(ts|js)x?$/],
+        plugins: [...(isHot && !nodeThread ? ['react-hot-loader/babel'] : [])],
         presets: [
-          [
-            'env',
-            {
-              debug: false,
-              targets: {
-                electron: '1.7.5',
-              },
-            },
-          ],
-          'babel-preset-react',
+          ['@babel/preset-env', {debug: false, modules: false, targets: {electron: '5.0.7'}}],
+          '@babel/preset-typescript',
         ],
       },
     }
@@ -68,7 +40,7 @@ const makeCommonConfig = () => {
         // Don't include large mock images in a prod build
         include: path.resolve(__dirname, '../images/mock'),
         test: /\.jpg$/,
-        use: [flags.isDev ? fileLoaderRule : 'null-loader'],
+        use: [isDev ? fileLoaderRule : 'null-loader'],
       },
       {
         include: path.resolve(__dirname, '../images/icons'),
@@ -76,12 +48,17 @@ const makeCommonConfig = () => {
         use: ['null-loader'],
       },
       {
-        exclude: /((node_modules\/(?!universalify|fs-extra|react-redux))|\/dist\/)/,
-        test: /\.jsx?$/,
+        exclude: /((node_modules\/(?!universalify|fs-extra|react-redux|redux-saga|react-gateway))|\/dist\/)/,
+        test: /\.(ts|js)x?$/,
         use: [babelRule],
       },
       {
         test: [/emoji-datasource.*\.(gif|png)$/, /\.ttf$/],
+        use: [fileLoaderRule],
+      },
+      {
+        include: path.resolve(__dirname, '../images/illustrations'),
+        test: [/.*\.(gif|png)$/],
         use: [fileLoaderRule],
       },
       {
@@ -96,219 +73,158 @@ const makeCommonConfig = () => {
     ]
   }
 
-  const makeCommonPlugins = () => {
+  const publicPath = isHot ? 'http://localhost:4000/dist/' : '../dist/'
+
+  const makeCommonConfig = () => {
+    // If we use the hot server it pulls in this config
+    const devServer = {
+      compress: false,
+      contentBase: path.resolve(__dirname, 'dist'),
+      hot: isHot,
+      lazy: false,
+      overlay: true,
+      port: 4000,
+      publicPath: 'http://localhost:4000/dist/',
+      quiet: false,
+      stats: {colors: true},
+    }
+
     const defines = {
-      __DEV__: flags.isDev,
-      __HOT__: flags.isHot,
-      __SCREENSHOT__: flags.isVisDiff,
+      __DEV__: isDev,
+      __HOT__: isHot,
       __STORYBOOK__: false,
-      __VERSION__: flags.isDev ? JSON.stringify('Development') : JSON.stringify(process.env.APP_VERSION),
-      'process.env.NODE_ENV': flags.isDev ? JSON.stringify('development') : JSON.stringify('production'),
+      __STORYSHOT__: false,
+      __VERSION__: isDev ? JSON.stringify('Development') : JSON.stringify(process.env.APP_VERSION),
     }
     console.warn('Injecting defines: ', defines)
-    const definePlugin = [new webpack.DefinePlugin(defines)]
 
-    const uglifyPlugin = flags.isDev
-      ? []
-      : [
-          new UglifyJSPlugin({
-            sourceMap: true,
-            uglifyOptions: {
-              output: {
-                comments: false,
-              },
+    return {
+      bail: true,
+      context: path.resolve(__dirname, '..'),
+      devServer,
+      devtool: isDev ? 'eval' : 'source-map',
+      mode: isDev ? 'development' : 'production',
+      node: false,
+      output: {
+        filename: `[name]${isDev ? '.dev' : ''}.bundle.js`,
+        path: path.resolve(__dirname, 'dist'),
+        // can be the same?
+        publicPath,
+      },
+      plugins: [
+        new webpack.DefinePlugin(defines), // Inject some defines
+        new webpack.IgnorePlugin(/^\.\/locale$/, /moment$/), // Skip a bunch of crap moment pulls in
+      ],
+      resolve: {
+        ...(isHot
+          ? {
+              alias: {'react-dom': '@hot-loader/react-dom'},
+            }
+          : {}),
+        extensions: ['.desktop.js', '.desktop.tsx', '.js', '.jsx', '.tsx', '.ts', '.json', '.flow'],
+      },
+      stats: {
+        ...(isDev
+          ? {}
+          : {
+              exclude: undefined,
+              maxModules: Infinity,
+              providedExports: true,
+              usedExports: true,
+            }),
+      },
+      ...(isDev
+        ? {}
+        : {
+            optimization: {
+              minimizer: [
+                // options from create react app: https://github.com/facebook/create-react-app/blob/master/packages/react-scripts/config/webpack.config.prod.js
+                new TerserPlugin({
+                  cache: true,
+                  parallel: true,
+                  sourceMap: true,
+                  terserOptions: {
+                    compress: {
+                      comparisons: false,
+                      ecma: 5,
+                      inline: 2,
+                      warnings: false,
+                    },
+                    output: {
+                      comments: false,
+                    },
+                    // warnings: 'verbose', // uncomment to see more of what uglify is doing
+                  },
+                }),
+              ],
             },
           }),
-        ]
-
-    return [...definePlugin, ...uglifyPlugin].filter(Boolean)
-  }
-
-  // If we use the hot server it pulls in this config
-  const devServer = {
-    compress: false,
-    contentBase: path.resolve(__dirname, 'dist'),
-    hot: flags.isHot,
-    lazy: false,
-    overlay: true,
-    port: 4000,
-    publicPath: 'http://localhost:4000/dist/',
-    quiet: false,
-    stats: {
-      colors: true,
-    },
-  }
-
-  return {
-    bail: true,
-    cache: flags.isDev,
-    devServer,
-    module: {
-      rules: makeRules(),
-    },
-    node: {
-      __dirname: true,
-    },
-    output: {
-      filename: '[name].bundle.js',
-      path: path.resolve(__dirname, 'dist'),
-      publicPath: flags.isHot ? 'http://localhost:4000/dist/' : '../dist/',
-    },
-    plugins: makeCommonPlugins(),
-    resolve: {
-      extensions: ['.desktop.js', '.js', '.jsx', '.json', '.flow'],
-    },
-  }
-}
-
-const makeMainThreadConfig = () => {
-  const makeEntries = () => {
-    if (flags.isVisDiff) {
-      return {
-        'render-visdiff': path.resolve(__dirname, 'test/render-visdiff.js'),
-      }
-    } else {
-      return {
-        main: path.resolve(__dirname, 'app/index.js'),
-      }
     }
   }
 
-  return merge(commonConfig, {
-    entry: makeEntries(),
-    name: 'mainThread',
+  const commonConfig = makeCommonConfig()
+  const nodeConfig = merge(commonConfig, {
+    entry: {node: './desktop/app/node.desktop.tsx'},
+    module: {rules: makeRules(true)},
+    name: 'node',
+    plugins: [
+      // blacklist common things from the main thread to ensure the view layer doesn't bleed into the node layer
+      new webpack.IgnorePlugin(/^react$/),
+    ],
+    stats: {
+      ...(isDev ? {} : {usedExports: false}), // ignore exports warnings as its mostly used in the render thread
+    },
     target: 'electron-main',
   })
-}
 
-const makeRenderThreadConfig = () => {
-  const makeRenderPlugins = () => {
-    // Visual dashboard to see what the hot server is doing
-    const dashboardPlugin = flags.isShowingDashboard ? [new DashboardPlugin()] : []
-    // Allow hot module reload when editing files
-    const hmrPlugin = flags.isHot && flags.isDev
-      ? [new webpack.HotModuleReplacementPlugin(), new webpack.NamedModulesPlugin()]
-      : []
-    // Don't spit out errors while building
-    const noEmitOnErrorsPlugin = flags.isDev ? [new webpack.NoEmitOnErrorsPlugin()] : []
-    // Put common code between the entries into a sep. file
-    const commonChunksPlugin = flags.isDev && !flags.isVisDiff
-      ? [
-          new webpack.optimize.CommonsChunkPlugin({
-            filename: 'common-chunks.js',
-            minChunks: 2,
-            name: 'common-chunks',
-          }),
-        ]
-      : []
-
-    // Put our vendored stuff into its own thing
-    const dllPlugin = flags.isDev && !flags.isVisDiff
-      ? [
-          new webpack.DllReferencePlugin({
-            manifest: path.resolve(__dirname, 'dll/vendor-manifest.json'),
-          }),
-        ]
-      : []
-
-    return [
-      ...dashboardPlugin,
+  const hmrPlugin = isHot && isDev ? [new webpack.HotModuleReplacementPlugin()] : []
+  const template = path.join(__dirname, './renderer/index.html.template')
+  const makeHtmlName = name => `${name}${isDev ? '.dev' : ''}.html`
+  const makeViewPlugins = names =>
+    [
       ...hmrPlugin,
-      ...noEmitOnErrorsPlugin,
-      ...dllPlugin,
-      ...commonChunksPlugin,
+      // Map since we generate multiple html files
+      ...names.map(
+        name =>
+          new HtmlWebpackPlugin({
+            // chunks: [name],
+            filename: makeHtmlName(name),
+            inject: false,
+            isDev,
+            name,
+            template,
+          })
+      ),
     ].filter(Boolean)
+
+  // just keeping main in its old place
+  const entryOverride = {
+    main: 'desktop/renderer',
   }
 
-  // Have to inject some additional code if we're using HMR
-  const HMREntries = flags.isHot && flags.isDev
-    ? [
-        'react-hot-loader/patch',
-        'webpack-dev-server/client?http://localhost:4000',
-        'webpack/hot/only-dev-server',
-      ]
-    : []
-
-  const makeEntries = () => {
-    if (flags.isVisDiff) {
-      return {
-        visdiff: path.resolve(__dirname, '../test/render-dumb-sheet.js'),
-      }
-    } else if (flags.isDumb) {
-      return {
-        index: [...HMREntries, path.resolve(__dirname, 'renderer/dumb.js')],
-      }
-    } else
-      return {
-        index: [...HMREntries, path.resolve(__dirname, 'renderer/index.js')],
-        launcher: [...HMREntries, path.resolve(__dirname, 'renderer/launcher.js')],
-        'remote-component-loader': [
-          ...HMREntries,
-          path.resolve(__dirname, 'renderer/remote-component-loader.js'),
-        ],
-      }
+  const typeOverride = {
+    main: 'tsx',
+    menubar: 'tsx',
+    pinentry: 'tsx',
+    tracker2: 'tsx',
+    'unlock-folders': 'tsx',
   }
 
-  return merge(commonConfig, {
-    dependencies: flags.isDev && !flags.isVisDiff ? ['vendor'] : undefined,
-    // Sourcemaps, eval is very fast, but you might want something else if you want to see the original code
-    // Some eval sourcemaps cause issues with closures in chromium due to some bugs. Visdiff suffers from this and we don't debug it so
-    // lets disable sourcemaps for it
-    devtool: flags.isVisDiff ? undefined : flags.isDev ? 'eval' : 'source-map',
-    entry: makeEntries(),
-    name: 'renderThread',
-    plugins: makeRenderPlugins(),
+  // multiple entries so we can chunk shared parts
+  const entries = ['main', 'menubar', 'pinentry', 'unlock-folders', 'tracker2']
+  const viewConfig = merge(commonConfig, {
+    entry: entries.reduce((map, name) => {
+      map[name] = `./${entryOverride[name] || name}/main.desktop.${typeOverride[name] || 'js'}`
+      return map
+    }, {}),
+    module: {rules: makeRules(false)},
+    name: 'Keybase',
+    optimization: {splitChunks: {chunks: 'all'}},
+    plugins: makeViewPlugins(entries),
     target: 'electron-renderer',
   })
+
+  return [nodeConfig, viewConfig]
 }
-
-const makeDllConfig = () => {
-  return {
-    // This list came from looking at the webpack analyzer and choosing the largest / slowest items
-    entry: [
-      './markdown/parser',
-      'emoji-mart',
-      'framed-msgpack-rpc',
-      'immutable',
-      'inline-style-prefixer',
-      'lodash',
-      'moment',
-      'prop-types',
-      'qrcode-generator',
-      'react',
-      'react-dom',
-      'react-list',
-      'react-virtualized',
-      'recompose',
-      'redux',
-      'semver',
-    ],
-    name: 'vendor',
-    output: {
-      filename: 'dll.vendor.js',
-      library: 'vendor',
-      path: path.resolve(__dirname, 'dist/dll'),
-    },
-    plugins: [
-      new webpack.DllPlugin({
-        name: 'vendor',
-        path: path.resolve(__dirname, 'dll/vendor-manifest.json'),
-      }),
-      // Don't include all the moment locales
-      new webpack.IgnorePlugin(/^\.\/locale$/, /moment$/),
-    ],
-    target: 'electron-renderer',
-  }
-}
-
-const commonConfig = makeCommonConfig()
-const mainThreadConfig = makeMainThreadConfig()
-const renderThreadConfig = makeRenderThreadConfig()
-const dllConfig = flags.isDev && !flags.isVisDiff && makeDllConfig()
-
-// When we start the hot server we want to build the main/dll without hot reloading statically
-const config = (flags.isBeforeHot
-  ? [mainThreadConfig, dllConfig]
-  : [mainThreadConfig, renderThreadConfig, dllConfig]).filter(Boolean)
 
 export default config

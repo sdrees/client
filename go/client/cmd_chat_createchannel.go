@@ -30,6 +30,7 @@ func newCmdChatCreateChannel(cl *libcmdline.CommandLine, g *libkb.GlobalContext)
 		ArgumentHelp: "<team name> <channel name>",
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(NewCmdChatCreateChannelRunner(g), "create-channel", c)
+			cl.SetLogForward(libcmdline.LogForwardNone)
 		},
 		Flags: mustGetChatFlags("topic-type"),
 	}
@@ -48,9 +49,6 @@ func (c *CmdChatCreateChannel) Run() error {
 		TopicType:   c.topicType,
 		MembersType: chat1.ConversationMembersType_TEAM,
 		Visibility:  keybase1.TLFVisibility_PRIVATE,
-		ctx: &chatConversationResolvingRequestContext{
-			canonicalizedTlfName: c.teamName,
-		},
 	}
 
 	_, err = resolver.create(context.Background(), req)

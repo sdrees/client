@@ -7,13 +7,19 @@ import (
 
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/chat/storage"
+	"github.com/keybase/client/go/chat/types"
 	"github.com/keybase/client/go/kbtest"
 	"github.com/keybase/client/go/protocol/chat1"
+	"github.com/keybase/go-framed-msgpack-rpc/rpc"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
 )
 
 type errorClient struct{}
+
+func (e errorClient) CallCompressed(ctx context.Context, method string, arg interface{}, res interface{}, ctype rpc.CompressionType) error {
+	return fmt.Errorf("errorClient: Call %s", method)
+}
 
 func (e errorClient) Call(ctx context.Context, method string, arg interface{}, res interface{}) error {
 	return fmt.Errorf("errorClient: Call %s", method)
@@ -34,26 +40,32 @@ func TestFetchRetry(t *testing.T) {
 	u2 := world.GetUsers()[2]
 	uid := u.User.GetUID().ToBytes()
 	tc := world.Tcs[u.Username]
-	store := storage.New(globals.NewContext(tc.G, tc.ChatG))
+	store := storage.New(globals.NewContext(tc.G, tc.ChatG), tc.ChatG.ConvSource)
 
 	var convIDs []chat1.ConversationID
 	var convs []chat1.Conversation
-	convs = append(convs, newConv(ctx, t, tc, uid, ri, sender, u.Username+","+u1.Username))
-	convs = append(convs, newConv(ctx, t, tc, uid, ri, sender, u.Username+","+u2.Username))
-	convs = append(convs, newConv(ctx, t, tc, uid, ri, sender, u.Username+","+u2.Username+","+u1.Username))
+	_, conv := newConv(ctx, t, tc, uid, ri, sender, u.Username+","+u1.Username)
+	convs = append(convs, conv)
+	_, conv = newConv(ctx, t, tc, uid, ri, sender, u.Username+","+u2.Username)
+	convs = append(convs, conv)
+	_, conv = newConv(ctx, t, tc, uid, ri, sender, u.Username+","+u2.Username+","+u1.Username)
+	convs = append(convs, conv)
 	for _, conv := range convs {
 		convIDs = append(convIDs, conv.GetConvID())
 	}
 
 	// Nuke body cache
-	require.NoError(t, store.MaybeNuke(true, nil, convs[0].GetConvID(), uid))
+	t.Logf("clearing: %s", convs[0].GetConvID())
+	require.NoError(t, store.ClearAll(context.TODO(), convs[0].GetConvID(), uid))
 
 	errorRI := func() chat1.RemoteInterface { return chat1.RemoteClient{Cli: errorClient{}} }
 	tc.ChatG.ConvSource.SetRemoteInterface(errorRI)
 
-	inbox, _, err := tc.ChatG.InboxSource.Read(ctx, uid, nil, true, &chat1.GetInboxLocalQuery{
-		ConvIDs: convIDs,
-	}, nil)
+	inbox, _, err := tc.ChatG.InboxSource.Read(ctx, uid, types.ConversationLocalizerBlocking,
+		types.InboxSourceDataSourceAll, nil,
+		&chat1.GetInboxLocalQuery{
+			ConvIDs: convIDs,
+		}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, inbox.Convs[2].Error)
 	require.Nil(t, inbox.Convs[0].Error)

@@ -20,6 +20,8 @@ type CmdTeamAddMember struct {
 	Username             string
 	Role                 keybase1.TeamRole
 	SkipChatNotification bool
+	// TODO HOTPOT-227 expose in CLI flags
+	BotSettings *keybase1.TeamBotSettings
 }
 
 func newCmdTeamAddMember(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
@@ -98,6 +100,7 @@ func (c *CmdTeamAddMember) Run() error {
 		Email:                c.Email,
 		Username:             c.Username,
 		Role:                 c.Role,
+		BotSettings:          c.BotSettings,
 		SendChatNotification: !c.SkipChatNotification,
 	}
 
@@ -109,7 +112,8 @@ func (c *CmdTeamAddMember) Run() error {
 	dui := c.G().UI.GetDumbOutputUI()
 	if !res.Invited {
 		// TeamAddMember resulted in the user added to the team
-		if res.ChatSent {
+		if res.ChatSending {
+			// The chat message may still be in flight or fail.
 			dui.Printf("Success! A keybase chat message has been sent to %s. To skip this, use `-s` or `--skip-chat-message`\n", res.User.Username)
 		} else {
 			dui.Printf("Success! %s added to team.\n", res.User.Username)

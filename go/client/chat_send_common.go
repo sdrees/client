@@ -5,25 +5,31 @@ package client
 
 import (
 	"fmt"
+	"time"
 
 	"golang.org/x/net/context"
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/chat1"
+	"github.com/keybase/client/go/protocol/gregor1"
 	"github.com/keybase/client/go/protocol/keybase1"
 )
 
 type ChatSendArg struct {
 	resolvingRequest chatConversationResolvingRequest
+
 	// Only one of these should be set
-	message       string
-	setTopicName  string
-	setHeadline   string
-	clearHeadline bool
-	hasTTY        bool
-	nonBlock      bool
-	team          bool
-	mustNotExist  bool
+	message           string
+	setTopicName      string
+	setHeadline       string
+	clearHeadline     bool
+	deleteHistory     *chat1.MessageDeleteHistory
+	ephemeralLifetime time.Duration
+
+	hasTTY       bool
+	nonBlock     bool
+	team         bool // TODO is this field used?
+	mustNotExist bool
 }
 
 func chatSend(ctx context.Context, g *libkb.GlobalContext, c ChatSendArg) error {
@@ -32,20 +38,29 @@ func chatSend(ctx context.Context, g *libkb.GlobalContext, c ChatSendArg) error 
 		return err
 	}
 
+	createIfNotExists := true
+	if c.clearHeadline || c.deleteHistory != nil {
+		createIfNotExists = false
+	}
 	conversation, userChosen, err := resolver.Resolve(ctx, c.resolvingRequest, chatConversationResolvingBehavior{
-		CreateIfNotExists: true,
+		CreateIfNotExists: createIfNotExists,
 		MustNotExist:      c.mustNotExist,
 		Interactive:       c.hasTTY,
 		IdentifyBehavior:  keybase1.TLFIdentifyBehavior_CHAT_CLI,
 	})
-	if err != nil {
+	switch err.(type) {
+	case nil:
+		break
+	case libkb.ResolutionError:
+		return fmt.Errorf("could not resolve `%s` into Keybase user(s) or a team", c.resolvingRequest.TlfName)
+	default:
 		return err
 	}
 	conversationInfo := conversation.Info
 
-	var args chat1.PostLocalArg
-	args.ConversationID = conversationInfo.Id
-	args.IdentifyBehavior = keybase1.TLFIdentifyBehavior_CHAT_CLI
+	var arg chat1.PostLocalArg
+	arg.ConversationID = conversationInfo.Id
+	arg.IdentifyBehavior = keybase1.TLFIdentifyBehavior_CHAT_CLI
 
 	var msg chat1.MessagePlaintext
 	// msgV1.ClientHeader.{Sender,SenderDevice} are filled by service
@@ -68,6 +83,10 @@ func chatSend(ctx context.Context, g *libkb.GlobalContext, c ChatSendArg) error 
 	case c.clearHeadline:
 		msg.ClientHeader.MessageType = chat1.MessageType_HEADLINE
 		msg.MessageBody = chat1.NewMessageBodyWithHeadline(chat1.MessageHeadline{Headline: ""})
+	case c.deleteHistory != nil:
+		msg.ClientHeader.MessageType = chat1.MessageType_DELETEHISTORY
+		msg.ClientHeader.DeleteHistory = c.deleteHistory
+		msg.MessageBody = chat1.NewMessageBodyWithDeletehistory(*c.deleteHistory)
 	default:
 		// Ask for message contents
 		if len(c.message) == 0 {
@@ -80,6 +99,10 @@ func chatSend(ctx context.Context, g *libkb.GlobalContext, c ChatSendArg) error 
 				return err
 			}
 			confirmed = true
+		}
+		if c.ephemeralLifetime != 0 {
+			lifetime := gregor1.ToDurationSec(c.ephemeralLifetime)
+			msg.ClientHeader.EphemeralMetadata = &chat1.MsgEphemeralMetadata{Lifetime: lifetime}
 		}
 
 		msg.ClientHeader.MessageType = chat1.MessageType_TEXT
@@ -95,18 +118,18 @@ func chatSend(ctx context.Context, g *libkb.GlobalContext, c ChatSendArg) error 
 		confirmed = true
 	}
 
-	args.Msg = msg
+	arg.Msg = msg
 
 	if c.nonBlock {
 		var nbarg chat1.PostLocalNonblockArg
-		nbarg.ConversationID = args.ConversationID
-		nbarg.Msg = args.Msg
-		nbarg.IdentifyBehavior = args.IdentifyBehavior
+		nbarg.ConversationID = arg.ConversationID
+		nbarg.Msg = arg.Msg
+		nbarg.IdentifyBehavior = arg.IdentifyBehavior
 		if _, err = resolver.ChatClient.PostLocalNonblock(ctx, nbarg); err != nil {
 			return err
 		}
 	} else {
-		if _, err = resolver.ChatClient.PostLocal(ctx, args); err != nil {
+		if _, err = resolver.ChatClient.PostLocal(ctx, arg); err != nil {
 			return err
 		}
 	}

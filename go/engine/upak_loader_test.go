@@ -26,14 +26,14 @@ func TestLoadDeviceKeyNew(t *testing.T) {
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: fu.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestLoadDeviceKeyNew(t *testing.T) {
 	t.Logf("using device1:%+v", device1.ID)
 
 	t.Logf("load existing device key")
-	upk, deviceKey, revoked, err := tc.G.GetUPAKLoader().LoadDeviceKey(nil, user.GetUID(), device1.ID)
+	upk, deviceKey, revoked, err := tc.G.GetUPAKLoader().LoadDeviceKey(context.TODO(), user.GetUID(), device1.ID)
 	require.NoError(t, err)
 	require.Equal(t, user.GetNormalizedName().String(), upk.Base.Username, "usernames must match")
 	require.Equal(t, device1.ID, deviceKey.DeviceID, "deviceID must match")
@@ -85,7 +85,7 @@ func TestLoadDeviceKeyNew(t *testing.T) {
 	secUI := fu.NewSecretUI()
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: fu.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -94,7 +94,8 @@ func TestLoadDeviceKeyNew(t *testing.T) {
 	}
 
 	eng := NewPaperProvisionEngine(tc2.G, fu.Username, "fakedevice", loginUI.PaperPhrase)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc2).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("d2 provisioned (1)")
@@ -114,7 +115,7 @@ func TestLoadDeviceKeyNew(t *testing.T) {
 	t.Logf("using device2:%+v", device2.ID)
 
 	t.Logf("load brand new device (while old is cached)")
-	upk, deviceKey, revoked, err = tc.G.GetUPAKLoader().LoadDeviceKey(nil, user.GetUID(), device2.ID)
+	upk, deviceKey, revoked, err = tc.G.GetUPAKLoader().LoadDeviceKey(context.TODO(), user.GetUID(), device2.ID)
 	require.NoError(t, err)
 	require.Equal(t, user.GetNormalizedName().String(), upk.Base.Username, "usernames must match")
 	require.Equal(t, device2.ID, deviceKey.DeviceID, "deviceID must match")
@@ -160,7 +161,7 @@ func TestLoadDeviceKeyRevoked(t *testing.T) {
 	assertNumDevicesAndKeys(tc, fu, 1, 2)
 
 	t.Logf("load revoked device")
-	upk, deviceKey, revoked, err := tc.G.GetUPAKLoader().LoadDeviceKey(nil, user.GetUID(), thisDevice.ID)
+	upk, deviceKey, revoked, err := tc.G.GetUPAKLoader().LoadDeviceKey(context.TODO(), user.GetUID(), thisDevice.ID)
 	require.NoError(t, err)
 	require.Equal(t, user.GetNormalizedName().String(), upk.Base.Username, "usernames must match")
 	require.Equal(t, thisDevice.ID, deviceKey.DeviceID, "deviceID must match")
@@ -181,6 +182,7 @@ func TestLoadDeviceKeyRevoked(t *testing.T) {
 func TestFullSelfCacherFlushSingleMachine(t *testing.T) {
 	tc := SetupEngineTest(t, "fsc")
 	defer tc.Cleanup()
+	sigVersion := libkb.GetDefaultSigVersion(tc.G)
 
 	fu := CreateAndSignupFakeUser(tc, "fsc")
 
@@ -190,8 +192,8 @@ func TestFullSelfCacherFlushSingleMachine(t *testing.T) {
 		scv = u.GetSigChainLastKnownSeqno()
 		return nil
 	})
-	trackAlice(tc, fu)
-	defer untrackAlice(tc, fu)
+	trackAlice(tc, fu, sigVersion)
+	defer untrackAlice(tc, fu, sigVersion)
 	tc.G.GetFullSelfer().WithSelf(context.TODO(), func(u *libkb.User) error {
 		require.NotNil(t, u)
 		require.True(t, u.GetSigChainLastKnownSeqno() > scv)
@@ -204,21 +206,20 @@ func TestFullSelfCacherFlushTwoMachines(t *testing.T) {
 	defer tc.Cleanup()
 	fakeClock := clockwork.NewFakeClockAt(time.Now())
 	tc.G.SetClock(fakeClock)
-	tc.G.ResetLoginState()
 
 	t.Logf("create new user")
 	fu := NewFakeUserOrBust(t, "paper")
 	arg := MakeTestSignupEngineRunArg(fu)
 	arg.SkipPaper = false
 	loginUI := &paperLoginUI{Username: fu.Username}
-	ctx := &Context{
+	uis := libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		GPGUI:    &gpgtestui{},
 		SecretUI: fu.NewSecretUI(),
 		LoginUI:  loginUI,
 	}
-	s := NewSignupEngine(&arg, tc.G)
-	err := RunEngine(s, ctx)
+	s := NewSignupEngine(tc.G, &arg)
+	err := RunEngine2(NewMetaContextForTest(tc).WithUIs(uis), s)
 	if err != nil {
 		tc.T.Fatal(err)
 	}
@@ -243,7 +244,7 @@ func TestFullSelfCacherFlushTwoMachines(t *testing.T) {
 	secUI := fu.NewSecretUI()
 	provUI := newTestProvisionUIPaper()
 	provLoginUI := &libkb.TestLoginUI{Username: fu.Username}
-	ctx = &Context{
+	uis = libkb.UIs{
 		ProvisionUI: provUI,
 		LogUI:       tc2.G.UI.GetLogUI(),
 		SecretUI:    secUI,
@@ -252,13 +253,14 @@ func TestFullSelfCacherFlushTwoMachines(t *testing.T) {
 	}
 
 	eng := NewPaperProvisionEngine(tc2.G, fu.Username, "fakedevice", loginUI.PaperPhrase)
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc2).WithUIs(uis)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("d2 provisioned (1)")
 
 	// Without pubsub (not available on engine tests), we don't get any
-	// invalidation of the user on the the first machine (tc). So this
+	// invalidation of the user on the first machine (tc). So this
 	// user's sigchain should stay the same.
 	tc.G.GetFullSelfer().WithSelf(context.TODO(), func(u *libkb.User) error {
 		require.NotNil(t, u)
@@ -283,7 +285,7 @@ func TestUPAKDeadlock(t *testing.T) {
 	fu := CreateAndSignupFakeUserPaper(tc, "upak")
 
 	// First clear the cache
-	tc.G.KeyfamilyChanged(fu.UID())
+	tc.G.KeyfamilyChanged(context.TODO(), fu.UID())
 
 	var wg sync.WaitGroup
 
@@ -347,7 +349,7 @@ func TestLoadAfterAcctReset1(t *testing.T) {
 
 	loadUpak := func() error {
 		t.Logf("loadUpak: using username:%+v", fu.Username)
-		loadArg := libkb.NewLoadUserArg(tc.G).WithUID(fu.UID()).WithNetContext(context.TODO()).WithStaleOK(false)
+		loadArg := libkb.NewLoadUserArg(tc.G).WithUID(fu.UID()).WithNetContext(context.TODO()).WithStaleOK(false).WithForceMerkleServerPolling(true)
 
 		upak, _, err := tc.G.GetUPAKLoader().Load(loadArg)
 		if err != nil {
@@ -420,6 +422,8 @@ func TestLoadAfterAcctReset2(t *testing.T) {
 	// add new device keys.
 	ResetAccount(resetUserTC, fu)
 	tcp := SetupEngineTest(t, "login")
+	defer tcp.Cleanup()
+
 	fu.LoginOrBust(tcp)
 	if err := AssertProvisioned(tcp); err != nil {
 		t.Fatal(err)
@@ -434,4 +438,122 @@ func TestLoadAfterAcctReset2(t *testing.T) {
 	if upak1.Base.DeviceKeys[0].KID == upak2.Base.DeviceKeys[0].KID {
 		t.Fatal("Found old device key after LoadUser.")
 	}
+}
+
+// Test the bug in CORE-6943: after a reset, if we did two
+// logins in a row, right on top of each other, previous subchains
+// would be dropped from the self UPAK.
+func TestLoadAfterAcctResetCORE6943(t *testing.T) {
+	tc := SetupEngineTest(t, "clu")
+	defer tc.Cleanup()
+	sigVersion := libkb.GetDefaultSigVersion(tc.G)
+
+	t.Logf("create new user")
+	fu := CreateAndSignupFakeUser(tc, "res")
+
+	trackAlice(tc, fu, sigVersion)
+
+	loadUpak := func() (*keybase1.UserPlusAllKeys, error) {
+		t.Logf("loadUpak: using username:%+v", fu.Username)
+		loadArg := libkb.NewLoadUserArg(tc.G).WithUID(fu.UID()).WithPublicKeyOptional().WithNetContext(context.TODO()).WithStaleOK(false)
+		upak, _, err := tc.G.GetUPAKLoader().Load(loadArg)
+		if err != nil {
+			return nil, err
+		}
+
+		t.Logf("loadUpak done: using username:%+v uid: %+v keys: %d", upak.Base.Username, upak.Base.Uid, len(upak.Base.DeviceKeys))
+		return upak, nil
+	}
+
+	upak1, err := loadUpak()
+	if err != nil {
+		t.Fatalf("Failed to load user: %+v", err)
+	}
+
+	// Reset account and then login again to establish new eldest and
+	// add new device keys.
+	ResetAccount(tc, fu)
+
+	tc.G.GetUPAKLoader().Invalidate(context.TODO(), fu.UID())
+
+	fu.LoginOrBust(tc)
+	if err := AssertProvisioned(tc); err != nil {
+		t.Fatal(err)
+	}
+	// login a second time to force the bug.
+	fu.LoginOrBust(tc)
+
+	// Make sure that we can load the eldest key from the previous subchain
+	_, _, _, err = tc.G.GetUPAKLoader().LoadKeyV2(context.TODO(), fu.UID(), upak1.Base.DeviceKeys[0].KID)
+
+	if err != nil {
+		t.Fatal("Failed to load a UID/KID combo from first incarnation")
+	}
+
+	_, err = loadUpak()
+	if err != nil {
+		t.Fatalf("Failed to load user: %+v", err)
+	}
+}
+
+func TestUPAKUnstub(t *testing.T) {
+	tc := SetupEngineTest(t, "login")
+	defer tc.Cleanup()
+
+	u1 := CreateAndSignupFakeUser(tc, "first")
+	Logout(tc)
+	u2 := CreateAndSignupFakeUser(tc, "secon")
+
+	testTrack(t, tc, libkb.KeybaseSignatureV2, "t_alice")
+	testTrack(t, tc, libkb.KeybaseSignatureV2, u1.Username)
+
+	// The last link is always unstubbed, so this is a throw-away so that we have some links that
+	// are stubbed (the two just above).
+	testTrack(t, tc, libkb.KeybaseSignatureV2, "t_bob")
+
+	Logout(tc)
+	t.Logf("first logging back in")
+	u1.LoginOrBust(tc)
+
+	upl := tc.G.GetUPAKLoader()
+	mctx := NewMetaContextForTest(tc)
+
+	// wipe out all the caches
+	tc.G.LocalDb.Nuke()
+	upl.Invalidate(mctx.Ctx(), u2.UID())
+
+	assertStubbed := func() {
+		arg := libkb.NewLoadUserArgWithMetaContext(mctx).WithUID(u2.UID())
+		upak, _, err := upl.LoadV2(arg)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(upak.Current.RemoteTracks))
+		require.Equal(t, "t_bob", upak.Current.RemoteTracks[keybase1.UID("afb5eda3154bc13c1df0189ce93ba119")].Username)
+		require.False(t, upak.Current.Unstubbed)
+	}
+
+	assertStubbed()
+
+	Logout(tc)
+	t.Logf("second logging back in")
+	u2.LoginOrBust(tc)
+
+	assertStubbed()
+
+	assertAllLinks := func(stubMode libkb.StubMode) {
+		arg := libkb.NewLoadUserArgWithMetaContext(mctx).WithUID(u2.UID()).WithStubMode(stubMode)
+		upak, _, err := upl.LoadV2(arg)
+		require.NoError(t, err)
+		require.Equal(t, 3, len(upak.Current.RemoteTracks))
+		require.Equal(t, u1.Username, upak.Current.RemoteTracks[u1.UID()].Username)
+		require.True(t, upak.Current.Unstubbed)
+	}
+
+	assertAllLinks(libkb.StubModeUnstubbed)
+
+	Logout(tc)
+	t.Logf("first logging back in")
+	u1.LoginOrBust(tc)
+
+	assertAllLinks(libkb.StubModeUnstubbed)
+	assertAllLinks(libkb.StubModeStubbed)
 }

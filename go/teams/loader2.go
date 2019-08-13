@@ -1,12 +1,18 @@
 package teams
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
 	"fmt"
 
+	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/net/context"
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/keybase1"
+	"github.com/keybase/client/go/teams/hidden"
+	"github.com/keybase/go-codec/codec"
 )
 
 // loader2.go contains methods on TeamLoader.
@@ -20,7 +26,7 @@ import (
 func (l *TeamLoader) fillInStubbedLinks(ctx context.Context,
 	me keybase1.UserVersion, teamID keybase1.TeamID, state *keybase1.TeamData,
 	needSeqnos []keybase1.Seqno, readSubteamID keybase1.TeamID,
-	proofSet *proofSetT, parentChildOperations []*parentChildOperation) (
+	proofSet *proofSetT, parentChildOperations []*parentChildOperation, lkc *loadKeyCache) (
 	*keybase1.TeamData, *proofSetT, []*parentChildOperation, error) {
 
 	upperLimit := keybase1.Seqno(0)
@@ -45,19 +51,22 @@ func (l *TeamLoader) fillInStubbedLinks(ctx context.Context,
 	if err != nil {
 		return state, proofSet, parentChildOperations, err
 	}
-	newLinks, err := l.unpackLinks(ctx, teamUpdate)
+	newLinks, err := teamUpdate.unpackLinks(ctx)
 	if err != nil {
 		return state, proofSet, parentChildOperations, err
 	}
 
+	parentsCache := make(parentChainCache)
 	for _, link := range newLinks {
 		if link.isStubbed() {
 			return state, proofSet, parentChildOperations, NewStubbedErrorWithNote(
 				link, "filling stubbed link")
 		}
 
-		var signer *signerX
-		signer, err = l.verifyLink(ctx, teamID, state, me, link, readSubteamID, proofSet)
+		var signer *SignerX
+		var fullVerifyCutoff keybase1.Seqno // Always fullVerify when inflating. No reasoning has been done on whether it could be skipped.
+		signer, err = l.verifyLink(ctx, teamID, state, me, link, fullVerifyCutoff, readSubteamID,
+			proofSet, lkc, parentsCache)
 		if err != nil {
 			return state, proofSet, parentChildOperations, err
 		}
@@ -91,10 +100,14 @@ type getLinksLows struct {
 	PerTeamKey keybase1.PerTeamKeyGeneration
 	// Latest RKM semi-secret we have
 	ReaderKeyMask keybase1.PerTeamKeyGeneration
+	// Latest hidden chain seqno on file
+	HiddenChainSeqno keybase1.Seqno
+	// Ratcheted chain tail
+	HiddenChainRatchet keybase1.Seqno
 }
 
 // checkStubbed checks if it's OK if a link is stubbed.
-func (l *TeamLoader) checkStubbed(ctx context.Context, arg load2ArgT, link *chainLinkUnpacked) error {
+func (l *TeamLoader) checkStubbed(ctx context.Context, arg load2ArgT, link *ChainLinkUnpacked) error {
 	if !link.isStubbed() {
 		return nil
 	}
@@ -108,34 +121,73 @@ func (l *TeamLoader) checkStubbed(ctx context.Context, arg load2ArgT, link *chai
 }
 
 func (l *TeamLoader) loadUserAndKeyFromLinkInner(ctx context.Context,
-	inner SCChainLinkPayload) (
+	inner SCChainLinkPayload, lkc *loadKeyCache) (
 	signerUV keybase1.UserVersion, key *keybase1.PublicKeyV2NaCl, linkMap linkMapT, err error) {
-
-	defer l.G().CTrace(ctx, fmt.Sprintf("TeamLoader#loadUserForSigVerification(%d)", int(inner.Seqno)), func() error { return err })()
+	if !ShouldSuppressLogging(ctx) {
+		defer l.G().CTraceTimed(ctx, fmt.Sprintf("TeamLoader#loadUserForSigVerification(%d)", int(inner.Seqno)), func() error { return err })()
+	}
 	keySection := inner.Body.Key
 	if keySection == nil {
 		return signerUV, nil, nil, libkb.NoUIDError{}
 	}
 	uid := keySection.UID
 	kid := keySection.KID
-	signerUV, key, linkMap, err = l.world.loadKeyV2(ctx, uid, kid)
+	signerUV, key, linkMap, err = l.world.loadKeyV2(ctx, uid, kid, lkc)
 	if err != nil {
 		return signerUV, nil, nil, err
 	}
 	return signerUV, key, linkMap, nil
 }
 
+// Get the UV from a link but using server-trust and without verifying anything.
+func (l *TeamLoader) loadUserAndKeyFromLinkInnerNoVerify(ctx context.Context,
+	link *ChainLinkUnpacked) (signerUV keybase1.UserVersion, err error) {
+	if !ShouldSuppressLogging(ctx) {
+		defer l.G().CTraceTimed(ctx, fmt.Sprintf("TeamLoader#loadUserAndKeyFromLinkInnerNoVerify(%d)", int(link.inner.Seqno)), func() error { return err })()
+	}
+	keySection := link.inner.Body.Key
+	if keySection == nil {
+		return signerUV, libkb.NoUIDError{}
+	}
+	// Use the UID from the link body and EldestSeqno from the server-trust API response.
+	if link.source.EldestSeqno == 0 {
+		// We should never hit this case
+		return signerUV, fmt.Errorf("missing server hint for team sigchain link signer")
+	}
+	return NewUserVersion(keySection.UID, link.source.EldestSeqno), nil
+}
+
 func (l *TeamLoader) verifySignatureAndExtractKID(ctx context.Context, outer libkb.OuterLinkV2WithMetadata) (keybase1.KID, error) {
 	return outer.Verify(l.G().Log)
 }
 
-func (l *TeamLoader) addProofsForKeyInUserSigchain(ctx context.Context, teamID keybase1.TeamID, teamLinkMap linkMapT, link *chainLinkUnpacked, uid keybase1.UID, key *keybase1.PublicKeyV2NaCl, userLinkMap linkMapT, proofSet *proofSetT) {
-	a := newProofTerm(uid.AsUserOrTeam(), key.Base.Provisioning, userLinkMap)
-	b := newProofTerm(teamID.AsUserOrTeam(), link.SignatureMetadata(), teamLinkMap)
-	c := key.Base.Revocation
-	proofSet.AddNeededHappensBeforeProof(ctx, a, b, "user key provisioned before team link")
-	if c != nil {
-		proofSet.AddNeededHappensBeforeProof(ctx, b, newProofTerm(uid.AsUserOrTeam(), *c, userLinkMap), "team link before user key revocation")
+// These sigchain links are not checked dynamically. We assert that they are good.
+var whitelistedTeamLinkSigs = []keybase1.SigID{
+	// For the privacy of the users involved the issue is described only vaguely here.
+	// See CORE-8233 for more details.
+	// This team had a rotate_key link signed seconds before the revocation of the key that signed the link.
+	// Due to a bug the signing device was allowed to be revoked with a signature that pointed to a merkle
+	// root prior to the team link signature. This makes it impossible for the client to independently
+	// verify that the team link was signed before the device was revoked. But it was, it's all good.
+	"e8279d7c73b8defab299094b73800262239e5a03812040ed381cc613a3db515622",
+
+	// See https://github.com/keybase/client/issues/17573; a server bug allowed a rotate after a revoke, which
+	// has been fixed in CORE-10942.
+	"070e6d737607109ba17d1d43419d950cde6d206b66c555c837566913a31ca59122",
+}
+
+func (l *TeamLoader) addProofsForKeyInUserSigchain(ctx context.Context, teamID keybase1.TeamID, link *ChainLinkUnpacked, uid keybase1.UID, key *keybase1.PublicKeyV2NaCl, userLinkMap linkMapT, proofSet *proofSetT) {
+	for _, okSigID := range whitelistedTeamLinkSigs {
+		if link.SigID().Equal(okSigID) {
+			// This proof is whitelisted, so don't check it.
+			return
+		}
+	}
+
+	event1Link := newProofTerm(teamID.AsUserOrTeam(), link.SignatureMetadata(), nil)
+	event2Revoke := key.Base.Revocation
+	if event2Revoke != nil {
+		proofSet.AddNeededHappensBeforeProof(ctx, event1Link, newProofTerm(uid.AsUserOrTeam(), *event2Revoke, userLinkMap), "team link before user key revocation")
 	}
 }
 
@@ -151,8 +203,11 @@ func (l *TeamLoader) addProofsForKeyInUserSigchain(ctx context.Context, teamID k
 // - Check the rest of the format of the inner link
 // Returns the signer, or nil if the link was stubbed
 func (l *TeamLoader) verifyLink(ctx context.Context,
-	teamID keybase1.TeamID, state *keybase1.TeamData, me keybase1.UserVersion, link *chainLinkUnpacked,
-	readSubteamID keybase1.TeamID, proofSet *proofSetT) (*signerX, error) {
+	teamID keybase1.TeamID, state *keybase1.TeamData, me keybase1.UserVersion, link *ChainLinkUnpacked,
+	fullVerifyCutoff keybase1.Seqno, readSubteamID keybase1.TeamID, proofSet *proofSetT, lkc *loadKeyCache,
+	parentsCache parentChainCache) (*SignerX, error) {
+	ctx, tbs := l.G().CTimeBuckets(ctx)
+	defer tbs.Record("TeamLoader.verifyLink")()
 
 	if link.isStubbed() {
 		return nil, nil
@@ -167,33 +222,33 @@ func (l *TeamLoader) verifyLink(ctx context.Context,
 		return nil, fmt.Errorf("team ID mismatch: %s != %s", teamID, link.innerTeamID)
 	}
 
-	kid, err := l.verifySignatureAndExtractKID(ctx, *link.outerLink)
+	signedByKID, err := l.verifySignatureAndExtractKID(ctx, *link.outerLink)
 	if err != nil {
 		return nil, err
 	}
 
-	signerUV, key, linkMap, err := l.loadUserAndKeyFromLinkInner(ctx, *link.inner)
-	if err != nil {
-		return nil, err
-	}
+	// FullVerify all links except for `team.leave` links for which there is
+	// an admin link later in the chain.
+	// Such a link has effectively been verified for us by the admin who signed on top.
+	// This trick can be used on `team.leave` links because they do not add admins.
+	fullVerify := (link.LinkType() != libkb.SigchainV2TypeTeamLeave) ||
+		(link.Seqno() >= fullVerifyCutoff) ||
+		(link.source.EldestSeqno == 0)
 
-	if !kid.Equal(key.Base.Kid) {
-		return nil, libkb.NewWrongKidError(kid, key.Base.Kid)
-	}
-
-	teamLinkMap := make(linkMapT)
-	if state != nil {
-		// copy over the stored links
-		for k, v := range state.Chain.LinkIDs {
-			teamLinkMap[k] = v
+	var signerUV keybase1.UserVersion
+	if fullVerify {
+		signerUV, err = l.loadUserAndKeyFromLinkInnerAndVerify(ctx, teamID, state, link, signedByKID, proofSet, lkc)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		signerUV, err = l.loadUserAndKeyFromLinkInnerNoVerify(ctx, link)
+		if err != nil {
+			return nil, err
 		}
 	}
-	// add on the link that is being checked
-	teamLinkMap[link.Seqno()] = link.LinkID().Export()
 
-	l.addProofsForKeyInUserSigchain(ctx, teamID, teamLinkMap, link, signerUV.Uid, key, linkMap, proofSet)
-
-	signer := signerX{signer: signerUV}
+	signer := SignerX{signer: signerUV}
 
 	// For a root team link, or a subteam_head, there is no reason to check adminship
 	// or writership (or readership) for the team.
@@ -201,34 +256,104 @@ func (l *TeamLoader) verifyLink(ctx context.Context,
 		return &signer, nil
 	}
 
-	var isReaderOrAbove bool
-	if !link.outerLink.LinkType.RequiresAdminPermission() {
-		err = l.verifyWriterOrReaderPermissions(ctx, state, link, signerUV)
-		isReaderOrAbove = (err == nil)
+	minRole := link.outerLink.LinkType.RequiresAtLeastRole()
+	linkType := link.outerLink.LinkType
+	// Note: If minRole is OWNER it will be treated as ADMIN here (weaker check).
+	if !ShouldSuppressLogging(ctx) {
+		l.G().Log.CDebugf(ctx, "verifyLink: %v minRole:%v", linkType, minRole)
 	}
-	if link.outerLink.LinkType.RequiresAdminPermission() || !isReaderOrAbove {
+
+	switch minRole {
+	case keybase1.TeamRole_NONE:
+		// Anyone can make this link. These didn't exist at the time.
+		return &signer, nil
+	case keybase1.TeamRole_RESTRICTEDBOT:
+		err = l.verifyExplicitPermission(ctx, state, link, signerUV, keybase1.TeamRole_RESTRICTEDBOT)
+		if err == nil {
+			return &signer, err
+		}
+		if !ShouldSuppressLogging(ctx) {
+			l.G().Log.CDebugf(ctx, "verifyLink: %v not a %v: %v", linkType, keybase1.TeamRole_RESTRICTEDBOT, err)
+		}
+		// Fall through to a higher role check
+		fallthrough
+	case keybase1.TeamRole_BOT:
+		err = l.verifyExplicitPermission(ctx, state, link, signerUV, keybase1.TeamRole_BOT)
+		if err == nil {
+			return &signer, err
+		}
+		if !ShouldSuppressLogging(ctx) {
+			l.G().Log.CDebugf(ctx, "verifyLink: %v not a %v: %v", linkType, keybase1.TeamRole_BOT, err)
+		}
+		// Fall through to a higher role check
+		fallthrough
+	case keybase1.TeamRole_READER:
+		err = l.verifyExplicitPermission(ctx, state, link, signerUV, keybase1.TeamRole_READER)
+		if err == nil {
+			return &signer, err
+		}
+		if !ShouldSuppressLogging(ctx) {
+			l.G().Log.CDebugf(ctx, "verifyLink: %v not a %v: %v", linkType, keybase1.TeamRole_READER, err)
+		}
+		// Fall through to a higher role check
+		fallthrough
+	case keybase1.TeamRole_WRITER:
+		err = l.verifyExplicitPermission(ctx, state, link, signerUV, keybase1.TeamRole_WRITER)
+		if err == nil {
+			return &signer, err
+		}
+		if !ShouldSuppressLogging(ctx) {
+			l.G().Log.CDebugf(ctx, "verifyLink: %v not a %v: %v", linkType, keybase1.TeamRole_WRITER, err)
+		}
+		// Fall through to a higher role check
+		fallthrough
+	case keybase1.TeamRole_OWNER, keybase1.TeamRole_ADMIN:
 		// Check for admin permissions if they are not an on-chain reader/writer
 		// because they might be an implicit admin.
 		// Reassigns signer, might set implicitAdmin.
-		signer, err = l.verifyAdminPermissions(ctx, state, me, link, readSubteamID, signerUV, proofSet)
+		signer, err = l.verifyAdminPermissions(ctx, state, me, link, readSubteamID, signerUV, proofSet, parentsCache)
+		if !ShouldSuppressLogging(ctx) {
+			l.G().Log.CDebugf(ctx, "verifyLink: not a %v: %v", minRole, err)
+		}
+		return &signer, err
+	default:
+		return nil, fmt.Errorf("unrecognized role %v required for link", minRole)
 	}
-	return &signer, err
 }
 
-func (l *TeamLoader) verifyWriterOrReaderPermissions(ctx context.Context,
-	state *keybase1.TeamData, link *chainLinkUnpacked, uv keybase1.UserVersion) error {
-
-	return (TeamSigChainState{state.Chain}).AssertWasReaderAt(uv, link.SigChainLocation())
+func (l *TeamLoader) loadUserAndKeyFromLinkInnerAndVerify(ctx context.Context, teamID keybase1.TeamID, state *keybase1.TeamData,
+	link *ChainLinkUnpacked, signedByKID keybase1.KID, proofSet *proofSetT, lkc *loadKeyCache) (signer keybase1.UserVersion, err error) {
+	signer, key, linkMap, err := l.loadUserAndKeyFromLinkInner(ctx, *link.inner, lkc)
+	if err != nil {
+		return keybase1.UserVersion{}, err
+	}
+	if !signedByKID.Equal(key.Base.Kid) {
+		return keybase1.UserVersion{}, libkb.NewWrongKidError(signedByKID, key.Base.Kid)
+	}
+	l.addProofsForKeyInUserSigchain(ctx, teamID, link, signer.Uid, key, linkMap, proofSet)
+	return signer, nil
 }
+
+// Verify that the user had the explicit on-chain role just before this `link`.
+func (l *TeamLoader) verifyExplicitPermission(ctx context.Context, state *keybase1.TeamData,
+	link *ChainLinkUnpacked, uv keybase1.UserVersion, atOrAbove keybase1.TeamRole) error {
+	return (TeamSigChainState{inner: state.Chain}).AssertWasRoleOrAboveAt(uv, atOrAbove, link.SigChainLocation().Sub1())
+}
+
+type parentChainCache map[keybase1.TeamID]*keybase1.TeamData
 
 // Does not return a full TeamData because it might get a subteam-reader version.
 func (l *TeamLoader) walkUpToAdmin(
 	ctx context.Context, team *keybase1.TeamData, me keybase1.UserVersion, readSubteamID keybase1.TeamID,
-	uv keybase1.UserVersion, admin SCTeamAdmin) (*TeamSigChainState, error) {
+	uv keybase1.UserVersion, admin SCTeamAdmin, parentsCache parentChainCache) (*TeamSigChainState, error) {
 
 	target, err := admin.TeamID.ToTeamID()
 	if err != nil {
 		return nil, err
+	}
+
+	if t, ok := parentsCache[target]; ok {
+		return &TeamSigChainState{inner: t.Chain}, nil
 	}
 
 	for team != nil && !team.Chain.Id.Eq(target) {
@@ -236,11 +361,16 @@ func (l *TeamLoader) walkUpToAdmin(
 		if parent == nil {
 			return nil, NewAdminNotFoundError(admin)
 		}
+		if t, ok := parentsCache[*parent]; ok {
+			team = t
+			continue
+		}
 		arg := load2ArgT{
 			teamID: *parent,
 			reason: "walkUpToAdmin",
 			me:     me,
 			// Get the latest so that the linkmap is up to date for the proof order checker.
+			// But do it only once (hence the `parentsCache`) per team.
 			forceRepoll:   true,
 			readSubteamID: &readSubteamID,
 		}
@@ -252,6 +382,7 @@ func (l *TeamLoader) walkUpToAdmin(
 			return nil, err
 		}
 		team = &load2Res.team
+		parentsCache[*parent] = team
 	}
 	if team == nil {
 		return nil, fmt.Errorf("teamloader fault: nil team after admin walk")
@@ -259,34 +390,36 @@ func (l *TeamLoader) walkUpToAdmin(
 	return &TeamSigChainState{inner: team.Chain}, nil
 }
 
-func (l *TeamLoader) addProofsForAdminPermission(ctx context.Context, t keybase1.TeamSigChainState, link *chainLinkUnpacked, bookends proofTermBookends, proofSet *proofSetT) {
-	a := bookends.left
-	b := newProofTerm(t.Id.AsUserOrTeam(), link.SignatureMetadata(), t.LinkIDs)
-	c := bookends.right
-	proofSet.AddNeededHappensBeforeProof(ctx, a, b, "became admin before team link")
-	if c != nil {
-		proofSet.AddNeededHappensBeforeProof(ctx, b, *c, "team link before adminship demotion")
+func (l *TeamLoader) addProofsForAdminPermission(ctx context.Context, teamID keybase1.TeamID, link *ChainLinkUnpacked, bookends proofTermBookends, proofSet *proofSetT) {
+	event1Promote := bookends.left
+	event2Link := newProofTerm(teamID.AsUserOrTeam(), link.SignatureMetadata(), nil)
+	event3Demote := bookends.right
+	proofSet.AddNeededHappensBeforeProof(ctx, event1Promote, event2Link, "became admin before team link")
+	if event3Demote != nil {
+		proofSet.AddNeededHappensBeforeProof(ctx, event2Link, *event3Demote, "team link before adminship demotion")
 	}
 }
 
+// Verify that a user has admin permissions.
+// Because this uses the proofSet, if it is called may return success and fail later.
 func (l *TeamLoader) verifyAdminPermissions(ctx context.Context,
-	state *keybase1.TeamData, me keybase1.UserVersion, link *chainLinkUnpacked, readSubteamID keybase1.TeamID,
-	uv keybase1.UserVersion, proofSet *proofSetT) (signerX, error) {
+	state *keybase1.TeamData, me keybase1.UserVersion, link *ChainLinkUnpacked, readSubteamID keybase1.TeamID,
+	uv keybase1.UserVersion, proofSet *proofSetT, parentsCache parentChainCache) (SignerX, error) {
 
-	signer := signerX{signer: uv}
+	signer := SignerX{signer: uv}
 	explicitAdmin := link.inner.TeamAdmin()
 	teamChain := TeamSigChainState{inner: state.Chain}
 
 	// In the simple case, we don't ask for explicit adminship, so we have to be admins of
 	// the current chain at or before the signature in question.
 	if explicitAdmin == nil {
-		err := teamChain.AssertWasAdminAt(uv, link.SigChainLocation())
+		err := teamChain.AssertWasAdminAt(uv, link.SigChainLocation().Sub1())
 		return signer, err
 	}
 
-	// The more complicated case is that there's an explicit admin permssion given, perhaps
+	// The more complicated case is that there's an explicit admin permission given, perhaps
 	// of a parent team.
-	adminTeam, err := l.walkUpToAdmin(ctx, state, me, readSubteamID, uv, *explicitAdmin)
+	adminTeam, err := l.walkUpToAdmin(ctx, state, me, readSubteamID, uv, *explicitAdmin, parentsCache)
 	if err != nil {
 		return signer, err
 	}
@@ -301,7 +434,7 @@ func (l *TeamLoader) verifyAdminPermissions(ctx context.Context,
 		signer.implicitAdmin = true
 	}
 
-	l.addProofsForAdminPermission(ctx, state.Chain, link, adminBookends, proofSet)
+	l.addProofsForAdminPermission(ctx, state.Chain.Id, link, adminBookends, proofSet)
 	return signer, nil
 }
 
@@ -311,7 +444,7 @@ func (l *TeamLoader) verifyAdminPermissions(ctx context.Context,
 // Technically subteam delete is one of these too, but we don't
 // bother because the subteam is rendered inaccessible.
 func (l *TeamLoader) isParentChildOperation(ctx context.Context,
-	link *chainLinkUnpacked) bool {
+	link *ChainLinkUnpacked) bool {
 
 	switch link.LinkType() {
 	case libkb.SigchainV2TypeTeamSubteamHead, libkb.SigchainV2TypeTeamRenameUpPointer:
@@ -322,7 +455,7 @@ func (l *TeamLoader) isParentChildOperation(ctx context.Context,
 }
 
 func (l *TeamLoader) toParentChildOperation(ctx context.Context,
-	link *chainLinkUnpacked) (*parentChildOperation, error) {
+	link *ChainLinkUnpacked) (*parentChildOperation, error) {
 
 	if !l.isParentChildOperation(ctx, link) {
 		return nil, fmt.Errorf("link is not a parent-child operation: (seqno:%v, type:%v)",
@@ -368,53 +501,48 @@ func (l *TeamLoader) toParentChildOperation(ctx context.Context,
 }
 
 // Apply a new link to the sigchain state.
+// `state` is moved into this function. There must exist no live references into it from now on.
 // `signer` may be nil iff link is stubbed.
 func (l *TeamLoader) applyNewLink(ctx context.Context,
-	state *keybase1.TeamData, link *chainLinkUnpacked,
-	signer *signerX, me keybase1.UserVersion) (*keybase1.TeamData, error) {
+	state *keybase1.TeamData, hiddenChainState *keybase1.HiddenTeamChain, link *ChainLinkUnpacked,
+	signer *SignerX, me keybase1.UserVersion) (*keybase1.TeamData, error) {
+	ctx, tbs := l.G().CTimeBuckets(ctx)
+	defer tbs.Record("TeamLoader.applyNewLink")()
 
-	l.G().Log.CDebugf(ctx, "TeamLoader applying link seqno:%v", link.Seqno())
-
-	var player *TeamSigChainPlayer
-	if state == nil {
-		player = NewTeamSigChainPlayer(l.G(), me)
-	} else {
-		player = NewTeamSigChainPlayerWithState(l.G(), me, TeamSigChainState{inner: state.Chain})
+	if !ShouldSuppressLogging(ctx) {
+		l.G().Log.CDebugf(ctx, "TeamLoader applying link seqno:%v", link.Seqno())
 	}
 
-	err := player.AppendChainLink(ctx, link, signer)
-	if err != nil {
-		return nil, err
-	}
-
-	newChainState, err := player.GetState()
-	if err != nil {
-		return nil, err
-	}
-
+	var chainState *TeamSigChainState
 	var newState *keybase1.TeamData
 	if state == nil {
 		newState = &keybase1.TeamData{
 			// Name is left blank until calculateName updates it.
 			// It shall not be blank by the time it is returned from load2.
-			Name:            keybase1.TeamName{},
-			Chain:           newChainState.inner,
-			PerTeamKeySeeds: make(map[keybase1.PerTeamKeyGeneration]keybase1.PerTeamKeySeedItem),
-			ReaderKeyMasks:  make(map[keybase1.TeamApplication]map[keybase1.PerTeamKeyGeneration]keybase1.MaskB64),
+			Subversion:                2, // see storage/std.go for more info on this
+			Name:                      keybase1.TeamName{},
+			PerTeamKeySeedsUnverified: make(map[keybase1.PerTeamKeyGeneration]keybase1.PerTeamKeySeedItem),
+			ReaderKeyMasks:            make(map[keybase1.TeamApplication]map[keybase1.PerTeamKeyGeneration]keybase1.MaskB64),
 		}
 	} else {
-		newState2 := state.DeepCopy()
-		newState2.Chain = newChainState.inner
-		newState = &newState2
+		chainState = &TeamSigChainState{inner: state.Chain, hidden: hiddenChainState}
+		newState = state
+		state = nil
 	}
+
+	newChainState, err := AppendChainLink(ctx, l.G(), me, chainState, link, signer)
+	if err != nil {
+		return nil, err
+	}
+	newState.Chain = newChainState.inner
 
 	return newState, nil
 }
 
 // Inflate a link that was stubbed with its non-stubbed data.
 func (l *TeamLoader) inflateLink(ctx context.Context,
-	state *keybase1.TeamData, link *chainLinkUnpacked,
-	signer signerX, me keybase1.UserVersion) (
+	state *keybase1.TeamData, link *ChainLinkUnpacked,
+	signer SignerX, me keybase1.UserVersion) (
 	*keybase1.TeamData, error) {
 
 	l.G().Log.CDebugf(ctx, "TeamLoader inflating link seqno:%v", link.Seqno())
@@ -425,19 +553,11 @@ func (l *TeamLoader) inflateLink(ctx context.Context,
 		return nil, NewInflateErrorWithNote(link, "no prior state")
 	}
 
-	player := NewTeamSigChainPlayerWithState(l.G(), me, TeamSigChainState{inner: state.Chain})
-
-	err := player.InflateLink(link, signer)
+	newState := state.DeepCopy() // Clone the state and chain so that our parameters don't get consumed.
+	newChainState, err := InflateLink(ctx, l.G(), me, TeamSigChainState{inner: newState.Chain}, link, signer)
 	if err != nil {
 		return nil, err
 	}
-
-	newChainState, err := player.GetState()
-	if err != nil {
-		return nil, err
-	}
-
-	newState := state.DeepCopy()
 	newState.Chain = newChainState.inner
 
 	return &newState, nil
@@ -465,13 +585,15 @@ func (l *TeamLoader) checkParentChildOperations(ctx context.Context,
 
 		reason: "checkParentChildOperations-parent",
 
-		needAdmin:         false,
-		needKeyGeneration: 0,
-		wantMembers:       nil,
-		wantMembersRole:   keybase1.TeamRole_NONE,
-		forceFullReload:   false,
-		forceRepoll:       false,
-		staleOK:           true, // stale is fine, as long as get those seqnos.
+		needAdmin:                             false,
+		needKeyGeneration:                     0,
+		needApplicationsAtGenerations:         nil,
+		needApplicationsAtGenerationsWithKBFS: nil,
+		wantMembers:                           nil,
+		wantMembersRole:                       keybase1.TeamRole_NONE,
+		forceFullReload:                       false,
+		forceRepoll:                           false,
+		staleOK:                               true, // stale is fine, as long as get those seqnos.
 
 		needSeqnos:    needParentSeqnos,
 		readSubteamID: &readSubteamID,
@@ -522,90 +644,166 @@ func (l *TeamLoader) checkProofs(ctx context.Context,
 	// Without this it would fail in some cases when the team is on the left.
 	// Because the team linkmap in the proof objects is stale.
 	proofSet.SetTeamLinkMap(ctx, state.Chain.Id, state.Chain.LinkIDs)
-	return proofSet.check(ctx, l.world)
+	if !proofSet.checkRequired() {
+		return nil
+	}
+	return proofSet.check(ctx, l.world, teamEnv.ProofSetParallel)
+}
+
+func (l *TeamLoader) unboxKBFSCryptKeys(ctx context.Context, key keybase1.TeamApplicationKey,
+	keysetHash keybase1.TeamEncryptedKBFSKeysetHash, encryptedKeyset string) ([]keybase1.CryptKey, error) {
+
+	// Check hash
+	sbytes := sha256.Sum256([]byte(encryptedKeyset))
+	if !keysetHash.SecureEqual(keybase1.TeamEncryptedKBFSKeysetHashFromBytes(sbytes[:])) {
+		return nil, errors.New("encrypted TLF upgrade does not match sigchain hash")
+	}
+
+	// Decode
+	packed, err := base64.StdEncoding.DecodeString(encryptedKeyset)
+	if err != nil {
+		return nil, err
+	}
+	var keysetRecord keybase1.TeamEncryptedKBFSKeyset
+	mh := codec.MsgpackHandle{WriteExt: true}
+	decoder := codec.NewDecoderBytes(packed, &mh)
+	if err = decoder.Decode(&keysetRecord); err != nil {
+		return nil, err
+	}
+
+	// Decrypt
+	var encKey [libkb.NaclSecretBoxKeySize]byte = key.Material()
+	var nonce [libkb.NaclDHNonceSize]byte
+	if len(keysetRecord.N) != libkb.NaclDHNonceSize {
+		return nil, libkb.DecryptBadNonceError{}
+	}
+	copy(nonce[:], keysetRecord.N)
+	plain, ok := secretbox.Open(nil, keysetRecord.E, &nonce, (*[32]byte)(&encKey))
+	if !ok {
+		return nil, libkb.DecryptOpenError{}
+	}
+
+	// Decode again
+	var cryptKeys []keybase1.CryptKey
+	decoder = codec.NewDecoderBytes(plain, &mh)
+	if err = decoder.Decode(&cryptKeys); err != nil {
+		return nil, err
+	}
+
+	return cryptKeys, nil
+}
+
+// AddKBFSCryptKeys mutates `state`
+func (l *TeamLoader) addKBFSCryptKeys(mctx libkb.MetaContext, team Teamer, upgrades []keybase1.TeamGetLegacyTLFUpgrade) error {
+	m := make(map[keybase1.TeamApplication][]keybase1.CryptKey)
+	for _, upgrade := range upgrades {
+		key, err := ApplicationKeyAtGeneration(mctx, team, upgrade.AppType, keybase1.PerTeamKeyGeneration(upgrade.TeamGeneration))
+		if err != nil {
+			return err
+		}
+
+		chainInfo, ok := team.MainChain().Chain.TlfLegacyUpgrade[upgrade.AppType]
+		if !ok {
+			return errors.New("legacy tlf upgrade payload present without chain link")
+		}
+		if chainInfo.TeamGeneration != upgrade.TeamGeneration {
+			return fmt.Errorf("legacy tlf upgrade team generation mismatch: %d != %d",
+				chainInfo.TeamGeneration, upgrade.TeamGeneration)
+		}
+
+		cryptKeys, err := l.unboxKBFSCryptKeys(mctx.Ctx(), key, chainInfo.KeysetHash, upgrade.EncryptedKeyset)
+		if err != nil {
+			return err
+		}
+		if chainInfo.LegacyGeneration != cryptKeys[len(cryptKeys)-1].KeyGeneration {
+			return fmt.Errorf("legacy tlf upgrade legacy generation mismatch: %d != %d",
+				chainInfo.LegacyGeneration, cryptKeys[len(cryptKeys)-1].KeyGeneration)
+		}
+
+		m[upgrade.AppType] = cryptKeys
+	}
+	team.MainChain().TlfCryptKeys = m
+	return nil
 }
 
 // Add data to the state that is not included in the sigchain:
 // - per team keys
 // - reader key masks
-// Checks that the team keys match the published values on the chain.
 // Checks that the off-chain data ends up exactly in sync with the chain, generation-wise.
-func (l *TeamLoader) addSecrets(ctx context.Context,
-	state *keybase1.TeamData, me keybase1.UserVersion, box *TeamBox, prevs map[keybase1.PerTeamKeyGeneration]prevKeySealedEncoded,
-	readerKeyMasks []keybase1.ReaderKeyMask) (*keybase1.TeamData, error) {
+// Does _not_ check that keys match the sigchain.
+// Mutates `state`
+func (l *TeamLoader) addSecrets(mctx libkb.MetaContext,
+	team Teamer, me keybase1.UserVersion, box *TeamBox, prevs map[keybase1.PerTeamKeyGeneration]prevKeySealedEncoded,
+	readerKeyMasks []keybase1.ReaderKeyMask) error {
 
-	latestReceivedGen, seeds, err := l.unboxPerTeamSecrets(ctx, box, prevs)
+	state := team.MainChain()
+
+	latestReceivedGen, seeds, err := l.unboxPerTeamSecrets(mctx, box, prevs)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	mctx.Debug("TeamLoader#addSecrets at %d", latestReceivedGen)
+
 	// Earliest generation received.
 	earliestReceivedGen := latestReceivedGen - keybase1.PerTeamKeyGeneration(len(seeds)-1)
-	// Latest generation from the sigchain
-	latestChainGen := keybase1.PerTeamKeyGeneration(len(state.Chain.PerTeamKeys))
 
-	l.G().Log.CDebugf(ctx, "TeamLoader#addSecrets: received:%v->%v nseeds:%v nprevs:%v",
+	stateWrapper := newTeamSigChainState(team)
+
+	// Latest generation from the sigchain or the hidden chain...
+	latestChainGen := stateWrapper.GetLatestGeneration()
+
+	mctx.Debug("TeamLoader.addSecrets: received:%v->%v nseeds:%v nprevs:%v",
 		earliestReceivedGen, latestReceivedGen, len(seeds), len(prevs))
 
-	if latestReceivedGen != latestChainGen {
-		return nil, fmt.Errorf("wrong latest key generation: %v != %v",
-			latestReceivedGen, latestChainGen)
-	}
-
-	ret := state.DeepCopy()
-
 	// Check that each key matches the chain.
-	var gotOldKeys bool
 	for i, seed := range seeds {
 		gen := int(latestReceivedGen) + i + 1 - len(seeds)
 		if gen < 1 {
-			return nil, fmt.Errorf("gen < 1")
+			return fmt.Errorf("gen < 1")
 		}
 
-		if gen <= int(latestChainGen) {
-			gotOldKeys = true
-		}
+		ptkGen := keybase1.PerTeamKeyGeneration(gen)
 
-		item, err := l.checkPerTeamKeyAgainstChain(ctx, state, keybase1.PerTeamKeyGeneration(gen), seed)
+		chainKey, err := stateWrapper.GetPerTeamKeyAtGeneration(ptkGen)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// Add it to the snapshot
-		ret.PerTeamKeySeeds[item.Generation] = *item
-	}
-
-	if gotOldKeys {
-		l.G().Log.CDebugf(ctx, "TeamLoader got old keys, re-checking as if new")
+		state.PerTeamKeySeedsUnverified[ptkGen] = keybase1.PerTeamKeySeedItem{
+			Seed:       seed,
+			Generation: ptkGen,
+			Seqno:      chainKey.Seqno,
+		}
 	}
 
 	// Make sure there is not a gap between the latest local key and the earliest received key.
 	if earliestReceivedGen > keybase1.PerTeamKeyGeneration(1) {
 		// We should have the seed for the generation preceeding the earliest received.
 		checkGen := earliestReceivedGen - 1
-		if _, ok := ret.PerTeamKeySeeds[earliestReceivedGen-1]; !ok {
-			return nil, fmt.Errorf("gap in per-team-keys: latestRecvd:%v earliestRecvd:%v missing:%v",
+		if _, ok := state.PerTeamKeySeedsUnverified[earliestReceivedGen-1]; !ok {
+			return fmt.Errorf("gap in per-team-keys: latestRecvd:%v earliestRecvd:%v missing:%v",
 				latestReceivedGen, earliestReceivedGen, checkGen)
 		}
 	}
 
-	chain := TeamSigChainState{inner: state.Chain}
-	role, err := chain.GetUserRole(me)
+	role, err := stateWrapper.GetUserRole(me)
 	if err != nil {
 		role = keybase1.TeamRole_NONE
 	}
-	if role.IsReaderOrAbove() {
+	if role.IsBotOrAbove() {
 		// Insert all reader key masks
 		// Then scan to make sure there are no gaps in generations and no missing application masks.
 		checkMaskGens := make(map[keybase1.PerTeamKeyGeneration]bool)
 		for _, rkm := range readerKeyMasks {
 			if rkm.Generation < 1 {
-				return nil, fmt.Errorf("reader key mask has generation: %v < 0", rkm.Generation)
+				return fmt.Errorf("reader key mask has generation: %v < 0", rkm.Generation)
 			}
-			if _, ok := ret.ReaderKeyMasks[rkm.Application]; !ok {
-				ret.ReaderKeyMasks[rkm.Application] = make(
+			if _, ok := state.ReaderKeyMasks[rkm.Application]; !ok {
+				state.ReaderKeyMasks[rkm.Application] = make(
 					map[keybase1.PerTeamKeyGeneration]keybase1.MaskB64)
 			}
-			ret.ReaderKeyMasks[rkm.Application][rkm.Generation] = rkm.Mask
+			state.ReaderKeyMasks[rkm.Application][rkm.Generation] = rkm.Mask
 
 			checkMaskGens[rkm.Generation] = true
 			if rkm.Generation > 1 {
@@ -613,34 +811,39 @@ func (l *TeamLoader) addSecrets(ctx context.Context,
 				checkMaskGens[rkm.Generation-1] = true
 			}
 		}
+		mctx.Debug("TeamLoader.addSecrets: loop1")
 		// Check that we are all the way up to date
 		checkMaskGens[latestChainGen] = true
 		for gen := range checkMaskGens {
-			err = l.checkReaderKeyMaskCoverage(ctx, &ret, gen)
+			err = l.checkReaderKeyMaskCoverage(mctx, state, gen)
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
-
+		mctx.Debug("TeamLoader.addSecrets: loop2")
 	} else {
 		// Discard all cached reader key masks if we are not an explicit member of the team.
-		ret.ReaderKeyMasks = make(map[keybase1.TeamApplication]map[keybase1.PerTeamKeyGeneration]keybase1.MaskB64)
+		state.ReaderKeyMasks = make(map[keybase1.TeamApplication]map[keybase1.PerTeamKeyGeneration]keybase1.MaskB64)
 
 		// Also we shouldn't have gotten any from the server.
 		if len(readerKeyMasks) > 0 {
-			l.G().Log.CWarningf(ctx, "TeamLoader got %v reader-key-masks but not an explicit member",
+			mctx.Warning("TeamLoader got %v reader-key-masks but not an explicit member",
 				len(readerKeyMasks))
 		}
 	}
-
-	return &ret, nil
+	return nil
 }
 
 // Check that the RKMs for a generation are covered for all apps.
-func (l *TeamLoader) checkReaderKeyMaskCoverage(ctx context.Context,
+func (l *TeamLoader) checkReaderKeyMaskCoverage(mctx libkb.MetaContext,
 	state *keybase1.TeamData, gen keybase1.PerTeamKeyGeneration) error {
 
 	for _, app := range keybase1.TeamApplicationMap {
+		if app == keybase1.TeamApplication_STELLAR_RELAY {
+			// TODO CORE-7718 Allow clients to be missing these RKMs for now.
+			//                Will need a team cache bust to repair.
+			continue
+		}
 		if _, ok := state.ReaderKeyMasks[app]; !ok {
 			return fmt.Errorf("missing reader key mask for gen:%v app:%v", gen, app)
 		}
@@ -652,61 +855,28 @@ func (l *TeamLoader) checkReaderKeyMaskCoverage(ctx context.Context,
 	return nil
 }
 
-func (l *TeamLoader) checkPerTeamKeyAgainstChain(ctx context.Context,
-	state *keybase1.TeamData, gen keybase1.PerTeamKeyGeneration, seed keybase1.PerTeamKeySeed) (*keybase1.PerTeamKeySeedItem, error) {
-
-	km, err := NewTeamKeyManagerWithSecret(l.G(), seed, gen)
-	if err != nil {
-		return nil, err
-	}
-
-	chainKey, err := TeamSigChainState{inner: state.Chain}.GetPerTeamKeyAtGeneration(gen)
-	if err != nil {
-		return nil, err
-	}
-
-	newSigKey, err := km.SigningKey()
-	if err != nil {
-		return nil, err
-	}
-
-	newEncKey, err := km.EncryptionKey()
-	if err != nil {
-		return nil, err
-	}
-
-	if !chainKey.SigKID.SecureEqual(newSigKey.GetKID()) {
-		return nil, fmt.Errorf("import per-team-key: wrong sigKID expected: %v", chainKey.SigKID.String())
-	}
-
-	if !chainKey.EncKID.SecureEqual(newEncKey.GetKID()) {
-		return nil, fmt.Errorf("import per-team-key: wrong encKID expected: %v", chainKey.EncKID.String())
-	}
-
-	return &keybase1.PerTeamKeySeedItem{
-		Seed:       seed,
-		Generation: gen,
-		Seqno:      chainKey.Seqno,
-	}, nil
-}
-
 // Unbox per team keys
 // Does not check that the keys match the chain
 // TODO: return the signer and have the caller check it. Not critical because the public half is checked anyway.
 // Returns the generation of the box (the greatest generation),
 // and a list of the seeds in ascending generation order.
-func (l *TeamLoader) unboxPerTeamSecrets(ctx context.Context,
+func (l *TeamLoader) unboxPerTeamSecrets(mctx libkb.MetaContext,
 	box *TeamBox, prevs map[keybase1.PerTeamKeyGeneration]prevKeySealedEncoded) (keybase1.PerTeamKeyGeneration, []keybase1.PerTeamKeySeed, error) {
+
+	return unboxPerTeamSecrets(mctx, l.world, box, prevs)
+}
+
+func unboxPerTeamSecrets(m libkb.MetaContext, world LoaderContext, box *TeamBox, prevs map[keybase1.PerTeamKeyGeneration]prevKeySealedEncoded) (keybase1.PerTeamKeyGeneration, []keybase1.PerTeamKeySeed, error) {
 
 	if box == nil {
 		return 0, nil, fmt.Errorf("no key box from server")
 	}
 
-	userKey, err := l.perUserEncryptionKey(ctx, box.PerUserKeySeqno)
+	userKey, err := world.perUserEncryptionKey(m.Ctx(), box.PerUserKeySeqno)
+
 	if err != nil {
 		return 0, nil, err
 	}
-
 	secret1, err := box.Open(userKey)
 	if err != nil {
 		return 0, nil, fmt.Errorf("opening key box: %v", err)
@@ -731,7 +901,7 @@ func (l *TeamLoader) unboxPerTeamSecrets(ctx context.Context,
 		if !ok {
 			break
 		}
-		secret, err := decryptPrevSingle(ctx, prev, secrets[len(secrets)-1])
+		secret, err := decryptPrevSingle(m.Ctx(), prev, secrets[len(secrets)-1])
 		if err != nil {
 			return box.Generation, nil, fmt.Errorf("opening prev gen %v: %v", openGeneration, err)
 		}
@@ -753,32 +923,6 @@ func (l *TeamLoader) unboxPerTeamSecrets(ctx context.Context,
 
 func (l *TeamLoader) perUserEncryptionKey(ctx context.Context, userSeqno keybase1.Seqno) (*libkb.NaclDHKeyPair, error) {
 	return l.world.perUserEncryptionKey(ctx, userSeqno)
-}
-
-func (l *TeamLoader) unpackLinks(ctx context.Context, teamUpdate *rawTeam) ([]*chainLinkUnpacked, error) {
-	if teamUpdate == nil {
-		return nil, nil
-	}
-	parsedLinks, err := teamUpdate.parseLinks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var links []*chainLinkUnpacked
-	for _, pLink := range parsedLinks {
-		pLink2 := pLink
-		link, err := unpackChainLink(&pLink2)
-		if err != nil {
-			return nil, err
-		}
-		if !link.isStubbed() {
-			if !link.innerTeamID.Eq(teamUpdate.ID) {
-				return nil, fmt.Errorf("link has wrong team ID in response: %v != %v",
-					link.innerTeamID, teamUpdate.ID)
-			}
-		}
-		links = append(links, link)
-	}
-	return links, nil
 }
 
 // Whether the snapshot has fully loaded, non-stubbed, all of the links.
@@ -811,7 +955,7 @@ func (l *TeamLoader) calculateName(ctx context.Context,
 		return chain.inner.RootAncestor, nil
 	}
 
-	// Load the parent. The parent load will recalculate it's own name,
+	// Load the parent. The parent load will recalculate its own name,
 	// so this name recalculation is recursive.
 	parent, err := l.load2(ctx, load2ArgT{
 		teamID:        *chain.GetParentID(),
@@ -842,4 +986,52 @@ func (l *TeamLoader) calculateName(ctx context.Context,
 	}
 
 	return newName, nil
+}
+
+// computeSeedChecks looks at the PerTeamKeySeedsUnverified for the given team and adds the
+// PerTeamSeedChecks to the sequence. We make the assumption that, potentially, all such links are
+// null because it's a legacy team. OR only the new links are null since they were just added.
+// In either case, after this function runs, all seeds get seed checks computed.
+func (l *TeamLoader) computeSeedChecks(ctx context.Context, state *keybase1.TeamData) (err error) {
+	mctx := libkb.NewMetaContext(ctx, l.G())
+	defer mctx.Trace(fmt.Sprintf("TeamLoader#computeSeedChecks(%s)", state.ID()), func() error { return err })()
+
+	latestChainGen := keybase1.PerTeamKeyGeneration(len(state.PerTeamKeySeedsUnverified))
+	return computeSeedChecks(
+		ctx,
+		state.ID(),
+		latestChainGen,
+		func(g keybase1.PerTeamKeyGeneration) (*keybase1.PerTeamSeedCheck, keybase1.PerTeamKeySeed, error) {
+			ptksu, ok := state.PerTeamKeySeedsUnverified[g]
+			if !ok {
+				return nil, keybase1.PerTeamKeySeed{}, fmt.Errorf("unexpected nil PerTeamKeySeedsUnverified at %d", g)
+			}
+			return ptksu.Check, ptksu.Seed, nil
+		},
+		func(g keybase1.PerTeamKeyGeneration, check keybase1.PerTeamSeedCheck) {
+			ptksu := state.PerTeamKeySeedsUnverified[g]
+			ptksu.Check = &check
+			state.PerTeamKeySeedsUnverified[g] = ptksu
+		},
+	)
+}
+
+// consumeRatchets finds the hidden chain ratchets in the given link (if it's not stubbed), and adds them
+// into the hidden.LoaderPackage via the AddRatchets call. This call, in turn, attempts to unblind the ratchet
+// and then checks the ratchets against current state and ratchets. Thus, it can fail in many ways if the server
+// is buggy or dishonest.
+func consumeRatchets(mctx libkb.MetaContext, hiddenPackage *hidden.LoaderPackage, link *ChainLinkUnpacked) (err error) {
+	if link.isStubbed() {
+		return nil
+	}
+	err = hiddenPackage.AddRatchets(mctx, link.inner.Ratchets(), link.inner.Ctime, keybase1.RatchetType_MAIN)
+	return err
+}
+
+func checkPTKGenerationNotOnHiddenChain(mctx libkb.MetaContext, hiddenPackage *hidden.LoaderPackage, link *ChainLinkUnpacked) (err error) {
+	gen := link.PTKGeneration()
+	if gen == keybase1.PerTeamKeyGeneration(0) {
+		return nil
+	}
+	return hiddenPackage.CheckNoPTK(mctx, gen)
 }

@@ -3,9 +3,17 @@
 protocol block {
   import idl "backend_common.avdl";
 
+  enum BlockStatus {
+    UNKNOWN_0,
+    LIVE_1,
+    ARCHIVED_2
+  }
+
   record GetBlockRes {
     string blockKey;
     bytes buf;
+    int size;
+    BlockStatus status;
   }
 
   // Fixed-size nonce to identify a reference to a block
@@ -27,6 +35,17 @@ protocol block {
     BlockReference failed;
   }
 
+
+  @lint("ignore")
+  record BlockIdCount{
+    BlockIdCombo id;
+    int liveCount;
+  }
+
+  record ReferenceCountRes{
+    array<BlockIdCount> counts;
+  }
+
   record BlockPingResponse {
     // In the future, we might want to respond with timestamps or
     // ping intervals.
@@ -38,7 +57,7 @@ protocol block {
 
   void putBlock(BlockIdCombo bid, string folder, string blockKey, bytes buf);
   void putBlockAgain(string folder, BlockReference ref, string blockKey, bytes buf);
-  GetBlockRes getBlock(BlockIdCombo bid, string folder);
+  GetBlockRes getBlock(BlockIdCombo bid, string folder, boolean sizeOnly);
 
   void addReference(string folder, BlockReference ref);
   void delReference(string folder, BlockReference ref);
@@ -46,6 +65,7 @@ protocol block {
 
   DowngradeReferenceRes delReferenceWithCount(string folder, array<BlockReference> refs);
   DowngradeReferenceRes archiveReferenceWithCount(string folder, array<BlockReference> refs);
+  ReferenceCountRes getReferenceCount(string folder, array<BlockIdCombo> ids, BlockStatus status);
 
   bytes getUserQuotaInfo();
   bytes getTeamQuotaInfo(TeamID tid);

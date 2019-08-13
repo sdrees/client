@@ -25,6 +25,7 @@ func newCmdChatHide(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Comm
 		Action: func(c *cli.Context) {
 			cmd := &CmdChatHide{Contextified: libkb.NewContextified(g)}
 			cl.ChooseCommand(cmd, "hide", c)
+			cl.SetLogForward(libcmdline.LogForwardNone)
 		},
 		Flags: append(getConversationResolverFlags(), mustGetChatFlags("block", "unhide")...),
 	}
@@ -72,11 +73,18 @@ func (c *CmdChatHide) Run() error {
 		return err
 	}
 
+	if c.resolvingRequest.TlfName != "" {
+		if err = annotateResolvingRequest(c.G(), &c.resolvingRequest); err != nil {
+			return err
+		}
+	}
+
 	conversation, _, err := resolver.Resolve(ctx, c.resolvingRequest, chatConversationResolvingBehavior{
-		CreateIfNotExists: false,
-		MustNotExist:      false,
-		Interactive:       false,
-		IdentifyBehavior:  keybase1.TLFIdentifyBehavior_CHAT_CLI,
+		CreateIfNotExists:       false,
+		MustNotExist:            false,
+		Interactive:             false,
+		IgnoreConversationError: true, // If we are reset, we still want to be able to hide the conv.
+		IdentifyBehavior:        keybase1.TLFIdentifyBehavior_CHAT_CLI,
 	})
 	if err != nil {
 		return err
@@ -88,10 +96,7 @@ func (c *CmdChatHide) Run() error {
 	}
 
 	_, err = resolver.ChatClient.SetConversationStatusLocal(ctx, setStatusArg)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (c *CmdChatHide) GetUsage() libkb.Usage {

@@ -19,7 +19,8 @@ protocol kbfsCommon {
     FILE_MODIFIED_8,
     FILE_DELETED_9,
     FILE_RENAMED_10,
-    INITIALIZED_11
+    INITIALIZED_11,
+    SYNC_CONFIG_CHANGED_12
   }
 
   enum FSErrorType {
@@ -37,8 +38,10 @@ protocol kbfsCommon {
     TOO_MANY_FOLDERS_11,
     EXDEV_NOT_SUPPORTED_12,
     DISK_LIMIT_REACHED_13,
-    DISK_CACHE_ERROR_LOG_SEND_14
-  }
+    DISK_CACHE_ERROR_LOG_SEND_14,
+    OFFLINE_ARCHIVED_15,
+    OFFLINE_UNSYNCED_16
+}
 
   record FSNotification {
     string filename;
@@ -51,11 +54,29 @@ protocol kbfsCommon {
     UID writerUid;
     Time localTime;
     FolderType folderType;
-}
+  }
 
   record FSEditListRequest {
     Folder folder;
     int requestID;
+  }
+
+  record FSFolderWriterEdit {
+    string filename;
+    FSNotificationType notificationType;
+    Time serverTime;
+  }
+
+  record FSFolderWriterEditHistory {
+    string writerName;
+    array<FSFolderWriterEdit> edits;
+    array<FSFolderWriterEdit> deletes;
+  }
+
+  record FSFolderEditHistory {
+    Folder folder;
+    Time serverTime;
+    array<FSFolderWriterEditHistory> history;
   }
 
   record FSSyncStatusRequest {
@@ -77,12 +98,18 @@ protocol kbfsCommon {
   }
 
   record FSSyncStatus {
-    // How many total encrypted, padded bytes are still syncing, across
-    // all TLFs?
     int64 totalSyncingBytes;
-    // How many outstanding operations are there across all TLFs?
-    int64 totalSyncingOps;
-    // Individual status for each path without standing operations.
-    array<FSPathSyncStatus> pathStatuses;
+    array<string> syncingPaths;
+    union { null, Time} endEstimate;
+  }
+
+  record FolderSyncStatus {
+    // Bytes available and total on the partition hosting the sync cache.
+    int64 localDiskBytesAvailable;
+    int64 localDiskBytesTotal;
+    PrefetchStatus prefetchStatus;
+    PrefetchProgress prefetchProgress;
+    int64 storedBytesTotal;
+    boolean outOfSyncSpace;
   }
 }

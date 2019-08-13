@@ -22,12 +22,12 @@ type CmdTeamListMemberships struct {
 	libkb.Contextified
 	team                 string
 	json                 bool
-	forcePoll            bool
 	userAssertion        string
 	includeImplicitTeams bool
 	showAll              bool
 	verbose              bool
 	showInviteID         bool
+	verified             bool
 	tabw                 *tabwriter.Writer
 }
 
@@ -39,10 +39,6 @@ func (c *CmdTeamListMemberships) SetJSON(b bool) {
 	c.json = b
 }
 
-func (c *CmdTeamListMemberships) SetForcePoll(b bool) {
-	c.forcePoll = b
-}
-
 func NewCmdTeamListMembershipsRunner(g *libkb.GlobalContext) *CmdTeamListMemberships {
 	return &CmdTeamListMemberships{Contextified: libkb.NewContextified(g)}
 }
@@ -52,10 +48,6 @@ func newCmdTeamListMemberships(cl *libcmdline.CommandLine, g *libkb.GlobalContex
 		cli.BoolFlag{
 			Name:  "j, json",
 			Usage: "Output memberships as JSON",
-		},
-		cli.BoolFlag{
-			Name:  "force-poll",
-			Usage: "Force a poll of the server for all identities",
 		},
 		cli.StringFlag{
 			Name:  "u, user",
@@ -78,6 +70,9 @@ func newCmdTeamListMemberships(cl *libcmdline.CommandLine, g *libkb.GlobalContex
 		flags = append(flags, cli.BoolFlag{
 			Name:  "include-implicit-teams",
 			Usage: "[devel only] Include automatic teams that are not normally visible",
+		}, cli.BoolFlag{
+			Name:  "verified",
+			Usage: "[devel only] Verify results by loading every team",
 		})
 	}
 	return cli.Command{
@@ -102,6 +97,7 @@ func (c *CmdTeamListMemberships) ParseArgv(ctx *cli.Context) error {
 	}
 	c.userAssertion = ctx.String("user")
 	c.includeImplicitTeams = ctx.Bool("include-implicit-teams")
+	c.verified = ctx.Bool("verified")
 	c.showAll = ctx.Bool("all")
 	c.showInviteID = ctx.Bool("show-invite-id")
 
@@ -115,7 +111,6 @@ func (c *CmdTeamListMemberships) ParseArgv(ctx *cli.Context) error {
 	}
 
 	c.json = ctx.Bool("json")
-	c.forcePoll = ctx.Bool("force-poll")
 	c.verbose = ctx.Bool("verbose")
 
 	return nil
@@ -135,7 +130,7 @@ func (c *CmdTeamListMemberships) Run() error {
 }
 
 func (c *CmdTeamListMemberships) runGet(cli keybase1.TeamsClient) error {
-	details, err := cli.TeamGet(context.Background(), keybase1.TeamGetArg{Name: c.team, ForceRepoll: c.forcePoll})
+	details, err := cli.TeamGet(context.Background(), keybase1.TeamGetArg{Name: c.team})
 	if err != nil {
 		return err
 	}
@@ -144,12 +139,27 @@ func (c *CmdTeamListMemberships) runGet(cli keybase1.TeamsClient) error {
 }
 
 func (c *CmdTeamListMemberships) runUser(cli keybase1.TeamsClient) error {
-	arg := keybase1.TeamListArg{
-		UserAssertion:        c.userAssertion,
-		All:                  c.showAll,
-		IncludeImplicitTeams: c.includeImplicitTeams,
+	var err error
+	var list keybase1.AnnotatedTeamList
+	if c.showAll {
+		arg := keybase1.TeamListTeammatesArg{
+			IncludeImplicitTeams: c.includeImplicitTeams,
+		}
+		list, err = cli.TeamListTeammates(context.Background(), arg)
+	} else if c.verified {
+		arg := keybase1.TeamListVerifiedArg{
+			UserAssertion:        c.userAssertion,
+			IncludeImplicitTeams: c.includeImplicitTeams,
+		}
+		list, err = cli.TeamListVerified(context.Background(), arg)
+	} else {
+		arg := keybase1.TeamListUnverifiedArg{
+			UserAssertion:        c.userAssertion,
+			IncludeImplicitTeams: c.includeImplicitTeams,
+		}
+		list, err = cli.TeamListUnverified(context.Background(), arg)
 	}
-	list, err := cli.TeamList(context.Background(), arg)
+
 	if err != nil {
 		return err
 	}
@@ -162,12 +172,12 @@ func (c *CmdTeamListMemberships) runUser(cli keybase1.TeamsClient) error {
 	})
 
 	if c.json {
-		b, err := json.MarshalIndent(list, "", "    ")
+		b, err := json.Marshal(list)
 		if err != nil {
 			return err
 		}
-		dui := c.G().UI.GetDumbOutputUI()
-		_, err = dui.Printf(string(b) + "\n")
+		tui := c.G().UI.GetTerminalUI()
+		err = tui.OutputDesc(OutputDescriptorTeamList, string(b)+"\n")
 		return err
 	}
 
@@ -193,7 +203,17 @@ func (c *CmdTeamListMemberships) runUser(cli keybase1.TeamsClient) error {
 			role += strings.ToLower(t.Role.String())
 		}
 		if c.showAll {
-			fmt.Fprintf(c.tabw, "%s\t%s\t%s\t%s\n", t.FqName, role, t.Username, t.FullName)
+			var status string
+			switch t.Status {
+			case keybase1.TeamMemberStatus_RESET:
+				status = " (inactive due to account reset)"
+			case keybase1.TeamMemberStatus_DELETED:
+				status = " (inactive due to account delete)"
+			}
+			if len(t.FullName) > 0 && len(status) > 0 {
+				status = " " + status
+			}
+			fmt.Fprintf(c.tabw, "%s\t%s\t%s\t%s%s\n", t.FqName, role, t.Username, t.FullName, status)
 		} else {
 			fmt.Fprintf(c.tabw, "%s\t%s\t%d\n", t.FqName, role, t.MemberCount)
 		}
@@ -234,6 +254,8 @@ func (c *CmdTeamListMemberships) outputTerminal(details keybase1.TeamDetails) er
 	c.outputRole("admin", details.Members.Admins)
 	c.outputRole("writer", details.Members.Writers)
 	c.outputRole("reader", details.Members.Readers)
+	c.outputRole("bot", details.Members.Bots)
+	c.outputRole("restricted_bot", details.Members.RestrictedBots)
 	c.outputInvites(details.AnnotatedActiveInvites)
 	c.tabw.Flush()
 
@@ -246,11 +268,14 @@ func (c *CmdTeamListMemberships) outputTerminal(details keybase1.TeamDetails) er
 
 func (c *CmdTeamListMemberships) outputRole(role string, members []keybase1.TeamMemberDetails) {
 	for _, member := range members {
-		var reset string
-		if !member.Active {
-			reset = " (inactive due to account reset)"
+		var status string
+		switch member.Status {
+		case keybase1.TeamMemberStatus_RESET:
+			status = " (inactive due to account reset)"
+		case keybase1.TeamMemberStatus_DELETED:
+			status = " (inactive due to account delete)"
 		}
-		fmt.Fprintf(c.tabw, "%s\t%s\t%s%s\n", c.team, role, member.Username, reset)
+		fmt.Fprintf(c.tabw, "%s\t%s\t%s\t%s%s\n", c.team, role, member.Username, member.FullName, status)
 	}
 }
 

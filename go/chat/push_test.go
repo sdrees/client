@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"crypto/rand"
 	"testing"
 	"time"
 
@@ -15,6 +16,14 @@ import (
 	"github.com/keybase/go-codec/codec"
 	"github.com/stretchr/testify/require"
 )
+
+func randBytes(t *testing.T, n int) []byte {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	return buf
+}
 
 func sendSimple(ctx context.Context, t *testing.T, tc *kbtest.ChatTestContext, ph *PushHandler,
 	sender types.Sender, conv chat1.Conversation, user *kbtest.FakeUser,
@@ -37,11 +46,11 @@ func sendSimple(ctx context.Context, t *testing.T, tc *kbtest.ChatTestContext, p
 			Body: "hi",
 		}),
 	}
-	_, boxed, _, err := sender.Send(ctx, convID, pt, 0, nil)
+	_, boxed, err := sender.Send(ctx, convID, pt, 0, nil, nil, nil)
 	require.NoError(t, err)
 
-	ibox := storage.NewInbox(tc.Context(), uid)
-	vers, err := ibox.Version(ctx)
+	ibox := storage.NewInbox(tc.Context())
+	vers, err := ibox.Version(ctx, uid)
 	if err != nil {
 		require.IsType(t, storage.MissError{}, err)
 		vers = 0
@@ -53,6 +62,7 @@ func sendSimple(ctx context.Context, t *testing.T, tc *kbtest.ChatTestContext, p
 		ConvID:    conv.GetConvID(),
 		Message:   *boxed,
 		InboxVers: iboxXform(vers),
+		TopicType: chat1.TopicType_CHAT,
 	}
 	var data []byte
 	enc := codec.NewEncoderBytes(&data, &codec.MsgpackHandle{WriteExt: true})
@@ -77,21 +87,22 @@ func TestPushOrdering(t *testing.T) {
 	tc := world.Tcs[u.Username]
 	handler := NewPushHandler(tc.Context())
 	handler.SetClock(world.Fc)
+	timeout := 2 * time.Second
 
 	conv := newBlankConv(ctx, t, tc, uid, ri, sender, u.Username)
 	sendSimple(ctx, t, tc, handler, sender, conv, u,
 		func(vers chat1.InboxVers) chat1.InboxVers { return vers + 1 })
 
 	select {
-	case <-list.incoming:
-	case <-time.After(20 * time.Second):
+	case <-list.incomingRemote:
+	case <-time.After(timeout):
 		require.Fail(t, "no notification received")
 	}
 
 	sendSimple(ctx, t, tc, handler, sender, conv, u,
 		func(vers chat1.InboxVers) chat1.InboxVers { return vers + 2 })
 	select {
-	case <-list.incoming:
+	case <-list.incomingRemote:
 		require.Fail(t, "should not have gotten one of these")
 	default:
 	}
@@ -99,13 +110,13 @@ func TestPushOrdering(t *testing.T) {
 	sendSimple(ctx, t, tc, handler, sender, conv, u,
 		func(vers chat1.InboxVers) chat1.InboxVers { return vers + 1 })
 	select {
-	case <-list.incoming:
-	case <-time.After(20 * time.Second):
+	case <-list.incomingRemote:
+	case <-time.After(timeout):
 		require.Fail(t, "no notification received")
 	}
 	select {
-	case <-list.incoming:
-	case <-time.After(20 * time.Second):
+	case <-list.incomingRemote:
+	case <-time.After(timeout):
 		require.Fail(t, "no notification received")
 	}
 	handler.orderer.Lock()
@@ -115,16 +126,22 @@ func TestPushOrdering(t *testing.T) {
 	sendSimple(ctx, t, tc, handler, sender, conv, u,
 		func(vers chat1.InboxVers) chat1.InboxVers { return vers + 2 })
 	select {
-	case <-list.incoming:
+	case <-list.incomingRemote:
 		require.Fail(t, "should not have gotten one of these")
 	default:
 	}
 
 	t.Logf("advancing clock")
-	world.Fc.Advance(time.Hour)
+	world.Fc.Advance(time.Second)
 	select {
-	case <-list.incoming:
-	case <-time.After(20 * time.Second):
+	case <-list.incomingRemote:
+		require.Fail(t, "not notification expected")
+	default:
+	}
+	world.Fc.Advance(time.Second)
+	select {
+	case <-list.incomingRemote:
+	case <-time.After(timeout):
 		require.Fail(t, "no notification received")
 	}
 	handler.orderer.Lock()
@@ -144,32 +161,19 @@ func TestPushAppState(t *testing.T) {
 	handler.SetClock(world.Fc)
 	conv := newBlankConv(ctx, t, tc, uid, ri, sender, u.Username)
 
-	tc.G.AppState.Update(keybase1.AppState_BACKGROUND)
+	tc.G.MobileAppState.Update(keybase1.MobileAppState_BACKGROUND)
 	sendSimple(ctx, t, tc, handler, sender, conv, u,
 		func(vers chat1.InboxVers) chat1.InboxVers { return vers + 1 })
 	select {
-	case <-list.incoming:
-		require.Fail(t, "not message should be sent")
-	default:
-	}
-
-	select {
-	case <-handler.orderer.WaitForTurn(context.TODO(), uid, 2):
+	case <-list.incomingRemote:
 	case <-time.After(20 * time.Second):
-		require.Fail(t, "turn never happened")
+		require.Fail(t, "no message received")
 	}
-
-	tc.G.AppState.Update(keybase1.AppState_FOREGROUND)
-	select {
-	case <-list.threadsStale:
-	case <-time.After(20 * time.Second):
-		require.Fail(t, "no stale message")
-	}
-
+	tc.G.MobileAppState.Update(keybase1.MobileAppState_FOREGROUND)
 	sendSimple(ctx, t, tc, handler, sender, conv, u,
 		func(vers chat1.InboxVers) chat1.InboxVers { return vers + 1 })
 	select {
-	case <-list.incoming:
+	case <-list.incomingRemote:
 	case <-time.After(20 * time.Second):
 		require.Fail(t, "no message received")
 	}

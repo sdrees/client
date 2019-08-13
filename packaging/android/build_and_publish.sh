@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 
-set -e -u -o pipefail # Fail on error
+set -eE -u -o pipefail # Fail on error, call ERR trap
 
+automated_build=${AUTOMATED_BUILD:-}
 gopath=${GOPATH:-}
+kbfs_dir="$gopath/src/github.com/keybase/client/go/kbfs"
 client_dir="$gopath/src/github.com/keybase/client"
 shared_dir="$gopath/src/github.com/keybase/client/shared"
 rn_dir="$gopath/src/github.com/keybase/client/shared/react-native"
-android_dir="$gopath/src/github.com/keybase/client/shared/react-native/android"
+android_dir="$gopath/src/github.com/keybase/client/shared/android"
 cache_npm=${CACHE_NPM:-}
 cache_go_lib=${CACHE_GO_LIB:-}
 client_commit=${CLIENT_COMMIT:-}
 check_ci=${CHECK_CI:-1}
+
+# Notify Slack on failure
+function notify_slack {
+  if [ -n "$automated_build" ]; then
+    "$client_dir/packaging/slack/send.sh" "<@channel> Automated Android build failed, please check out the log."
+  fi
+}
+trap notify_slack ERR
 
 "$client_dir/packaging/check_status_and_pull.sh" "$client_dir"
 
@@ -30,8 +40,13 @@ trap reset EXIT
 if [ -n "$client_commit" ]; then
   cd "$client_dir"
   echo "Checking out $client_commit on client (will reset to $client_branch)"
+  git fetch
   git checkout "$client_commit"
 fi
+
+cd "$client_dir"
+echo "Recent client commit log"
+git log -n 3
 
 cd "$shared_dir"
 
@@ -39,7 +54,7 @@ if [ ! "$cache_npm" = "1" ]; then
   echo "Cleaning up main node_modules from previous runs"
   rm -rf "$shared_dir/node_modules"
 
-  yarn install --pure-lockfile
+  yarn install --frozen-lockfile --prefer-offline
   yarn global add react-native-cli
 fi
 
@@ -59,7 +74,7 @@ echo "Packager running with PID $rn_packager_pid"
 # Build and publish the apk
 cd "$android_dir"
 ./gradlew clean
-./gradlew publishApkRelease
+./gradlew publishReleaseBundle
 
 "$client_dir/packaging/slack/send.sh" "Finished releasing android"
 

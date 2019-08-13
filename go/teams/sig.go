@@ -7,27 +7,38 @@
 package teams
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 
 	"golang.org/x/net/context"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/keybase/client/go/libkb"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
+	"github.com/keybase/client/go/sig3"
+	"github.com/keybase/client/go/teams/hidden"
 	jsonw "github.com/keybase/go-jsonw"
 )
 
-func TeamRootSig(me *libkb.User, key libkb.GenericKey, teamSection SCTeamSection) (*jsonw.Wrapper, error) {
+// metaContext returns a GlobalContext + a TODO context, since we're not
+// threading through contexts through this library. In the future, we should
+// fix this.
+func metaContext(g *libkb.GlobalContext) libkb.MetaContext {
+	return libkb.NewMetaContextTODO(g)
+}
+
+func TeamRootSig(g *libkb.GlobalContext, me libkb.UserForSignatures, key libkb.GenericKey, teamSection SCTeamSection, merkleRoot libkb.MerkleRoot) (*jsonw.Wrapper, error) {
 	ret, err := libkb.ProofMetadata{
-		Me:         me,
-		LinkType:   libkb.LinkTypeTeamRoot,
-		SigningKey: key,
-		Seqno:      1,
-		SigVersion: libkb.KeybaseSignatureV2,
-		SeqType:    seqTypeForTeamPublicness(teamSection.Public),
-	}.ToJSON(me.G())
+		SigningUser: me,
+		Eldest:      me.GetEldestKID(),
+		LinkType:    libkb.LinkTypeTeamRoot,
+		SigningKey:  key,
+		Seqno:       1,
+		SigVersion:  libkb.KeybaseSignatureV2,
+		SeqType:     seqTypeForTeamPublicness(teamSection.Public),
+		MerkleRoot:  &merkleRoot,
+	}.ToJSON(metaContext(g))
 	if err != nil {
 		return nil, err
 	}
@@ -53,27 +64,34 @@ func NewImplicitTeamName() (res keybase1.TeamName, err error) {
 	return res, err
 }
 
-func NewSubteamSig(me *libkb.User, key libkb.GenericKey, parentTeam *TeamSigChainState, subteamName keybase1.TeamName, subteamID keybase1.TeamID, admin *SCTeamAdmin) (*jsonw.Wrapper, error) {
+func NewSubteamSig(mctx libkb.MetaContext, me libkb.UserForSignatures, key libkb.GenericKey, parentTeam *TeamSigChainState, subteamName keybase1.TeamName, subteamID keybase1.TeamID, admin *SCTeamAdmin) (*jsonw.Wrapper, *hidden.Ratchet, error) {
+	g := mctx.G()
 	prevLinkID, err := libkb.ImportLinkID(parentTeam.GetLatestLinkID())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ret, err := libkb.ProofMetadata{
-		Me:         me,
-		LinkType:   libkb.LinkTypeNewSubteam,
-		SigningKey: key,
-		SigVersion: libkb.KeybaseSignatureV2,
-		SeqType:    seqTypeForTeamPublicness(parentTeam.IsPublic()), // children are as public as their parent
-		Seqno:      parentTeam.GetLatestSeqno() + 1,
-		PrevLinkID: prevLinkID,
-	}.ToJSON(me.G())
+		SigningUser: me,
+		Eldest:      me.GetEldestKID(),
+		LinkType:    libkb.LinkTypeNewSubteam,
+		SigningKey:  key,
+		SigVersion:  libkb.KeybaseSignatureV2,
+		SeqType:     seqTypeForTeamPublicness(parentTeam.IsPublic()), // children are as public as their parent
+		Seqno:       parentTeam.GetLatestSeqno() + 1,
+		PrevLinkID:  prevLinkID,
+	}.ToJSON(metaContext(g))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	entropy, err := makeSCTeamEntropy()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	ratchet, err := parentTeam.makeHiddenRatchet(mctx)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	teamSection := SCTeamSection{
@@ -82,27 +100,30 @@ func NewSubteamSig(me *libkb.User, key libkb.GenericKey, parentTeam *TeamSigChai
 			ID:   (SCTeamID)(subteamID),
 			Name: (SCTeamName)(subteamName.String()),
 		},
-		Admin:   admin,
-		Entropy: entropy,
+		Admin:    admin,
+		Entropy:  entropy,
+		Ratchets: ratchet.ToTeamSection(),
 	}
 	teamSectionJSON, err := jsonw.WrapperFromObject(teamSection)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ret.SetValueAtPath("body.team", teamSectionJSON)
 
-	return ret, nil
+	return ret, ratchet, nil
 }
 
-func SubteamHeadSig(me *libkb.User, key libkb.GenericKey, subteamTeamSection SCTeamSection) (*jsonw.Wrapper, error) {
+func SubteamHeadSig(g *libkb.GlobalContext, me libkb.UserForSignatures, key libkb.GenericKey, subteamTeamSection SCTeamSection, merkleRoot libkb.MerkleRoot) (*jsonw.Wrapper, error) {
 	ret, err := libkb.ProofMetadata{
-		Me:         me,
-		LinkType:   libkb.LinkTypeSubteamHead,
-		SigningKey: key,
-		Seqno:      1,
-		SigVersion: libkb.KeybaseSignatureV2,
-		SeqType:    seqTypeForTeamPublicness(subteamTeamSection.Public),
-	}.ToJSON(me.G())
+		SigningUser: me,
+		Eldest:      me.GetEldestKID(),
+		LinkType:    libkb.LinkTypeSubteamHead,
+		SigningKey:  key,
+		Seqno:       1,
+		SigVersion:  libkb.KeybaseSignatureV2,
+		SeqType:     seqTypeForTeamPublicness(subteamTeamSection.Public),
+		MerkleRoot:  &merkleRoot,
+	}.ToJSON(metaContext(g))
 	if err != nil {
 		return nil, err
 	}
@@ -121,20 +142,21 @@ func SubteamHeadSig(me *libkb.User, key libkb.GenericKey, subteamTeamSection SCT
 	return ret, nil
 }
 
-func RenameSubteamSig(me *libkb.User, key libkb.GenericKey, parentTeam *TeamSigChainState, teamSection SCTeamSection) (*jsonw.Wrapper, error) {
+func RenameSubteamSig(g *libkb.GlobalContext, me libkb.UserForSignatures, key libkb.GenericKey, parentTeam *TeamSigChainState, teamSection SCTeamSection) (*jsonw.Wrapper, error) {
 	prev, err := parentTeam.GetLatestLibkbLinkID()
 	if err != nil {
 		return nil, err
 	}
 	ret, err := libkb.ProofMetadata{
-		Me:         me,
-		LinkType:   libkb.LinkTypeRenameSubteam,
-		SigningKey: key,
-		Seqno:      parentTeam.GetLatestSeqno() + 1,
-		PrevLinkID: prev,
-		SigVersion: libkb.KeybaseSignatureV2,
-		SeqType:    seqTypeForTeamPublicness(teamSection.Public),
-	}.ToJSON(me.G())
+		SigningUser: me,
+		Eldest:      me.GetEldestKID(),
+		LinkType:    libkb.LinkTypeRenameSubteam,
+		SigningKey:  key,
+		Seqno:       parentTeam.GetLatestSeqno() + 1,
+		PrevLinkID:  prev,
+		SigVersion:  libkb.KeybaseSignatureV2,
+		SeqType:     seqTypeForTeamPublicness(teamSection.Public),
+	}.ToJSON(metaContext(g))
 	if err != nil {
 		return nil, err
 	}
@@ -150,20 +172,21 @@ func RenameSubteamSig(me *libkb.User, key libkb.GenericKey, parentTeam *TeamSigC
 	return ret, nil
 }
 
-func RenameUpPointerSig(me *libkb.User, key libkb.GenericKey, subteam *TeamSigChainState, teamSection SCTeamSection) (*jsonw.Wrapper, error) {
+func RenameUpPointerSig(g *libkb.GlobalContext, me libkb.UserForSignatures, key libkb.GenericKey, subteam *TeamSigChainState, teamSection SCTeamSection) (*jsonw.Wrapper, error) {
 	prev, err := subteam.GetLatestLibkbLinkID()
 	if err != nil {
 		return nil, err
 	}
 	ret, err := libkb.ProofMetadata{
-		Me:         me,
-		LinkType:   libkb.LinkTypeRenameUpPointer,
-		SigningKey: key,
-		Seqno:      subteam.GetLatestSeqno() + 1,
-		PrevLinkID: prev,
-		SigVersion: libkb.KeybaseSignatureV2,
-		SeqType:    seqTypeForTeamPublicness(teamSection.Public),
-	}.ToJSON(me.G())
+		SigningUser: me,
+		Eldest:      me.GetEldestKID(),
+		LinkType:    libkb.LinkTypeRenameUpPointer,
+		SigningKey:  key,
+		Seqno:       subteam.GetLatestSeqno() + 1,
+		PrevLinkID:  prev,
+		SigVersion:  libkb.KeybaseSignatureV2,
+		SeqType:     seqTypeForTeamPublicness(teamSection.Public),
+	}.ToJSON(metaContext(g))
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +223,7 @@ func NewInviteID() SCTeamInviteID {
 	return SCTeamInviteID(hex.EncodeToString(b))
 }
 
-func ChangeSig(me *libkb.User, prev libkb.LinkID, seqno keybase1.Seqno, key libkb.GenericKey, teamSection SCTeamSection,
+func ChangeSig(g *libkb.GlobalContext, me libkb.UserForSignatures, prev libkb.LinkID, seqno keybase1.Seqno, key libkb.GenericKey, teamSection SCTeamSection,
 	linkType libkb.LinkType, merkleRoot *libkb.MerkleRoot) (*jsonw.Wrapper, error) {
 	if teamSection.PerTeamKey != nil {
 		if teamSection.PerTeamKey.ReverseSig != "" {
@@ -209,15 +232,16 @@ func ChangeSig(me *libkb.User, prev libkb.LinkID, seqno keybase1.Seqno, key libk
 	}
 
 	ret, err := libkb.ProofMetadata{
-		Me:         me,
-		LinkType:   linkType,
-		SigningKey: key,
-		Seqno:      seqno,
-		PrevLinkID: prev,
-		SigVersion: libkb.KeybaseSignatureV2,
-		SeqType:    seqTypeForTeamPublicness(teamSection.Public),
-		MerkleRoot: merkleRoot,
-	}.ToJSON(me.G())
+		LinkType:    linkType,
+		SigningUser: me,
+		Eldest:      me.GetEldestKID(),
+		SigningKey:  key,
+		Seqno:       seqno,
+		PrevLinkID:  prev,
+		SigVersion:  libkb.KeybaseSignatureV2,
+		SeqType:     seqTypeForTeamPublicness(teamSection.Public),
+		MerkleRoot:  merkleRoot,
+	}.ToJSON(metaContext(g))
 	if err != nil {
 		return nil, err
 	}
@@ -234,11 +258,11 @@ func ChangeSig(me *libkb.User, prev libkb.LinkID, seqno keybase1.Seqno, key libk
 }
 
 func makeSCTeamEntropy() (SCTeamEntropy, error) {
-	rb, err := libkb.RandBytes(18)
+	entropy, err := libkb.LinkEntropy()
 	if err != nil {
 		return SCTeamEntropy(""), err
 	}
-	return SCTeamEntropy(base64.StdEncoding.EncodeToString(rb)), nil
+	return SCTeamEntropy(entropy), nil
 }
 
 func seqTypeForTeamPublicness(public bool) keybase1.SeqType {
@@ -249,30 +273,41 @@ func seqTypeForTeamPublicness(public bool) keybase1.SeqType {
 }
 
 func precheckLinkToPost(ctx context.Context, g *libkb.GlobalContext,
-	sigMultiItem libkb.SigMultiItem, state *TeamSigChainState, me keybase1.UserVersion) (err error) {
+	sigMultiItem libkb.SigMultiItem, state *TeamSigChainState,
+	me keybase1.UserVersion) (err error) {
+	return precheckLinksToPost(ctx, g, []libkb.SigMultiItem{sigMultiItem}, state, me)
+}
 
-	defer g.CTraceTimed(ctx, "precheckLinkToPost", func() error { return err })()
+func AppendChainLinkSig3(ctx context.Context, g *libkb.GlobalContext,
+	sig libkb.Sig3, state *TeamSigChainState,
+	me keybase1.UserVersion) (err error) {
 
-	outerLink, err := libkb.DecodeOuterLinkV2(sigMultiItem.Sig)
+	mctx := libkb.NewMetaContext(ctx, g)
+
+	if len(sig.Outer) == 0 || len(sig.Sig) == 0 {
+		return NewPrecheckStructuralError("got a stubbed v3 link on post, which isn't allowed", nil)
+	}
+
+	hp := hidden.NewLoaderPackageForPrecheck(mctx, state.GetID(), state.hidden)
+	ex := sig3.ExportJSON{
+		Inner: sig.Inner,
+		Outer: sig.Outer,
+		Sig:   sig.Sig,
+	}
+	err = hp.Update(mctx, []sig3.ExportJSON{ex})
 	if err != nil {
-		return fmt.Errorf("unpack outer: %v", err)
+		return err
 	}
+	mctx.Debug("AppendChainLinkSig3 success for %s", sig.Outer)
+	return nil
+}
 
-	link1 := SCChainLink{
-		Seqno:   outerLink.Seqno,
-		Sig:     sigMultiItem.Sig,
-		Payload: sigMultiItem.SigInner,
-		UID:     me.Uid,
-		Version: 2,
-	}
-	link2, err := unpackChainLink(&link1)
-	if err != nil {
-		return fmt.Errorf("unpack link: %v", err)
-	}
+func precheckLinksToPost(ctx context.Context, g *libkb.GlobalContext,
+	sigMultiItems []libkb.SigMultiItem, state *TeamSigChainState,
+	me keybase1.UserVersion) (err error) {
 
-	if link2.isStubbed() {
-		return fmt.Errorf("link missing inner")
-	}
+	defer g.CTraceTimed(ctx, "precheckLinksToPost", func() error { return err })()
+
 	isAdmin := true
 	if state != nil {
 		role, err := state.GetUserRole(me)
@@ -280,18 +315,61 @@ func precheckLinkToPost(ctx context.Context, g *libkb.GlobalContext,
 			role = keybase1.TeamRole_NONE
 		}
 		isAdmin = role.IsAdminOrAbove()
+
+		// As an optimization, AppendChainLink consumes its state.
+		// We don't consume our state parameter.
+		// So clone state before we pass it along to be consumed.
+		state = state.DeepCopyToPtr()
 	}
 
-	var player *TeamSigChainPlayer
-	if state == nil {
-		player = NewTeamSigChainPlayer(g, me)
-	} else {
-		player = NewTeamSigChainPlayerWithState(g, me, *state)
-	}
-
-	signer := signerX{
+	signer := SignerX{
 		signer:        me,
 		implicitAdmin: !isAdmin,
 	}
-	return player.AppendChainLink(ctx, link2, &signer)
+
+	for i, sigItem := range sigMultiItems {
+
+		if sigItem.Sig3 != nil {
+			err = AppendChainLinkSig3(ctx, g, *sigItem.Sig3, state, me)
+			if err != nil {
+				g.Log.CDebugf(ctx, "precheckLinksToPost: link (sig3) %v/%v rejected: %v", i+1, len(sigMultiItems), err)
+				return NewPrecheckAppendError(err)
+			}
+			continue
+		}
+
+		outerLink, err := libkb.DecodeOuterLinkV2(sigItem.Sig)
+		if err != nil {
+			return NewPrecheckStructuralError("unpack outer", err)
+		}
+
+		link1 := SCChainLink{
+			Seqno:   outerLink.Seqno,
+			Sig:     sigItem.Sig,
+			Payload: sigItem.SigInner,
+			UID:     me.Uid,
+			Version: 2,
+		}
+		link2, err := unpackChainLink(&link1)
+		if err != nil {
+			return NewPrecheckStructuralError("unpack link", err)
+		}
+
+		if link2.isStubbed() {
+			return NewPrecheckStructuralError("link missing inner", nil)
+		}
+
+		newState, err := AppendChainLink(ctx, g, me, state, link2, &signer)
+		if err != nil {
+			if link2.inner != nil && link2.inner.Body.Team != nil && link2.inner.Body.Team.Members != nil {
+				g.Log.CDebugf(ctx, "precheckLinksToPost: link %v/%v rejected: %v", i+1, len(sigMultiItems), spew.Sprintf("%v", *link2.inner.Body.Team.Members))
+			} else {
+				g.Log.CDebugf(ctx, "precheckLinksToPost: link %v/%v rejected", i+1, len(sigMultiItems))
+			}
+			return NewPrecheckAppendError(err)
+		}
+		state = &newState
+	}
+
+	return nil
 }

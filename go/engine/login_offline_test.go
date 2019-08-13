@@ -25,11 +25,7 @@ func TestLoginOffline(t *testing.T) {
 
 	// Simulate restarting the service by wiping out the
 	// passphrase stream cache and cached secret keys
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-		a.UnloadLocalSession()
-	}, "account - clear")
+	clearCaches(tc.G)
 	tc.G.GetUPAKLoader().ClearMemory()
 
 	// set server uri to nonexistent ip so api calls will fail
@@ -39,16 +35,16 @@ func TestLoginOffline(t *testing.T) {
 	tc.G.ConfigureAPI()
 
 	eng := NewLoginOffline(tc.G)
-	ctx := &Context{NetContext: context.Background()}
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
-	uid, deviceID, deviceName, skey, ekey := tc.G.ActiveDevice.AllFields()
-	if uid.IsNil() {
+	uv, deviceID, deviceName, skey, ekey := tc.G.ActiveDevice.AllFields()
+	if uv.IsNil() {
 		t.Errorf("uid is nil, expected it to exist")
 	}
-	if !uid.Equal(u1.UID()) {
-		t.Errorf("uid: %q, expected %q", uid, u1.UID())
+	if !uv.Uid.Equal(u1.UID()) {
+		t.Errorf("uid: %v, expected %v", uv, u1)
 	}
 
 	if deviceID.IsNil() {
@@ -91,11 +87,7 @@ func TestLoginOfflineDelay(t *testing.T) {
 
 	// Simulate restarting the service by wiping out the
 	// passphrase stream cache and cached secret keys
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-		a.UnloadLocalSession()
-	}, "account - clear")
+	clearCaches(tc.G)
 	tc.G.GetUPAKLoader().ClearMemory()
 
 	// set server uri to nonexistent ip so api calls will fail
@@ -108,16 +100,16 @@ func TestLoginOfflineDelay(t *testing.T) {
 	fakeClock.Advance(libkb.CachedUserTimeout * 10)
 
 	eng := NewLoginOffline(tc.G)
-	ctx := &Context{NetContext: context.Background()}
-	if err := RunEngine(eng, ctx); err != nil {
+	m := NewMetaContextForTest(tc)
+	if err := RunEngine2(m, eng); err != nil {
 		t.Fatal(err)
 	}
-	uid, deviceID, deviceName, skey, ekey := tc.G.ActiveDevice.AllFields()
-	if uid.IsNil() {
+	uv, deviceID, deviceName, skey, ekey := tc.G.ActiveDevice.AllFields()
+	if uv.IsNil() {
 		t.Errorf("uid is nil, expected it to exist")
 	}
-	if !uid.Equal(u1.UID()) {
-		t.Errorf("uid: %q, expected %q", uid, u1.UID())
+	if !uv.Uid.Equal(u1.UID()) {
+		t.Errorf("uid: %v, expected %v", uv, u1.UID())
 	}
 
 	if deviceID.IsNil() {
@@ -148,11 +140,7 @@ func TestLoginOfflineNoUpak(t *testing.T) {
 
 	// Simulate restarting the service by wiping out the
 	// passphrase stream cache and cached secret keys
-	tc.G.LoginState().Account(func(a *libkb.Account) {
-		a.ClearStreamCache()
-		a.ClearCachedSecretKeys()
-		a.UnloadLocalSession()
-	}, "account - clear")
+	tc.SimulateServiceRestart()
 	tc.G.GetUPAKLoader().ClearMemory()
 
 	// invalidate the cache for uid
@@ -165,8 +153,8 @@ func TestLoginOfflineNoUpak(t *testing.T) {
 	tc.G.ConfigureAPI()
 
 	eng := NewLoginOffline(tc.G)
-	ctx := &Context{NetContext: context.Background()}
-	err := RunEngine(eng, ctx)
+	m := NewMetaContextForTest(tc)
+	err := RunEngine2(m, eng)
 	if err == nil {
 		t.Fatal("LoginOffline worked after upak cache invalidation")
 	}

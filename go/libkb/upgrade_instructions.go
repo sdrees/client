@@ -55,12 +55,12 @@ func linuxUpgradeInstructionsString() (string, error) {
 		start = "sudo yum upgrade " + packageName
 	} else if hasPackageManager("pacman") {
 		if len(PrereleaseBuild) > 0 {
-			start = "yaourt -S keybase-git"
+			start = "pacaur -S keybase-bin"
 		} else {
 			start = "sudo pacman -Syu"
 		}
 	} else {
-		return "", fmt.Errorf("Unhandled linux upgrade instruction.")
+		return "", fmt.Errorf("Unhandled Linux upgrade instruction.")
 	}
 
 	complete := start + " && run_keybase"

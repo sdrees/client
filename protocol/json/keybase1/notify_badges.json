@@ -31,8 +31,59 @@
           "name": "username"
         },
         {
+          "type": "UID",
+          "name": "uid"
+        },
+        {
           "type": "gregor1.MsgID",
           "name": "id"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "DeletedTeamInfo",
+      "fields": [
+        {
+          "type": "string",
+          "name": "teamName"
+        },
+        {
+          "type": "string",
+          "name": "deletedBy"
+        },
+        {
+          "type": "gregor1.MsgID",
+          "name": "id"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "WalletAccountInfo",
+      "fields": [
+        {
+          "type": "string",
+          "name": "accountID"
+        },
+        {
+          "type": "int",
+          "name": "numUnread"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "ResetState",
+      "fields": [
+        {
+          "type": "Time",
+          "name": "endTime",
+          "jsonkey": "end_time"
+        },
+        {
+          "type": "boolean",
+          "name": "active"
         }
       ]
     },
@@ -62,6 +113,28 @@
           "name": "homeTodoItems"
         },
         {
+          "type": "int",
+          "name": "unverifiedEmails"
+        },
+        {
+          "type": "int",
+          "name": "unverifiedPhones"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "DeviceID"
+          },
+          "name": "newDevices"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "DeviceID"
+          },
+          "name": "revokedDevices"
+        },
+        {
           "type": {
             "type": "array",
             "items": "BadgeConversationInfo"
@@ -85,6 +158,13 @@
         {
           "type": {
             "type": "array",
+            "items": "DeletedTeamInfo"
+          },
+          "name": "deletedTeams"
+        },
+        {
+          "type": {
+            "type": "array",
             "items": "string"
           },
           "name": "newTeamAccessRequests"
@@ -95,6 +175,17 @@
             "items": "TeamMemberOutReset"
           },
           "name": "teamsWithResetUsers"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "WalletAccountInfo"
+          },
+          "name": "unreadWalletAccounts"
+        },
+        {
+          "type": "ResetState",
+          "name": "resetState"
         }
       ]
     },

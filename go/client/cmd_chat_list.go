@@ -13,9 +13,7 @@ import (
 
 type cmdChatList struct {
 	libkb.Contextified
-
-	fetcher chatCLIInboxFetcher
-
+	fetcher        chatCLIInboxFetcher
 	showDeviceName bool
 }
 
@@ -28,6 +26,7 @@ func newCmdChatList(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Comm
 		Action: func(c *cli.Context) {
 			cl.ChooseCommand(&cmdChatList{Contextified: libkb.NewContextified(g)}, "list", c)
 			cl.SetNoStandalone()
+			cl.SetLogForward(libcmdline.LogForwardNone)
 		},
 		Flags: getInboxFetcherActivitySortedFlags(),
 	}
@@ -38,7 +37,6 @@ func (c *cmdChatList) Run() error {
 	if err != nil {
 		return err
 	}
-
 	if err = conversationListView(conversations).show(c.G(), string(c.G().Env.GetUsername()), c.showDeviceName); err != nil {
 		return err
 	}

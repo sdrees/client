@@ -17,7 +17,7 @@ import (
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 )
 
-// ListOptions is for the linux style
+// ListOptions is for the Linux style
 type ListOptions struct {
 	all         bool
 	long        bool
@@ -56,10 +56,12 @@ func NewCmdSimpleFSList(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.
 				Name:  "rec, recursive",
 				Usage: "recurse into subdirectories",
 			},
+			/* TODO: currently this option does nothing.
 			cli.BoolFlag{
 				Name:  "dirs-first",
 				Usage: "list directories first",
 			},
+			*/
 			cli.BoolFlag{
 				Name:  "nocolor",
 				Usage: "remove color formatting",
@@ -92,6 +94,18 @@ func NewCmdSimpleFSList(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.
 				Name:  "w, windows",
 				Usage: "windows style dir",
 			},
+			cli.IntFlag{
+				Name:  "rev",
+				Usage: "a revision number for the KBFS folder",
+			},
+			cli.StringFlag{
+				Name:  "time",
+				Usage: "a time for the KBFS folder (eg \"2018-07-27 22:05\")",
+			},
+			cli.StringFlag{
+				Name:  "reltime, relative-time",
+				Usage: "a relative time for the KBFS folder (eg \"5m\")",
+			},
 		},
 	}
 
@@ -108,7 +122,7 @@ func (c *CmdSimpleFSList) HandleTopLevelKeybaseList(path keybase1.Path) (bool, e
 	if pathType != keybase1.PathType_KBFS {
 		return false, nil
 	}
-	acc := filepath.Clean(strings.ToLower(path.Kbfs()))
+	acc := filepath.Clean(strings.ToLower(path.Kbfs().Path))
 	acc = filepath.ToSlash(acc)
 	c.G().Log.Debug("fs ls HandleTopLevelKeybaseList: %s -> %s", path.Kbfs(), acc)
 	if acc == "/private" {
@@ -160,33 +174,39 @@ func (c *CmdSimpleFSList) Run() error {
 	if len(paths) > 1 {
 		var listResult keybase1.SimpleFSListResult
 		for _, path := range paths {
-			e, err := cli.SimpleFSStat(context.TODO(), path)
+			e, err := cli.SimpleFSStat(context.TODO(), keybase1.SimpleFSStatArg{Path: path})
 			if err != nil {
 				return err
 			}
 			// TODO: should stat include the path in the result?
-			e.Name = pathToString(path)
+			e.Name = path.String()
 			listResult.Entries = append(listResult.Entries, e)
 		}
 		c.output(listResult)
 	} else if len(paths) == 1 {
 		path := paths[0]
-		c.G().Log.Debug("SimpleFSList %s", pathToString(path))
+		c.G().Log.Debug("SimpleFSList %s", path)
 
 		opid, err2 := cli.SimpleFSMakeOpid(ctx)
 		if err2 != nil {
 			return err2
 		}
 		defer cli.SimpleFSClose(ctx, opid)
+		filter := keybase1.ListFilter_FILTER_ALL_HIDDEN
+		if c.options.all {
+			filter = keybase1.ListFilter_NO_FILTER
+		}
 		if c.recurse {
 			err = cli.SimpleFSListRecursive(ctx, keybase1.SimpleFSListRecursiveArg{
-				OpID: opid,
-				Path: path,
+				OpID:   opid,
+				Path:   path,
+				Filter: filter,
 			})
 		} else {
 			err = cli.SimpleFSList(ctx, keybase1.SimpleFSListArg{
-				OpID: opid,
-				Path: path,
+				OpID:   opid,
+				Path:   path,
+				Filter: filter,
 			})
 		}
 		if err != nil {
@@ -248,7 +268,7 @@ func (c *CmdSimpleFSList) output(listResult keybase1.SimpleFSListResult) error {
 		}
 
 		if outputBuffer.String() != "" {
-			ui.Printf("%s", outputBuffer.String())
+			ui.PrintfUnescaped("%s", outputBuffer.String())
 		}
 	}
 	return nil
@@ -259,7 +279,7 @@ func (c *CmdSimpleFSList) ParseArgv(ctx *cli.Context) error {
 	nargs := len(ctx.Args())
 	var err error
 
-	c.recurse = ctx.Bool("recurse")
+	c.recurse = ctx.Bool("rec") || ctx.Bool("recursive")
 	c.winStyle = ctx.Bool("windows")
 	c.options.all = ctx.Bool("all")
 	c.options.long = ctx.Bool("long")
@@ -275,13 +295,24 @@ func (c *CmdSimpleFSList) ParseArgv(ctx *cli.Context) error {
 		return errors.New("ls requires at least one KBFS path argument")
 	}
 
+	// TODO: "rev" should be a real int64, need to update the `cli`
+	// library for that.
+	rev := int64(ctx.Int("rev"))
+	time := ctx.String("time")
+	relTime := getRelTime(ctx)
 	for _, src := range ctx.Args() {
-		argPath := makeSimpleFSPath(c.G(), src)
+		// Use the same revision number for each path.
+		argPath, err := makeSimpleFSPathWithArchiveParams(
+			src, rev, time, relTime)
+		if err != nil {
+			return err
+		}
 		pathType, err := argPath.PathType()
 		if err != nil {
 			return err
 		}
-		if pathType != keybase1.PathType_KBFS {
+		if pathType != keybase1.PathType_KBFS &&
+			pathType != keybase1.PathType_KBFS_ARCHIVED {
 			return errors.New("ls requires KBFS path arguments")
 		}
 		c.paths = append(c.paths, argPath)

@@ -88,7 +88,7 @@ func (t *TypingMonitor) notifyConvUpdateLocked(ctx context.Context, convID chat1
 		ConvID: convID,
 		Typers: typers,
 	}
-	t.G().NotifyRouter.HandleChatTypingUpdate(ctx, []chat1.ConvTypingUpdate{update})
+	t.G().ActivityNotifier.TypingUpdate(ctx, []chat1.ConvTypingUpdate{update})
 }
 
 func (t *TypingMonitor) Update(ctx context.Context, typer chat1.TyperInfo, convID chat1.ConversationID,
@@ -156,7 +156,7 @@ func (t *TypingMonitor) removeFromTypers(ctx context.Context, key string, convID
 func (t *TypingMonitor) waitOnTyper(ctx context.Context, chans *typingControlChans,
 	convID chat1.ConversationID) {
 	key := t.key(chans.typer, convID)
-	ctx = BackgroundContext(ctx, t.G())
+	ctx = globals.BackgroundChatCtx(ctx, t.G())
 	deadline := t.clock.Now().Add(t.timeout)
 	go func() {
 		extends := 0

@@ -74,6 +74,10 @@
         {
           "type": "boolean",
           "name": "breaksTracking"
+        },
+        {
+          "type": "SigID",
+          "name": "sigID"
         }
       ]
     },
@@ -110,6 +114,24 @@
     },
     {
       "type": "record",
+      "name": "StellarAccount",
+      "fields": [
+        {
+          "type": "string",
+          "name": "accountID"
+        },
+        {
+          "type": "string",
+          "name": "federationAddress"
+        },
+        {
+          "type": "SigID",
+          "name": "sigID"
+        }
+      ]
+    },
+    {
+      "type": "record",
       "name": "RevokedProof",
       "fields": [
         {
@@ -119,6 +141,10 @@
         {
           "type": "TrackDiff",
           "name": "diff"
+        },
+        {
+          "type": "boolean",
+          "name": "snoozed"
         }
       ]
     },
@@ -308,6 +334,19 @@
           "type": "TeamRole",
           "name": "role",
           "jsonkey": "role"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "string"
+          },
+          "name": "publicAdmins",
+          "jsonkey": "public_admins"
+        },
+        {
+          "type": "int",
+          "name": "numMembers",
+          "jsonkey": "num_members"
         }
       ]
     },
@@ -361,6 +400,14 @@
             "items": "UserTeamShowcase"
           },
           "name": "teamShowcase"
+        },
+        {
+          "type": "boolean",
+          "name": "registeredForAirdrop"
+        },
+        {
+          "type": "boolean",
+          "name": "blocked"
         }
       ]
     },
@@ -575,6 +622,19 @@
         {
           "name": "c",
           "type": "Cryptocurrency"
+        }
+      ],
+      "response": null
+    },
+    "displayStellarAccount": {
+      "request": [
+        {
+          "name": "sessionID",
+          "type": "int"
+        },
+        {
+          "name": "a",
+          "type": "StellarAccount"
         }
       ],
       "response": null

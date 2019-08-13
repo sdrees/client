@@ -22,9 +22,9 @@ type CmdGitCreate struct {
 func newCmdGitCreate(cl *libcmdline.CommandLine, g *libkb.GlobalContext) cli.Command {
 	return cli.Command{
 		Name:         "create",
-		ArgumentHelp: "<repo name> [--team=<team name>]",
+		ArgumentHelp: "[--team=<team name>] <repo name>",
 		Usage:        "Create a personal or team git repository.",
-		Description:  "`keybase git create reponame` will create a personal git repo.\n   `keybase git create reponame --team=treehouse` will create a\n   team git repo for the `treehouse` team.",
+		Description:  "`keybase git create reponame` will create a personal git repo.\n   `keybase git create --team=treehouse reponame` will create a\n   team git repo for the `treehouse` team.",
 		Action: func(c *cli.Context) {
 			cmd := NewCmdGitCreateRunner(g)
 			cl.ChooseCommand(cmd, "create", c)
@@ -81,7 +81,11 @@ func (c *CmdGitCreate) Run() error {
 	}
 
 	dui := c.G().UI.GetDumbOutputUI()
-	dui.Printf("Repo created! You can clone it with:\n  git clone %s\n", urlString)
+	dui.Printf(`Repo created! You can clone it with:
+  git clone %s
+Or add it as a remote to an existing repo with:
+  git remote add origin %s
+`, urlString, urlString)
 	return nil
 }
 

@@ -11,14 +11,22 @@ import (
 )
 
 type DebuggingHandler struct {
+	libkb.Contextified
 	*BaseHandler
+	userHandler   *UserHandler
+	walletHandler *walletHandler
 }
 
-func NewDebuggingHandler(xp rpc.Transporter, g *libkb.GlobalContext) *DebuggingHandler {
-	return &DebuggingHandler{BaseHandler: NewBaseHandler(g, xp)}
+func NewDebuggingHandler(xp rpc.Transporter, g *libkb.GlobalContext, userHandler *UserHandler, walletHandler *walletHandler) *DebuggingHandler {
+	return &DebuggingHandler{
+		Contextified:  libkb.NewContextified(g),
+		BaseHandler:   NewBaseHandler(g, xp),
+		userHandler:   userHandler,
+		walletHandler: walletHandler,
+	}
 }
 
-func (t DebuggingHandler) FirstStep(ctx context.Context, arg keybase1.FirstStepArg) (result keybase1.FirstStepResult, err error) {
+func (t *DebuggingHandler) FirstStep(ctx context.Context, arg keybase1.FirstStepArg) (result keybase1.FirstStepResult, err error) {
 	client := t.rpcClient()
 	cbArg := keybase1.SecondStepArg{Val: arg.Val + 1, SessionID: arg.SessionID}
 	var cbReply int
@@ -31,12 +39,12 @@ func (t DebuggingHandler) FirstStep(ctx context.Context, arg keybase1.FirstStepA
 	return
 }
 
-func (t DebuggingHandler) SecondStep(_ context.Context, arg keybase1.SecondStepArg) (val int, err error) {
+func (t *DebuggingHandler) SecondStep(_ context.Context, arg keybase1.SecondStepArg) (val int, err error) {
 	val = arg.Val + 1
 	return
 }
 
-func (t DebuggingHandler) Increment(_ context.Context, arg keybase1.IncrementArg) (val int, err error) {
+func (t *DebuggingHandler) Increment(_ context.Context, arg keybase1.IncrementArg) (val int, err error) {
 	val = arg.Val + 1
 	return
 }

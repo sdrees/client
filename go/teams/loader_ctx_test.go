@@ -10,6 +10,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/keybase1"
+	"github.com/keybase/client/go/sig3"
 	jsonw "github.com/keybase/go-jsonw"
 	"github.com/stretchr/testify/require"
 )
@@ -38,19 +39,19 @@ func NewMockLoaderContext(t *testing.T, g *libkb.GlobalContext, unit TestCase) *
 }
 
 func (l *MockLoaderContext) getNewLinksFromServer(ctx context.Context,
-	teamID keybase1.TeamID, public bool, lows getLinksLows,
+	teamID keybase1.TeamID, lows getLinksLows,
 	readSubteamID *keybase1.TeamID) (*rawTeam, error) {
 
-	return l.getLinksFromServerHelper(ctx, teamID, lows, nil, readSubteamID)
+	return l.getLinksFromServerCommon(ctx, teamID, lows, nil, readSubteamID)
 }
 
 func (l *MockLoaderContext) getLinksFromServer(ctx context.Context,
 	teamID keybase1.TeamID, requestSeqnos []keybase1.Seqno, readSubteamID *keybase1.TeamID) (*rawTeam, error) {
 
-	return l.getLinksFromServerHelper(ctx, teamID, getLinksLows{}, requestSeqnos, readSubteamID)
+	return l.getLinksFromServerCommon(ctx, teamID, getLinksLows{}, requestSeqnos, readSubteamID)
 }
 
-func (l *MockLoaderContext) getLinksFromServerHelper(ctx context.Context,
+func (l *MockLoaderContext) getLinksFromServerCommon(ctx context.Context,
 	teamID keybase1.TeamID, lows getLinksLows,
 	requestSeqnos []keybase1.Seqno, readSubteamID *keybase1.TeamID) (*rawTeam, error) {
 
@@ -65,6 +66,7 @@ func (l *MockLoaderContext) getLinksFromServerHelper(ctx context.Context,
 
 	var links []json.RawMessage
 	var latestLinkToSend keybase1.Seqno
+	var latestHiddenLinkToSend keybase1.Seqno
 	for _, link := range teamSpec.Links {
 		// Stub out those links in teamSpec that claim seqnos
 		// that are in the Unit.Load.Stub list.
@@ -111,6 +113,38 @@ func (l *MockLoaderContext) getLinksFromServerHelper(ctx context.Context,
 		}
 	}
 
+	shouldIncludeLink := func(link sig3.ExportJSON) (bool, keybase1.Seqno) {
+		g, err := link.Import()
+		if err != nil {
+			return true, keybase1.Seqno(0)
+		}
+		omit := false
+
+		q := g.Outer().Seqno
+
+		// The loader didn't want us to return all of the links, so just release some of them
+		if l.state.loadSpec.HiddenUpto > keybase1.Seqno(0) && q > l.state.loadSpec.HiddenUpto {
+			omit = true
+		}
+
+		// We previously loaded up to lows.HiddenChain.Seqno, so don't include them again
+		if lows.HiddenChainSeqno > keybase1.Seqno(0) && lows.HiddenChainSeqno >= q {
+			omit = true
+		}
+		return !omit, q
+	}
+
+	var hiddenChain []sig3.ExportJSON
+	for _, link := range teamSpec.Hidden {
+		inc, latest := shouldIncludeLink(link)
+		if inc {
+			hiddenChain = append(hiddenChain, link)
+			if latest > latestHiddenLinkToSend {
+				latestHiddenLinkToSend = latest
+			}
+		}
+	}
+
 	l.t.Logf("loadSpec: %v", spew.Sdump(l.state.loadSpec))
 
 	var box *TeamBox
@@ -118,7 +152,9 @@ func (l *MockLoaderContext) getLinksFromServerHelper(ctx context.Context,
 	require.NotEqual(l.t, len(teamSpec.TeamKeyBoxes), 0, "need some team key boxes")
 	for _, boxSpec := range teamSpec.TeamKeyBoxes {
 		require.NotEqual(l.t, 0, boxSpec.Seqno, "bad box seqno")
-		if boxSpec.Seqno <= latestLinkToSend || l.state.loadSpec.ForceLastBox {
+		if (boxSpec.Seqno <= latestLinkToSend && boxSpec.ChainType == keybase1.SeqType_SEMIPRIVATE) ||
+			(boxSpec.Seqno <= latestHiddenLinkToSend && boxSpec.ChainType == keybase1.SeqType_TEAM_PRIVATE_HIDDEN) ||
+			l.state.loadSpec.ForceLastBox {
 			box2 := boxSpec.TeamBox
 			box = &box2
 
@@ -134,7 +170,7 @@ func (l *MockLoaderContext) getLinksFromServerHelper(ctx context.Context,
 		box = nil
 	}
 
-	l.t.Logf("returning %v links (latest %v)", len(links), latestLinkToSend)
+	l.t.Logf("returning %v links (latest %v) [hidden: %d links (latest %d)]", len(links), latestLinkToSend, len(hiddenChain), latestHiddenLinkToSend)
 	if box != nil {
 		l.t.Logf("returning box generation:%v (%v prevs)", box.Generation, len(prevs))
 	}
@@ -155,14 +191,16 @@ func (l *MockLoaderContext) getLinksFromServerHelper(ctx context.Context,
 	}
 
 	return &rawTeam{
-		ID:             teamID,
-		Name:           name,
-		Status:         libkb.AppStatus{Code: libkb.SCOk},
-		Chain:          links,
-		Box:            box,
-		Prevs:          prevs,
-		ReaderKeyMasks: readerKeyMasks,
-		SubteamReader:  l.state.loadSpec.SubteamReader,
+		ID:                    teamID,
+		Name:                  name,
+		Status:                libkb.AppStatus{Code: libkb.SCOk},
+		Chain:                 links,
+		Box:                   box,
+		Prevs:                 prevs,
+		ReaderKeyMasks:        readerKeyMasks,
+		SubteamReader:         l.state.loadSpec.SubteamReader,
+		HiddenChain:           hiddenChain,
+		RatchetBlindingKeySet: teamSpec.RatchetBlindingKeySet,
 	}, nil
 }
 
@@ -226,6 +264,11 @@ func (l *MockLoaderContext) perUserEncryptionKey(ctx context.Context, userSeqno 
 	return key, err
 }
 
+func (l *MockLoaderContext) merkleLookupWithHidden(ctx context.Context, teamID keybase1.TeamID, public bool, harg *libkb.LookupTeamHiddenArg) (r1 keybase1.Seqno, r2 keybase1.LinkID, isFresh bool, err error) {
+	r1, r2, err = l.merkleLookup(ctx, teamID, public)
+	return r1, r2, true, err
+}
+
 func (l *MockLoaderContext) merkleLookup(ctx context.Context, teamID keybase1.TeamID, public bool) (r1 keybase1.Seqno, r2 keybase1.LinkID, err error) {
 	key := fmt.Sprintf("%s", teamID)
 	if l.state.loadSpec.Upto > 0 {
@@ -238,9 +281,10 @@ func (l *MockLoaderContext) merkleLookup(ctx context.Context, teamID keybase1.Te
 	return x.Seqno, x.LinkID, nil
 }
 
-func (l *MockLoaderContext) merkleLookupTripleAtHashMeta(ctx context.Context,
-	leafID keybase1.UserOrTeamID, hm keybase1.HashMeta) (triple *libkb.MerkleTriple, err error) {
+func (l *MockLoaderContext) merkleLookupTripleInPast(ctx context.Context,
+	isPublic bool, leafID keybase1.UserOrTeamID, root keybase1.MerkleRootV2) (triple *libkb.MerkleTriple, err error) {
 
+	hm := root.HashMeta
 	key := fmt.Sprintf("%s-%s", leafID, hm)
 	triple1, ok := l.unit.MerkleTriples[key]
 	if !ok {
@@ -261,7 +305,7 @@ func (l *MockLoaderContext) forceLinkMapRefreshForUser(ctx context.Context, uid 
 	// return linkMap, nil
 }
 
-func (l *MockLoaderContext) loadKeyV2(ctx context.Context, uid keybase1.UID, kid keybase1.KID) (
+func (l *MockLoaderContext) loadKeyV2(ctx context.Context, uid keybase1.UID, kid keybase1.KID, _lkc *loadKeyCache) (
 	uv keybase1.UserVersion, pubKey *keybase1.PublicKeyV2NaCl, linkMap linkMapT,
 	err error) {
 

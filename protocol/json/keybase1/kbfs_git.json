@@ -26,6 +26,10 @@
         {
           "type": "Time",
           "name": "pruneExpireTime"
+        },
+        {
+          "type": "int",
+          "name": "maxObjectPacks"
         }
       ]
     }
@@ -35,7 +39,7 @@
       "request": [
         {
           "name": "folder",
-          "type": "Folder"
+          "type": "FolderHandle"
         },
         {
           "name": "name",
@@ -49,7 +53,7 @@
       "request": [
         {
           "name": "folder",
-          "type": "Folder"
+          "type": "FolderHandle"
         },
         {
           "name": "name",
@@ -63,7 +67,7 @@
       "request": [
         {
           "name": "folder",
-          "type": "Folder"
+          "type": "FolderHandle"
         },
         {
           "name": "name",

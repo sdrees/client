@@ -59,7 +59,7 @@ type InBandMessage interface {
 	MessageWithMetadata
 	ToStateUpdateMessage() StateUpdateMessage
 	ToStateSyncMessage() StateSyncMessage
-	Merge(m1 InBandMessage) error
+	Merge(m1 InBandMessage) (InBandMessage, error)
 }
 
 type StateUpdateMessage interface {
@@ -82,6 +82,7 @@ type TimeOrOffset interface {
 	Time() *time.Time
 	Offset() *time.Duration
 	Before(t time.Time) bool
+	IsZero() bool
 }
 
 type Item interface {
@@ -101,6 +102,7 @@ type Reminder interface {
 type MsgRange interface {
 	EndTime() TimeOrOffset
 	Category() Category
+	SkipMsgIDs() []MsgID
 }
 
 type Dismissal interface {
@@ -126,6 +128,7 @@ type ProtocolState interface {
 type Message interface {
 	ToInBandMessage() InBandMessage
 	ToOutOfBandMessage() OutOfBandMessage
+	Marshal() ([]byte, error)
 }
 
 type ReminderSet interface {
@@ -146,8 +149,8 @@ type MessageConsumer interface {
 	// of the state machine. Of course messages can be "inband" which actually
 	// perform state mutations, or might be "out-of-band" that just use the
 	// Gregor broadcast mechanism to make sure that all clients get the
-	// notification.
-	ConsumeMessage(ctx context.Context, m Message) (time.Time, error)
+	// notification. It returns a version of the message to broadcast to clients.
+	ConsumeMessage(ctx context.Context, m Message) (Message, error)
 }
 
 // StateMachine is the central interface of the Gregor system. Various parts of the
@@ -202,6 +205,25 @@ type StateMachine interface {
 	// How long we lock access to reminders; after this time, it's open to other
 	// consumers.
 	ReminderLockDuration() time.Duration
+
+	// Local dismissals for the device this state machine runs on
+	LocalDismissals(context.Context, UID) ([]MsgID, error)
+
+	// Set local dismissals on the state machine storage to the given list
+	InitLocalDismissals(context.Context, UID, []MsgID) error
+
+	// Consume a local dismissal in state machine storage
+	ConsumeLocalDismissal(context.Context, UID, MsgID) error
+
+	// Outbox gives all of the pending messages in the outbox
+	Outbox(context.Context, UID) ([]Message, error)
+	RemoveFromOutbox(context.Context, UID, MsgID) error
+
+	// InitOutbox initializes a users outbox with the given messages
+	InitOutbox(context.Context, UID, []Message) error
+
+	// ConsumeOutboxMessage add a message to the outbox
+	ConsumeOutboxMessage(context.Context, UID, Message) error
 }
 
 type ObjFactory interface {
@@ -213,7 +235,8 @@ type ObjFactory interface {
 	MakeItem(u UID, msgid MsgID, deviceid DeviceID, ctime time.Time, c Category, dtime *time.Time, body Body) (Item, error)
 	MakeReminder(i Item, seqno int, t time.Time) (Reminder, error)
 	MakeReminderID(u UID, msgid MsgID, seqno int) (ReminderID, error)
-	MakeDismissalByRange(uid UID, msgid MsgID, devid DeviceID, ctime time.Time, c Category, d time.Time) (InBandMessage, error)
+	MakeDismissalByRange(uid UID, msgid MsgID, devid DeviceID, ctime time.Time, c Category, d time.Time,
+		skipMsgIDs []MsgID) (InBandMessage, error)
 	MakeDismissalByIDs(uid UID, msgid MsgID, devid DeviceID, ctime time.Time, d []MsgID) (InBandMessage, error)
 	MakeStateSyncMessage(uid UID, msgid MsgID, devid DeviceID, ctime time.Time) (InBandMessage, error)
 	MakeState(i []Item) (State, error)
@@ -225,6 +248,7 @@ type ObjFactory interface {
 	MakeTimeOrOffsetFromOffset(d time.Duration) (TimeOrOffset, error)
 	MakeReminderSetFromReminders([]Reminder, bool) (ReminderSet, error)
 	UnmarshalState([]byte) (State, error)
+	UnmarshalMessage([]byte) (Message, error)
 }
 
 type MainLoopServer interface {

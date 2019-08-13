@@ -1,0 +1,36 @@
+{
+  "prelude": [],
+  "actions": {
+    "deleteEntity": {
+      "keyPath": "Array<string>",
+      "ids": "Iterable<any>"
+    },
+    "mergeEntity": {
+      "keyPath": "Array<string>",
+      "entities": ["I.Map<any, any>", "I.List<any>"]
+    },
+    "replaceEntity": {
+      "keyPath": "Array<string>",
+      "entities": ["I.Map<any, any>", "I.List<any>"]
+    },
+    "subtractEntity": {
+      "keyPath": "Array<string>",
+      "entities": "I.List<any>"
+    },
+    "newPinentry": {
+      "showTyping": "RPCTypes.Feature",
+      "type": "RPCTypes.PassphraseType",
+      "sessionID": "number",
+      "prompt": "string",
+      "windowTitle": "string",
+      "submitLabel": "string | null",
+      "cancelLabel": "string | null",
+      "retryLabel": "string | null"
+    },
+    "onSubmit": {
+      "sessionID": "number",
+      "password": "string"
+    },
+    "onCancel": {"sessionID": "number"}
+  }
+}

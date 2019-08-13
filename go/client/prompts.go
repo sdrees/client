@@ -59,6 +59,20 @@ const (
 	PromptDescriptorRemoveMember
 	PromptDescriptorDeleteRootTeam
 	PromptDescriptorDeleteSubteam
+	PromptDescriptorChatDeleteHistory
+	PromptDescriptorChatSetRetention
+	PromptDescriptorImportStellarSecretKey
+	PromptDescriptorConfirmStellarImport
+	PromptDescriptorChatSetConvMinWriterRole
+	PromptDescriptorChangeLockdownMode
+	PromptDescriptorImportStellarAccountName
+	PromptDescriptorStellarDisclaimer
+	PromptDescriptorPaperKey
+	PromptDescriptorStellarConfirm
+	PromptDescriptorResetAccount
+	PromptDescriptorPassphraseRecovery
+	PromptDescriptorStellarURIAmount
+	PromptDescriptorAccountDeleteConfirmation
 )
 
 const (
@@ -67,4 +81,5 @@ const (
 	OutputDescriptorEndageredTLFs
 	OutputDescriptorHomeDump
 	OutputDescriptorBadgeDump
+	OutputDescriptorTeamList
 )

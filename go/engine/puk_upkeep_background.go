@@ -15,15 +15,11 @@ import (
 )
 
 var PerUserKeyUpkeepBackgroundSettings = BackgroundTaskSettings{
-	// Wait after starting the app
-	Start: 20 * time.Second,
-	// When waking up on mobile lots of timers will go off at once. We wait an additional
-	// delay so as not to add to that herd and slow down the mobile experience when opening the app.
-	WakeUp: 15 * time.Second,
-	// Wait between checks
-	Interval: 6 * time.Hour,
-	// Time limit on each round
-	Limit: 5 * time.Minute,
+	Start:        20 * time.Second, // Wait after starting the app
+	StartStagger: 20 * time.Second, // Wait an additional random amount.
+	WakeUp:       15 * time.Second, // Additional delay after waking from sleep.
+	Interval:     6 * time.Hour,    // Wait between checks
+	Limit:        5 * time.Minute,  // Time limit on each round
 }
 
 // PerUserKeyUpkeepBackground is an engine.
@@ -81,27 +77,32 @@ func (e *PerUserKeyUpkeepBackground) SubConsumers() []libkb.UIConsumer {
 
 // Run starts the engine.
 // Returns immediately, kicks off a background goroutine.
-func (e *PerUserKeyUpkeepBackground) Run(ctx *Context) (err error) {
-	return RunEngine(e.task, ctx)
+func (e *PerUserKeyUpkeepBackground) Run(m libkb.MetaContext) (err error) {
+	return RunEngine2(m, e.task)
 }
 
 func (e *PerUserKeyUpkeepBackground) Shutdown() {
 	e.task.Shutdown()
 }
 
-func PerUserKeyUpkeepBackgroundRound(g *libkb.GlobalContext, ectx *Context) error {
-	if g.ConnectivityMonitor.IsConnected(ectx.GetNetContext()) == libkb.ConnectivityMonitorNo {
-		g.Log.CDebugf(ectx.GetNetContext(), "PerUserKeyUpkeepBackgroundRound giving up offline")
+func PerUserKeyUpkeepBackgroundRound(m libkb.MetaContext) error {
+	if m.G().ConnectivityMonitor.IsConnected(m.Ctx()) == libkb.ConnectivityMonitorNo {
+		m.Debug("PerUserKeyUpkeepBackgroundRound giving up offline")
 		return nil
 	}
 
-	if !g.LocalSigchainGuard().IsAvailable(ectx.GetNetContext(), "PerUserKeyUpkeepBackgroundRound") {
-		g.Log.CDebugf(ectx.GetNetContext(), "PerUserKeyUpkeepBackgroundRound yielding to guard")
+	if !m.G().ActiveDevice.Valid() {
+		m.Debug("PerUserKeyUpkeepBackgroundRound not logged in")
+		return nil
+	}
+
+	if !m.G().LocalSigchainGuard().IsAvailable(m.Ctx(), "PerUserKeyUpkeepBackgroundRound") {
+		m.Debug("PerUserKeyUpkeepBackgroundRound yielding to guard")
 		return nil
 	}
 
 	arg := &PerUserKeyUpkeepArgs{}
-	eng := NewPerUserKeyUpkeep(g, arg)
-	err := RunEngine(eng, ectx)
+	eng := NewPerUserKeyUpkeep(m.G(), arg)
+	err := RunEngine2(m, eng)
 	return err
 }

@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"context"
 	"testing"
 
 	"github.com/keybase/client/go/libkb"
@@ -27,10 +28,11 @@ func TestPerUserKeyUpgrade(t *testing.T) {
 	upgrade := func() *PerUserKeyUpgrade {
 		arg := &PerUserKeyUpgradeArgs{}
 		eng := NewPerUserKeyUpgrade(tc.G, arg)
-		ctx := &Context{
+		uis := libkb.UIs{
 			LogUI: tc.G.UI.GetLogUI(),
 		}
-		err := RunEngine(eng, ctx)
+		m := NewMetaContextForTest(tc).WithUIs(uis)
+		err := RunEngine2(m, eng)
 		require.NoError(t, err)
 		return eng
 	}
@@ -74,7 +76,7 @@ func checkPerUserKeyCount(tc *libkb.TestContext, n int) {
 
 func checkPerUserKeyCountLocal(tc *libkb.TestContext, n int) {
 	t := tc.T
-	pukring, err := tc.G.GetPerUserKeyring()
+	pukring, err := tc.G.GetPerUserKeyring(context.Background())
 	require.NoError(t, err)
 	hak := pukring.HasAnyKeys()
 	if n == 0 {

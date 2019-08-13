@@ -6,7 +6,8 @@ package client
 import (
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/chat1"
-	keybase1 "github.com/keybase/client/go/protocol/keybase1"
+	"github.com/keybase/client/go/protocol/keybase1"
+	"github.com/keybase/client/go/protocol/stellar1"
 	"github.com/keybase/go-framed-msgpack-rpc/rpc"
 	"golang.org/x/net/context"
 )
@@ -96,6 +97,7 @@ func RegisterProtocolsWithContext(prots []rpc.Protocol, g *libkb.GlobalContext) 
 			if _, ok := err.(rpc.AlreadyRegisteredError); !ok {
 				return err
 			}
+			g.Log.Debug("Protocol already registered: %v", err)
 			err = nil
 		}
 	}
@@ -139,6 +141,38 @@ func GetUserClient(g *libkb.GlobalContext) (cli keybase1.UserClient, err error) 
 	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.UserClient{Cli: rcli}
+	}
+	return
+}
+
+func GetPhoneNumbersClient(g *libkb.GlobalContext) (cli keybase1.PhoneNumbersClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
+		cli = keybase1.PhoneNumbersClient{Cli: rcli}
+	}
+	return
+}
+
+func GetEmailsClient(g *libkb.GlobalContext) (cli keybase1.EmailsClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
+		cli = keybase1.EmailsClient{Cli: rcli}
+	}
+	return
+}
+
+func GetContactsClient(g *libkb.GlobalContext) (cli keybase1.ContactsClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
+		cli = keybase1.ContactsClient{Cli: rcli}
+	}
+	return
+}
+
+func GetUserSearchClient(g *libkb.GlobalContext) (cli keybase1.UserSearchClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
+		cli = keybase1.UserSearchClient{Cli: rcli}
 	}
 	return
 }
@@ -187,6 +221,14 @@ func GetCtlClient(g *libkb.GlobalContext) (cli keybase1.CtlClient, err error) {
 	var rcli *rpc.Client
 	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
 		cli = keybase1.CtlClient{Cli: rcli}
+	}
+	return
+}
+
+func GetPprofClient(g *libkb.GlobalContext) (cli keybase1.PprofClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
+		cli = keybase1.PprofClient{Cli: rcli}
 	}
 	return
 }
@@ -243,15 +285,6 @@ func GetTlfClient(g *libkb.GlobalContext) (cli keybase1.TlfClient, err error) {
 	return cli, nil
 }
 
-func GetUpdateClient(g *libkb.GlobalContext) (cli keybase1.UpdateClient, err error) {
-	rcli, _, err := GetRPCClientWithContext(g)
-	if err != nil {
-		return cli, err
-	}
-	cli = keybase1.UpdateClient{Cli: rcli}
-	return cli, nil
-}
-
 func GetSecretKeysClient(g *libkb.GlobalContext) (cli keybase1.SecretKeysClient, err error) {
 	rcli, _, err := GetRPCClientWithContext(g)
 	if err != nil {
@@ -270,6 +303,15 @@ func GetChatLocalClient(g *libkb.GlobalContext) (cli chat1.LocalClient, err erro
 	return cli, nil
 }
 
+func GetDebuggingClient(g *libkb.GlobalContext) (cli keybase1.DebuggingClient, err error) {
+	rcli, _, err := GetRPCClientWithContext(g)
+	if err != nil {
+		return cli, err
+	}
+	cli = keybase1.DebuggingClient{Cli: rcli}
+	return cli, nil
+}
+
 func introduceMyself(g *libkb.GlobalContext, xp rpc.Transporter) error {
 	cli := rpc.NewClient(xp, libkb.NewContextifiedErrorUnwrapper(g), nil)
 	ccli := keybase1.ConfigClient{Cli: cli}
@@ -282,6 +324,15 @@ func GetPaperProvisionClient(g *libkb.GlobalContext) (cli keybase1.Paperprovisio
 		return cli, err
 	}
 	cli = keybase1.PaperprovisionClient{Cli: rcli}
+	return cli, nil
+}
+
+func GetSelfProvisionClient(g *libkb.GlobalContext) (cli keybase1.SelfprovisionClient, err error) {
+	rcli, _, err := GetRPCClientWithContext(g)
+	if err != nil {
+		return cli, err
+	}
+	cli = keybase1.SelfprovisionClient{Cli: rcli}
 	return cli, nil
 }
 
@@ -379,4 +430,21 @@ func GetBadgerClient(g *libkb.GlobalContext) (cli keybase1.BadgerClient, err err
 	}
 	cli = keybase1.BadgerClient{Cli: rcli}
 	return cli, nil
+}
+
+func GetWalletClient(g *libkb.GlobalContext) (cli stellar1.LocalClient, err error) {
+	rcli, _, err := GetRPCClientWithContext(g)
+	if err != nil {
+		return cli, err
+	}
+	cli = stellar1.LocalClient{Cli: rcli}
+	return cli, nil
+}
+
+func GetAuditClient(g *libkb.GlobalContext) (cli keybase1.AuditClient, err error) {
+	var rcli *rpc.Client
+	if rcli, _, err = GetRPCClientWithContext(g); err == nil {
+		cli = keybase1.AuditClient{Cli: rcli}
+	}
+	return
 }

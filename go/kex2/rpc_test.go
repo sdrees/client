@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,16 +109,16 @@ var ErrHandleHello = errors.New("handle hello failure")
 var ErrHandleDidCounterSign = errors.New("handle didCounterSign failure")
 var testTimeout = time.Duration(500) * time.Millisecond
 
-func (mp *mockProvisionee) HandleHello2(arg2 keybase1.Hello2Arg) (res keybase1.Hello2Res, err error) {
+func (mp *mockProvisionee) HandleHello2(ctx context.Context, arg2 keybase1.Hello2Arg) (res keybase1.Hello2Res, err error) {
 	arg1 := keybase1.HelloArg{
 		Uid:     arg2.Uid,
 		SigBody: arg2.SigBody,
 	}
-	res.SigPayload, err = mp.HandleHello(arg1)
+	res.SigPayload, err = mp.HandleHello(ctx, arg1)
 	return res, err
 }
 
-func (mp *mockProvisionee) HandleHello(arg keybase1.HelloArg) (res keybase1.HelloRes, err error) {
+func (mp *mockProvisionee) HandleHello(_ context.Context, arg keybase1.HelloArg) (res keybase1.HelloRes, err error) {
 	if (mp.behavior & BadProvisioneeSlowHello) != 0 {
 		time.Sleep(testTimeout * 8)
 	}
@@ -129,7 +130,7 @@ func (mp *mockProvisionee) HandleHello(arg keybase1.HelloArg) (res keybase1.Hell
 	return
 }
 
-func (mp *mockProvisionee) HandleDidCounterSign([]byte) error {
+func (mp *mockProvisionee) HandleDidCounterSign(_ context.Context, _ []byte) error {
 	if (mp.behavior & BadProvisioneeSlowDidCounterSign) != 0 {
 		time.Sleep(testTimeout * 8)
 	}
@@ -139,8 +140,8 @@ func (mp *mockProvisionee) HandleDidCounterSign([]byte) error {
 	return nil
 }
 
-func (mp *mockProvisionee) HandleDidCounterSign2(arg keybase1.DidCounterSign2Arg) error {
-	return mp.HandleDidCounterSign(arg.Sig)
+func (mp *mockProvisionee) HandleDidCounterSign2(ctx context.Context, arg keybase1.DidCounterSign2Arg) error {
+	return mp.HandleDidCounterSign(ctx, arg.Sig)
 }
 
 func testProtocolXWithBehavior(t *testing.T, provisioneeBehavior int) (results [2]error) {
@@ -225,6 +226,13 @@ func eeq(e1, e2 error) bool {
 	return e1 != nil && e1.Error() == e2.Error()
 }
 
+// errHasSuffix makes sure that err's string has errSuffix's string as
+// a suffix. This is necessary as go-codec prepends stuff to any
+// errors it catches.
+func errHasSuffix(err, errSuffix error) bool {
+	return err != nil && strings.HasSuffix(err.Error(), errSuffix.Error())
+}
+
 func TestFullProtocolXProvisioneeFailHello(t *testing.T) {
 	results := testProtocolXWithBehavior(t, BadProvisioneeFailHello)
 	if !eeq(results[0], ErrHandleHello) {
@@ -248,7 +256,7 @@ func TestFullProtocolXProvisioneeFailDidCounterSign(t *testing.T) {
 func TestFullProtocolXProvisioneeSlowHello(t *testing.T) {
 	results := testProtocolXWithBehavior(t, BadProvisioneeSlowHello)
 	for i, e := range results {
-		if !eeq(e, ErrTimedOut) && !eeq(e, io.EOF) && !eeq(e, ErrHelloTimeout) {
+		if !errHasSuffix(e, ErrTimedOut) && !errHasSuffix(e, io.EOF) && !errHasSuffix(e, ErrHelloTimeout) {
 			t.Fatalf("Bad error %d: %v", i, e)
 		}
 	}

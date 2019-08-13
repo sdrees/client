@@ -1,36 +1,37 @@
 {
   "prelude": [
-    "import * as RPCTypesGregor from '../constants/types/flow-types-gregor'"
+    "import * as Types from '../constants/types/git'"
   ],
   "actions": {
     "loadGit": {},
+    "loaded": { "repos": "Map<string, Types.GitInfo>" },
+    "navToGit": {"switchTab": "boolean", "routeState": "{\"expandedSet\": Set<string>} | null"},
     "createTeamRepo": {
       "name": "string",
       "teamname": "string",
       "notifyTeam": "boolean"
     },
-    "createPersonalRepo": {
-      "name": "string"
-    },
+    "createPersonalRepo": { "name": "string" },
+    "repoDeleted": {},
+    "repoCreated": {},
     "deleteTeamRepo": {
       "name": "string",
       "teamname": "string",
       "notifyTeam": "boolean"
     },
-    "deletePersonalRepo": {
-      "name": "string"
+    "deletePersonalRepo": { "name": "string" },
+    "setError": { "error?": "Error" },
+    "badgeAppForGit": { "ids": "Set<string>" },
+    "setTeamRepoSettings": {
+      "chatDisabled": "boolean",
+      "channelName?": "string",
+      "teamname": "string",
+      "repoID": "string"
     },
-    "setLoading": {
-      "loading": "boolean"
+    "navigateToTeamRepo": {
+      "repoID": "string",
+      "teamname": "string"
     },
-    "setError": {
-      "error": "?Error"
-    },
-    "badgeAppForGit": {
-      "ids": "Array<string>"
-    },
-    "handleIncomingGregor": {
-      "messages": "Array<RPCTypesGregor.OutOfBandMessage>"
-    }
+    "clearBadges": { "_description": "clears badges in the rows" }
   }
 }

@@ -18,11 +18,11 @@ type chatLocalHandler struct {
 }
 
 // newChatLocalHandler creates a chatLocalHandler.
-func newChatLocalHandler(xp rpc.Transporter, g *globals.Context, store *chat.AttachmentStore, gh *gregorHandler) *chatLocalHandler {
+func newChatLocalHandler(xp rpc.Transporter, g *globals.Context, gh *gregorHandler) *chatLocalHandler {
 	h := &chatLocalHandler{
 		BaseHandler: NewBaseHandler(g.ExternalG(), xp),
 	}
-	h.Server = chat.NewServer(g, store, gh, h)
+	h.Server = chat.NewServer(g, gh, h)
 	return h
 }
 

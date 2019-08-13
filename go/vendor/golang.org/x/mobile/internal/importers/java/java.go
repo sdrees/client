@@ -159,7 +159,7 @@ func (e *errClsNotFound) Error() string {
 	return "class not found: " + e.name
 }
 
-// IsAvailable returns whether the required tools are available for
+// IsAvailable reports whether the required tools are available for
 // Import to work. In particular, IsAvailable checks the existence
 // of the javap binary.
 func IsAvailable() bool {
@@ -611,7 +611,7 @@ func (j *Importer) importClasses(names []string, allowMissingClasses bool) ([]*C
 	out, err := javap.CombinedOutput()
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
-			return nil, fmt.Errorf("javap failed: %v: %s", err)
+			return nil, fmt.Errorf("javap failed: %v", err)
 		}
 		// Not every name is a Java class so an exit error from javap is not
 		// fatal.
