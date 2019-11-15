@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/keybase/client/go/chat/bots"
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/protocol/chat1"
 	"github.com/keybase/client/go/protocol/gregor1"
@@ -30,7 +31,10 @@ func (b *Bot) Execute(ctx context.Context, uid gregor1.UID, convID chat1.Convers
 
 func (b *Bot) clearExtendedDisplayLocked(ctx context.Context, convID chat1.ConversationID) {
 	if b.extendedDisplay {
-		b.getChatUI().ChatCommandMarkdown(ctx, convID, nil)
+		err := b.getChatUI().ChatCommandMarkdown(ctx, convID, nil)
+		if err != nil {
+			b.Debug(ctx, "clearExtendedDisplayLocked: error on markdown: %+v", err)
+		}
 		b.extendedDisplay = false
 	}
 }
@@ -64,15 +68,13 @@ func (b *Bot) Preview(ctx context.Context, uid gregor1.UID, convID chat1.Convers
 		return
 	}
 
-	cmdText, _, err := b.commandAndMessage(text)
-	if err != nil {
-		b.Debug(ctx, "Preview: no command text found: %s", err)
-		b.clearExtendedDisplayLocked(ctx, convID)
-		return
-	}
-	cmdText = cmdText[1:]
+	bots.SortCommandsForMatching(cmds)
+
+	// Since we have a list of all valid commands for this conversation, don't do any tokenizing
+	// Instead, just check if any valid bot command (followed by a space) is a prefix of this message
 	for _, cmd := range cmds {
-		if cmdText == cmd.Name && cmd.ExtendedDescription != nil {
+		// If we decide to support the !<command>@<username> syntax, we can just add another check here
+		if cmd.Matches(text) && cmd.ExtendedDescription != nil {
 			var body string
 			if b.G().IsMobileAppType() {
 				body = cmd.ExtendedDescription.MobileBody
@@ -84,10 +86,13 @@ func (b *Bot) Preview(ctx context.Context, uid gregor1.UID, convID chat1.Convers
 				title = new(string)
 				*title = cmd.ExtendedDescription.Title
 			}
-			b.getChatUI().ChatCommandMarkdown(ctx, convID, &chat1.UICommandMarkdown{
+			err := b.getChatUI().ChatCommandMarkdown(ctx, convID, &chat1.UICommandMarkdown{
 				Body:  body,
 				Title: title,
 			})
+			if err != nil {
+				b.Debug(ctx, "Preview: markdown error: %+v", err)
+			}
 			b.extendedDisplay = true
 			return
 		}

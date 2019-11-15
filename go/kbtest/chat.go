@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keybase/client/go/badges"
 	"github.com/keybase/client/go/chat/pager"
 
 	"github.com/keybase/client/go/chat/globals"
@@ -65,6 +66,9 @@ func (c ChatTestContext) Cleanup() {
 	if c.ChatG.BotCommandManager != nil {
 		<-c.ChatG.BotCommandManager.Stop(context.TODO())
 	}
+	if c.ChatG.UIInboxLoader != nil {
+		<-c.ChatG.UIInboxLoader.Stop(context.TODO())
+	}
 	c.TestContext.Cleanup()
 }
 
@@ -102,6 +106,7 @@ func NewChatMockWorld(t *testing.T, name string, numUsers int) (world *ChatMockW
 			TestContext: kbTc,
 			ChatG:       &globals.ChatContext{},
 		}
+		tc.ChatG.Badger = badges.NewBadger(kbTc.G)
 		tc.G.SetClock(world.Fc)
 		u, err := CreateAndSignupFakeUser("chat", tc.G)
 		if err != nil {
@@ -231,9 +236,13 @@ func (m *TlfMock) AllCryptKeys(ctx context.Context, tlfName string, public bool)
 	}
 	return res, nil
 }
-func (m *TlfMock) LookupName(ctx context.Context, tlfID chat1.TLFID, public bool) (res types.NameInfo, err error) {
-	fakeNameInfo := types.NameInfo{}
-	return fakeNameInfo, nil
+func (m *TlfMock) LookupName(ctx context.Context, tlfID chat1.TLFID, public bool, tlfName string) (res types.NameInfo, err error) {
+	return m.LookupID(ctx, tlfName, public)
+}
+
+func (m *TlfMock) TeamBotSettings(ctx context.Context, tlfName string, tlfID chat1.TLFID,
+	membersType chat1.ConversationMembersType, public bool) (map[keybase1.UserVersion]keybase1.TeamBotSettings, error) {
+	return make(map[keybase1.UserVersion]keybase1.TeamBotSettings), nil
 }
 
 func (m *TlfMock) LookupID(ctx context.Context, tlfName string, public bool) (res types.NameInfo, err error) {
@@ -753,7 +762,7 @@ func (m *ChatRemoteMock) RetentionSweepConv(ctx context.Context, convID chat1.Co
 	return res, errors.New("not implemented")
 }
 
-func (m *ChatRemoteMock) UpgradeKBFSToImpteam(ctx context.Context, tlfID chat1.TLFID) error {
+func (m *ChatRemoteMock) UpgradeKBFSToImpteam(ctx context.Context, arg chat1.UpgradeKBFSToImpteamArg) error {
 	return errors.New("not implemented")
 }
 
@@ -1010,6 +1019,7 @@ type ChatUI struct {
 	GiphyWindow           chan bool
 	CoinFlipUpdates       chan []chat1.UICoinFlipStatus
 	CommandMarkdown       chan *chat1.UICommandMarkdown
+	InboxLayoutCb         chan chat1.UIInboxLayout
 }
 
 func NewChatUI() *ChatUI {
@@ -1031,6 +1041,7 @@ func NewChatUI() *ChatUI {
 		GiphyWindow:           make(chan bool, 10),
 		CoinFlipUpdates:       make(chan []chat1.UICoinFlipStatus, 100),
 		CommandMarkdown:       make(chan *chat1.UICommandMarkdown, 10),
+		InboxLayoutCb:         make(chan chat1.UIInboxLayout, 200),
 	}
 }
 
@@ -1047,14 +1058,25 @@ func (c *ChatUI) ChatAttachmentDownloadDone(context.Context) error {
 }
 
 func (c *ChatUI) ChatInboxConversation(ctx context.Context, arg chat1.ChatInboxConversationArg) error {
-	var inboxItem chat1.InboxUIItem
-	if err := json.Unmarshal([]byte(arg.Conv), &inboxItem); err != nil {
+	var inboxItems []chat1.InboxUIItem
+	if err := json.Unmarshal([]byte(arg.Convs), &inboxItems); err != nil {
 		return err
 	}
-	c.InboxCb <- NonblockInboxResult{
-		ConvRes: &inboxItem,
-		ConvID:  inboxItem.GetConvID(),
+	for _, inboxItem := range inboxItems {
+		c.InboxCb <- NonblockInboxResult{
+			ConvRes: &inboxItem,
+			ConvID:  inboxItem.GetConvID(),
+		}
 	}
+	return nil
+}
+
+func (c *ChatUI) ChatInboxLayout(ctx context.Context, layout string) error {
+	var uilayout chat1.UIInboxLayout
+	if err := json.Unmarshal([]byte(layout), &uilayout); err != nil {
+		return err
+	}
+	c.InboxLayoutCb <- uilayout
 	return nil
 }
 
@@ -1206,7 +1228,7 @@ func (c *ChatUI) ChatLoadGalleryHit(ctx context.Context, msg chat1.UIMessage) er
 	return nil
 }
 
-func (c *ChatUI) ChatWatchPosition(context.Context, chat1.ConversationID) (chat1.LocationWatchID, error) {
+func (c *ChatUI) ChatWatchPosition(context.Context, chat1.ConversationID, chat1.UIWatchPositionPerm) (chat1.LocationWatchID, error) {
 	return chat1.LocationWatchID(0), nil
 }
 
@@ -1221,6 +1243,10 @@ func (c *ChatUI) ChatCommandStatus(context.Context, chat1.ConversationID, string
 
 func (c *ChatUI) ChatBotCommandsUpdateStatus(context.Context, chat1.ConversationID,
 	chat1.UIBotCommandsUpdateStatus) error {
+	return nil
+}
+
+func (c *ChatUI) TriggerContactSync(context.Context) error {
 	return nil
 }
 

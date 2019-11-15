@@ -1,71 +1,64 @@
 import logger from '../../logger'
 import * as Saga from '../../util/saga'
 import * as FsGen from '../fs-gen'
+import * as Constants from '../../constants/fs'
 import * as Types from '../../constants/types/fs'
-import RNFetchBlob from 'rn-fetch-blob'
-import {copy, unlink} from '../../util/file'
+import * as RPCTypes from '../../constants/types/rpc-gen'
+import {TypedState} from '../../util/container'
 import {PermissionsAndroid} from 'react-native'
 import nativeSaga from './common.native'
 
-function copyToDownloadDir(path: string, mimeType: string) {
-  const fileName = path.substring(path.lastIndexOf('/') + 1)
-  const downloadPath = `${RNFetchBlob.fs.dirs.DownloadDir}/${fileName}`
-  let stage = 'permission' // additional debug message for KBFS-4080
-  return PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE, {
-    buttonNegative: 'Cancel',
-    buttonNeutral: 'Ask me later',
-    buttonPositive: 'OK',
-    message: 'Keybase needs access to your storage so we can download a file to it',
-    title: 'Keybase Storage Permission',
+export const ensureDownloadPermissionPromise = async () => {
+  const permissionStatus = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+    {
+      buttonNegative: 'Cancel',
+      buttonNeutral: 'Ask me later',
+      buttonPositive: 'OK',
+      message: 'Keybase needs access to your storage so we can download a file to it',
+      title: 'Keybase Storage Permission',
+    }
+  )
+
+  if (permissionStatus !== 'granted') {
+    throw new Error('Unable to acquire storage permissions')
+  }
+}
+
+const finishedRegularDownload = async (state: TypedState, action: FsGen.FinishedRegularDownloadPayload) => {
+  const {downloadID, mimeType} = action.payload
+  const downloadState = state.fs.downloads.state.get(downloadID) || Constants.emptyDownloadState
+  const downloadInfo = state.fs.downloads.info.get(downloadID) || Constants.emptyDownloadInfo
+  if (downloadState === Constants.emptyDownloadState || downloadInfo === Constants.emptyDownloadInfo) {
+    logger.warn('missing download', downloadID)
+    return null
+  }
+  if (downloadState.error) {
+    return null
+  }
+  // @ts-ignore codemod-issue
+  await require('rn-fetch-blob').default.android.addCompleteDownload({
+    description: `Keybase downloaded ${downloadInfo.filename}`,
+    mime: mimeType,
+    path: downloadState.localPath,
+    showNotification: true,
+    title: downloadInfo.filename,
   })
-    .then(permissionStatus => {
-      if (permissionStatus !== 'granted') {
-        throw new Error('Unable to acquire storage permissions')
-      }
-      stage = 'copy'
-      return copy(path, downloadPath)
-    })
-    .then(() => {
-      stage = 'unlink'
-      return unlink(path)
-    })
-    .then(() => {
-      stage = 'addCompleteDownload'
-      // @ts-ignore codemod-issue
-      return RNFetchBlob.android.addCompleteDownload({
-        description: `Keybase downloaded ${fileName}`,
-        mime: mimeType,
-        path: downloadPath,
-        showNotification: true,
-        title: fileName,
-      })
-    })
-    .catch(err => {
-      logger.error('Error completing download', {
-        cacheDir: RNFetchBlob.fs.dirs.CacheDir,
-        downloadDir: RNFetchBlob.fs.dirs.DownloadDir,
-        hasNumberSuffix: !!path.match(/\(\d\)/),
-        stage,
-      })
-      throw err
-    })
+  // No need to dismiss here as the download wrapper does it for Android.
+  return null
 }
 
-const downloadSuccessAndroid = (state, action: FsGen.DownloadSuccessPayload) => {
-  const {key, mimeType} = action.payload
-  const download = state.fs.downloads.get(key)
-  if (!download) {
-    logger.warn('missing download key', key)
-    return
-  }
-  const {intent, localPath} = download.meta
-  if (intent !== Types.DownloadIntent.None) {
-    return
-  }
-  return copyToDownloadDir(localPath, mimeType)
-}
+const configureDownload = (state: TypedState) =>
+  state.fs.kbfsDaemonStatus.rpcStatus === Types.KbfsDaemonRpcStatus.Connected &&
+  RPCTypes.SimpleFSSimpleFSConfigureDownloadRpcPromise({
+    // Android's cache dir is (when I tried) [app]/cache but Go side uses
+    // [app]/.cache by default, which can't be used for sharing to other apps.
+    cacheDirOverride: require('rn-fetch-blob').default.fs.dirs.CacheDir,
+    downloadDirOverride: require('rn-fetch-blob').default.fs.dirs.DownloadDir,
+  })
 
-export default function* platformSpecificSaga(): Saga.SagaGenerator<any, any> {
+export default function* platformSpecificSaga() {
   yield Saga.spawn(nativeSaga)
-  yield* Saga.chainAction2(FsGen.downloadSuccess, downloadSuccessAndroid)
+  yield* Saga.chainAction2(FsGen.finishedRegularDownload, finishedRegularDownload)
+  yield* Saga.chainAction2(FsGen.kbfsDaemonRpcStatusChanged, configureDownload)
 }

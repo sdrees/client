@@ -51,7 +51,7 @@ const Breadcrumb = Kb.OverlayParentHOC(
                 title: Types.getPathName(path),
                 view: (
                   <Kb.Box2 direction="horizontal" gap="tiny" fullWidth={true}>
-                    <Kbfs.PathItemIcon path={path} size={16} />
+                    <Kbfs.ItemIcon path={path} size={16} />
                     <Kb.Text type="Body" lineClamp={1}>
                       {Types.getPathName(path)}
                     </Kb.Text>
@@ -93,7 +93,7 @@ const MaybePublicTag = ({path}: {path: Types.Path}) =>
 
 const MainTitle = (props: Props) => (
   <Kb.Box2 direction="horizontal" fullWidth={true} alignItems="center" gap="tiny">
-    {flags.kbfsOfflineMode && Types.getPathLevel(props.path) > 2 && <Kbfs.SyncStatus path={props.path} />}
+    {flags.kbfsOfflineMode && <Kbfs.PathStatusIcon path={props.path} />}
     <Kbfs.Filename path={props.path} selectable={true} style={styles.mainTitleText} type="Header" />
     <MaybePublicTag path={props.path} />
   </Kb.Box2>
@@ -112,31 +112,34 @@ const FsNavHeaderTitle = (props: Props) =>
   )
 export default FsNavHeaderTitle
 
-const styles = Styles.styleSheetCreate({
-  container: Styles.platformStyles({
-    common: {
-      marginTop: -Styles.globalMargins.tiny,
-      paddingLeft: Styles.globalMargins.xsmall,
-    },
-    isElectron: Styles.desktopStyles.windowDraggingClickable,
-  }),
-  dropdown: {
-    marginLeft: -Styles.globalMargins.tiny, // the icon has padding, so offset it to align with the name below
-  },
-  floating: Styles.platformStyles({
-    isElectron: {
-      width: 196,
-    },
-  }),
-  icon: {
-    padding: Styles.globalMargins.tiny,
-  },
-  mainTitleText: Styles.platformStyles({isElectron: Styles.desktopStyles.windowDraggingClickable}),
-  rootTitle: {
-    marginLeft: Styles.globalMargins.xsmall,
-  },
-  slash: {
-    paddingLeft: Styles.globalMargins.xxtiny,
-    paddingRight: Styles.globalMargins.xxtiny,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: Styles.platformStyles({
+        common: {
+          marginTop: -Styles.globalMargins.tiny,
+          paddingLeft: Styles.globalMargins.xsmall,
+        },
+        isElectron: Styles.desktopStyles.windowDraggingClickable,
+      }),
+      dropdown: {
+        marginLeft: -Styles.globalMargins.tiny, // the icon has padding, so offset it to align with the name below
+      },
+      floating: Styles.platformStyles({
+        isElectron: {
+          width: 196,
+        },
+      }),
+      icon: {
+        padding: Styles.globalMargins.tiny,
+      },
+      mainTitleText: Styles.platformStyles({isElectron: Styles.desktopStyles.windowDraggingClickable}),
+      rootTitle: {
+        marginLeft: Styles.globalMargins.xsmall,
+      },
+      slash: {
+        paddingLeft: Styles.globalMargins.xxtiny,
+        paddingRight: Styles.globalMargins.xxtiny,
+      },
+    } as const)
+)

@@ -1,6 +1,5 @@
 import * as React from 'react'
 import * as Types from '../../../constants/types/teams'
-import * as RPCTypes from '../../../constants/types/rpc-gen'
 import {
   iconCastPlatformStyles,
   Badge,
@@ -23,7 +22,7 @@ type TeamTabsProps = {
   admin: boolean
   memberCount: number
   teamname: Types.Teamname
-  newTeamRequests: Array<Types.Teamname>
+  newRequests: number
   numInvites: number
   numRequests: number
   numSubteams: number
@@ -31,7 +30,7 @@ type TeamTabsProps = {
   loading: boolean
   selectedTab?: string
   setSelectedTab: (arg0: Types.TabKey) => void
-  yourOperations: RPCTypes.TeamOperation
+  yourOperations: Types.TeamOperations
 }
 
 const TabText = ({selected, text}: {selected: boolean; text: string}) => (
@@ -48,14 +47,7 @@ const TeamTabs = (props: TeamTabsProps) => {
     </Box>,
   ]
 
-  let requestsBadge = 0
-  if (props.newTeamRequests.length) {
-    // Use min here so we never show a badge number > the (X) number of requests we have
-    requestsBadge = Math.min(
-      props.newTeamRequests.reduce((count, team) => (team === props.teamname ? count + 1 : count), 0),
-      props.numRequests
-    )
-  }
+  const requestsBadge = Math.min(props.newRequests, props.numRequests)
 
   if (props.admin) {
     tabs.push(
@@ -87,7 +79,7 @@ const TeamTabs = (props: TeamTabsProps) => {
         style={iconCastPlatformStyles(props.selectedTab === 'settings' ? styles.iconSelected : styles.icon)}
       />
     ) : (
-      <TabText key="settings" selected={props.selectedTab === 'settings'} text={'Settings'} />
+      <TabText key="settings" selected={props.selectedTab === 'settings'} text="Settings" />
     )
   )
 
@@ -121,7 +113,7 @@ const TeamTabs = (props: TeamTabsProps) => {
   )
 }
 
-const styles = styleSheetCreate({
+const styles = styleSheetCreate(() => ({
   badge: platformStyles({
     isElectron: {
       marginLeft: globalMargins.xtiny,
@@ -167,6 +159,6 @@ const styles = styleSheetCreate({
     justifyContent: 'center',
   },
   tabTextSelected: {color: globalColors.black},
-})
+}))
 
 export default TeamTabs

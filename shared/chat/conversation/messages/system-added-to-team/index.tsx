@@ -3,11 +3,18 @@ import * as Kb from '../../../../common-adapters'
 import * as Styles from '../../../../styles'
 import UserNotice from '../user-notice'
 import SystemMessageTimestamp from '../system-message-timestamp'
+import * as TeamTypes from '../../../../constants/types/teams'
+import {typeToLabel} from '../../../../constants/teams'
+import {formatTimeForChat} from '../../../../util/timestamp'
+import {getAddedUsernames} from '../system-users-added-to-conv'
+import {indefiniteArticle} from '../../../../util/string'
 
 type Props = {
   isAdmin: boolean
   addee: string
   adder: string
+  bulkAdds: Array<string>
+  role: TeamTypes.TeamRoleType
   onManageChannels: () => void
   onManageNotifications: () => void
   onViewTeam: () => void
@@ -32,9 +39,11 @@ const ManageComponent = (props: Props) => {
         <Kb.Text onClick={props.onManageNotifications} type={textType} center={true}>
           Manage phone and computer notifications
         </Kb.Text>
-        <Kb.Text onClick={props.onManageChannels} type={textType}>
-          Browse other channels
-        </Kb.Text>
+        {!!props.teamname && (
+          <Kb.Text onClick={props.onManageChannels} type={textType}>
+            Browse other channels
+          </Kb.Text>
+        )}
       </Kb.Box>
     )
   } else if (props.isAdmin) {
@@ -64,16 +73,29 @@ const AddedToTeam = (props: Props) => {
   if (props.addee === props.you) {
     return <YouAddedToTeam {...props} />
   }
+  if (props.bulkAdds.length === 0) {
+    return (
+      <Kb.Text type="BodySmall" style={{flex: 1}}>
+        was added by {youOrUsername({capitalize: false, username: props.adder, you: props.you})}
+        {typeToLabel[props.role] &&
+          ` as ${indefiniteArticle(props.role)} ${typeToLabel[props.role].toLowerCase()}`}
+        . <ManageComponent {...props} />
+      </Kb.Text>
+    )
+  }
   return (
-    <Kb.Text type="BodySmall" style={{flex: 1}}>
-      was added by {youOrUsername({capitalize: false, username: props.adder, you: props.you})}.{' '}
-      <ManageComponent {...props} />
-    </Kb.Text>
+    <Kb.Box2 direction="vertical" fullWidth={true}>
+      <Kb.Text type="BodyTiny">{formatTimeForChat(props.timestamp)}</Kb.Text>
+      <Kb.Text type="BodySmall">
+        {youOrUsername({capitalize: true, username: props.adder, you: props.you})} added{' '}
+        {getAddedUsernames(props.bulkAdds)}. <ManageComponent {...props} />
+      </Kb.Text>
+    </Kb.Box2>
   )
 }
 
 const YouAddedToTeam = (props: Props) => {
-  const {teamname, you, onViewTeam, adder, addee, timestamp} = props
+  const {teamname, you, onViewTeam, adder, addee, role, timestamp} = props
   return (
     <UserNotice
       style={{marginTop: Styles.globalMargins.small}}
@@ -91,14 +113,19 @@ const YouAddedToTeam = (props: Props) => {
           style={{color: Styles.globalColors.black_50}}
         >
           {youOrUsername({capitalize: true, username: adder, you})} added{' '}
-          {youOrUsername({adder, capitalize: false, username: addee, you})} to{' '}
-          <Kb.Text
-            onClick={onViewTeam}
-            style={{color: Styles.globalColors.black_50}}
-            type="BodySmallSemiboldSecondaryLink"
-          >
-            {teamname}
-          </Kb.Text>
+          {youOrUsername({adder, capitalize: false, username: addee, you})}
+          {teamname && ` to `}
+          {teamname && (
+            <Kb.Text
+              onClick={onViewTeam}
+              style={{color: Styles.globalColors.black_50}}
+              type="BodySmallSemiboldSecondaryLink"
+            >
+              {teamname}
+            </Kb.Text>
+          )}
+          {typeToLabel[props.role] &&
+            ` as ${indefiniteArticle(props.role)} ${typeToLabel[role].toLowerCase()}`}
           .{' '}
           <Kb.Text type="BodySmallSemibold">
             Say hi!{' '}

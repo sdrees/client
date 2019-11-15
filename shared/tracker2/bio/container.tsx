@@ -21,11 +21,8 @@ const mapStateToProps = (state: Container.TypedState, ownProps: OwnProps) => {
       ...common,
       bio: nonUser.bio,
       followThem: false,
-      followersCount: null,
-      followingCount: null,
       followsYou: false,
       fullname: nonUser.fullName,
-      location: null,
       registeredForAirdrop: false,
       sbsDescription: nonUser.description,
     }
@@ -40,7 +37,6 @@ const mapStateToProps = (state: Container.TypedState, ownProps: OwnProps) => {
       fullname: d.fullname,
       location: d.location,
       registeredForAirdrop: d.registeredForAirdrop,
-      sbsDescription: null,
     }
   }
 }
@@ -56,20 +52,9 @@ export default Container.namedConnect(
   mapStateToProps,
   mapDispatchToProps,
   (stateProps, dispatchProps, ownProps): Props => ({
-    airdropIsLive: stateProps.airdropIsLive,
-    bio: stateProps.bio,
-    followThem: stateProps.followThem,
-    followersCount: stateProps.followersCount,
-    followingCount: stateProps.followingCount,
-    followsYou: stateProps.followsYou,
-    fullname: stateProps.fullname,
-    inTracker: ownProps.inTracker,
-    location: stateProps.location,
-    onBack: dispatchProps.onBack,
-    onLearnMore: dispatchProps.onLearnMore,
-    registeredForAirdrop: stateProps.registeredForAirdrop,
-    sbsDescription: stateProps.sbsDescription,
-    youAreInAirdrop: stateProps.youAreInAirdrop,
+    ...stateProps,
+    ...dispatchProps,
+    ...ownProps,
   }),
   'Bio'
 )(Bio)

@@ -26,9 +26,14 @@ const mapStateToProps = (state, ownProps: OwnProps) => {
   const yourOperations = getCanPerform(state, meta.teamname)
   const _canDeleteHistory = yourOperations && yourOperations.deleteChatHistory
   const _canAdminDelete = yourOperations && yourOperations.deleteOtherMessages
+  let _canPinMessage = true
+  if (meta.teamname) {
+    _canPinMessage = yourOperations && yourOperations.pinMessage
+  }
   return {
     _canAdminDelete,
     _canDeleteHistory,
+    _canPinMessage,
     _you: state.config.username,
     pending: !!message.transferState,
   }
@@ -47,6 +52,17 @@ const mapDispatchToProps = dispatch => ({
       })
     )
   },
+  _onAllMedia: (conversationIDKey: Types.ConversationIDKey) =>
+    dispatch(
+      RouteTreeGen.createNavigateAppend({
+        path: [
+          {
+            props: {conversationIDKey, tab: 'attachments'},
+            selected: 'chatInfoPanel',
+          },
+        ],
+      })
+    ),
   _onDelete: (message: Types.Message) => {
     dispatch(
       Chat2Gen.createMessageDelete({
@@ -61,6 +77,14 @@ const mapDispatchToProps = dispatch => ({
     dispatch(
       Chat2Gen.createAttachmentDownload({
         message,
+      })
+    )
+  },
+  _onPinMessage: (message: Types.Message) => {
+    dispatch(
+      Chat2Gen.createPinMessage({
+        conversationIDKey: message.conversationIDKey,
+        messageID: message.id,
       })
     )
   },
@@ -108,10 +132,12 @@ export default Container.connect(
       deviceType: message.deviceType,
       isDeleteable,
       onAddReaction: isMobile ? () => dispatchProps._onAddReaction(message) : undefined,
+      onAllMedia: () => dispatchProps._onAllMedia(message.conversationIDKey),
       onDelete: isDeleteable ? () => dispatchProps._onDelete(message) : undefined,
       onDownload: !isMobile && !message.downloadPath ? () => dispatchProps._onDownload(message) : undefined,
       // We only show the share/save options for video if we have the file stored locally from a download
       onHidden: () => ownProps.onHidden(),
+      onPinMessage: stateProps._canPinMessage ? () => dispatchProps._onPinMessage(message) : undefined,
       onReply: () => dispatchProps._onReply(message),
       onSaveAttachment:
         isMobile && message.attachmentType === 'image'

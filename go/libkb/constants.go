@@ -53,10 +53,22 @@ const (
 	ProductionGregorServerURI = "fmprpc+tls://chat-0.core.keybaseapi.com:443"
 )
 
+const (
+	DevelMpackAPIServerURI      = "fmprpc://localhost:9914"
+	StagingMpackAPIServerURI    = "fmprpc+tls://api.dev.keybase.io:4443"
+	ProductionMpackAPIServerURI = "fmprpc+tls://mpack-0.core.keybaseapi.com:443"
+)
+
 var GregorServerLookup = map[RunMode]string{
 	DevelRunMode:      DevelGregorServerURI,
 	StagingRunMode:    StagingGregorServerURI,
 	ProductionRunMode: ProductionGregorServerURI,
+}
+
+var MpackAPIServerLookup = map[RunMode]string{
+	DevelRunMode:      DevelMpackAPIServerURI,
+	StagingRunMode:    StagingMpackAPIServerURI,
+	ProductionRunMode: ProductionMpackAPIServerURI,
 }
 
 const (
@@ -235,9 +247,16 @@ const (
 	SCProfileNotPublic                          = int(keybase1.StatusCode_SCProfileNotPublic)
 	SCRateLimit                                 = int(keybase1.StatusCode_SCRateLimit)
 	SCBadSignupUsernameTaken                    = int(keybase1.StatusCode_SCBadSignupUsernameTaken)
+	SCBadSignupUsernameReserved                 = int(keybase1.StatusCode_SCBadSignupUsernameReserved)
 	SCBadInvitationCode                         = int(keybase1.StatusCode_SCBadInvitationCode)
 	SCBadSignupTeamName                         = int(keybase1.StatusCode_SCBadSignupTeamName)
 	SCFeatureFlag                               = int(keybase1.StatusCode_SCFeatureFlag)
+	SCEmailTaken                                = int(keybase1.StatusCode_SCEmailTaken)
+	SCEmailAlreadyAdded                         = int(keybase1.StatusCode_SCEmailAlreadyAdded)
+	SCEmailLimitExceeded                        = int(keybase1.StatusCode_SCEmailLimitExceeded)
+	SCEmailCannotDeletePrimary                  = int(keybase1.StatusCode_SCEmailCannotDeletePrimary)
+	SCEmailUnknown                              = int(keybase1.StatusCode_SCEmailUnknown)
+	SCNoUpdate                                  = int(keybase1.StatusCode_SCNoUpdate)
 	SCMissingResult                             = int(keybase1.StatusCode_SCMissingResult)
 	SCKeyNotFound                               = int(keybase1.StatusCode_SCKeyNotFound)
 	SCKeyCorrupted                              = int(keybase1.StatusCode_SCKeyCorrupted)
@@ -260,6 +279,7 @@ const (
 	SCDecryptionKeyNotFound                     = int(keybase1.StatusCode_SCDecryptionKeyNotFound)
 	SCBadTrackSession                           = int(keybase1.StatusCode_SCBadTrackSession)
 	SCDeviceBadName                             = int(keybase1.StatusCode_SCDeviceBadName)
+	SCDeviceBadStatus                           = int(keybase1.StatusCode_SCDeviceBadStatus)
 	SCDeviceNameInUse                           = int(keybase1.StatusCode_SCDeviceNameInUse)
 	SCDeviceNotFound                            = int(keybase1.StatusCode_SCDeviceNotFound)
 	SCDeviceMismatch                            = int(keybase1.StatusCode_SCDeviceMismatch)
@@ -357,6 +377,9 @@ const (
 	SCPhoneNumberLimitExceeded                  = int(keybase1.StatusCode_SCPhoneNumberLimitExceeded)
 	SCNoPaperKeys                               = int(keybase1.StatusCode_SCNoPaperKeys)
 	SCTeambotKeyGenerationExists                = int(keybase1.StatusCode_SCTeambotKeyGenerationExists)
+	SCTeamStorageWrongRevision                  = int(keybase1.StatusCode_SCTeamStorageWrongRevision)
+	SCTeamStorageBadGeneration                  = int(keybase1.StatusCode_SCTeamStorageBadGeneration)
+	SCTeamStorageNotFound                       = int(keybase1.StatusCode_SCTeamStorageNotFound)
 )
 
 const (
@@ -579,7 +602,7 @@ const (
 	KBFSLogFileName    = kbconst.KBFSLogFileName
 	GitLogFileName     = "keybase.git.log"
 	UpdaterLogFileName = "keybase.updater.log"
-	DesktopLogFileName = "Keybase.app.log"
+	GUILogFileName     = "Keybase.app.log"
 	// StartLogFileName is where services can log to (on startup) before they handle their own logging
 	StartLogFileName = "keybase.start.log"
 )
@@ -605,6 +628,7 @@ const (
 	EncryptionReasonTeambotEphemeralKey     EncryptionReason = "Keybase-Teambot-Ephemeral-Key-1"
 	EncryptionReasonTeambotKey              EncryptionReason = "Keybase-Teambot-Key-1"
 	EncryptionReasonContactsLocalStorage    EncryptionReason = "Keybase-Contacts-Local-Storage-1"
+	EncryptionReasonContactsResolvedServer  EncryptionReason = "Keybase-Contacts-Resolved-Server-1"
 	EncryptionReasonTeambotKeyLocalStorage  EncryptionReason = "Keybase-Teambot-Key-Local-Storage-1"
 	EncryptionReasonKBFSFavorites           EncryptionReason = "kbfs.favorites" // legacy const for kbfs favorites
 )
@@ -681,6 +705,7 @@ const (
 	TeamGitMetadataDerivationString      = "Keybase-Derived-Team-NaCl-GitMetadata-1"
 	TeamSeitanTokenDerivationString      = "Keybase-Derived-Team-NaCl-SeitanInviteToken-1"
 	TeamStellarRelayDerivationString     = "Keybase-Derived-Team-NaCl-StellarRelay-1"
+	TeamKVStoreDerivationString          = "Keybase-Derived-Team-NaCl-KVStore-1"
 	TeamKeySeedCheckDerivationString     = "Keybase-Derived-Team-Seedcheck-1"
 )
 
@@ -742,4 +767,12 @@ const ProfileProofSuggestions = true
 const (
 	ExternalURLsBaseKey         = "external_urls"
 	ExternalURLsStellarPartners = "stellar_partners"
+)
+
+type LoginAttempt int
+
+const (
+	LoginAttemptNone    LoginAttempt = 0
+	LoginAttemptOffline LoginAttempt = 1
+	LoginAttemptOnline  LoginAttempt = 2
 )

@@ -39,6 +39,7 @@ const buildPaymentRes: RPCStellarTypes.BuildPaymentResLocal = {
   displayAmountXLM: '21.4168160 XLM',
   from: 'fake account ID',
   publicMemoErrMsg: '',
+  publicMemoOverride: '',
   readyToReview: false,
   secretNoteErrMsg: '',
   sendingIntentionXLM: false,
@@ -128,6 +129,7 @@ it('build and send payment', () => {
 
       const sendRPC = jest.spyOn(RPCStellarTypes, 'localSendPaymentLocalRpcPromise')
       const sendPaymentResult = {
+        jumpToChat: '',
         kbTxID: 'fake transaction id',
         pending: false,
       }

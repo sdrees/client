@@ -1,5 +1,5 @@
 import React, {Component} from 'react'
-import Box from './box'
+import Box, {Box2} from './box'
 import Icon from './icon'
 import Text from './text'
 import {Props} from './checkbox'
@@ -7,6 +7,7 @@ import * as Styles from '../styles'
 
 const Kb = {
   Box,
+  Box2,
   Icon,
   Text,
 }
@@ -44,18 +45,19 @@ class Checkbox extends Component<Props> {
           color={Styles.globalColors.white}
           fontSize={9}
         />
-        <Kb.Text type="Body" style={Styles.collapseStyles([
-            styles.text,
-            this.props.disabled && styles.semiLessTransparent,
-          ])}>
-          {this.props.labelComponent || this.props.label}
-        </Kb.Text>
+        <Kb.Box2
+          direction="vertical"
+          style={Styles.collapseStyles([this.props.disabled && styles.semiLessTransparent])}
+        >
+          <Kb.Text type="Body">{this.props.labelComponent || this.props.label}</Kb.Text>
+          {!!this.props.labelSubtitle && <Kb.Text type="BodySmall">{this.props.labelSubtitle}</Kb.Text>}
+        </Kb.Box2>
       </Kb.Box>
     )
   }
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   checkbox: {
     ...Styles.globalStyles.flexBoxColumn,
     ...Styles.transition('background'),
@@ -97,12 +99,9 @@ const styles = Styles.styleSheetCreate({
   semiTransparent: {
     opacity: 0.4,
   },
-  text: {
-    color: Styles.globalColors.black,
-  },
   transparent: {
     opacity: 0,
   },
-})
+}))
 
 export default Checkbox

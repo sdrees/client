@@ -265,7 +265,8 @@ func (tt *teamTester) addUserHelper(pre string, puk bool, paper bool) *userPlusD
 	u.userClient = keybase1.UserClient{Cli: cli}
 	u.stellarClient = newStellarRetryClient(cli)
 
-	g.ConfigureConfig()
+	err = g.ConfigureConfig()
+	require.NoError(tt.t, err)
 
 	devices, backups := u.device.loadEncryptionKIDs()
 	require.Len(tt.t, devices, 1, "devices")
@@ -289,7 +290,8 @@ func (tt *teamTester) cleanup() {
 		if u.device.service != nil {
 			u.tc.T.Logf("in teamTester cleanup, stopping test user's service")
 			u.device.service.Stop(0)
-			u.device.stop()
+			err := u.device.stop()
+			require.NoError(u.tc.T, err)
 			u.tc.T.Logf("in teamTester cleanup, stopped test user's service")
 		}
 	}
@@ -413,7 +415,7 @@ func (u *userPlusDevice) changeTeamMember(team, username string, role keybase1.T
 	change := client.NewCmdTeamEditMemberRunner(u.tc.G)
 	change.Team = team
 	change.Username = username
-	change.Role = keybase1.TeamRole_OWNER
+	change.Role = role
 	err := change.Run()
 	require.NoError(u.tc.T, err)
 }
@@ -511,15 +513,6 @@ func (u *userPlusDevice) teamList(userAssertion string, all, includeImplicitTeam
 	return res
 }
 
-func (u *userPlusDevice) teamListTeammates(includeImplicitTeams bool) keybase1.AnnotatedTeamList {
-	cli := u.teamsClient
-	res, err := cli.TeamListTeammates(context.TODO(), keybase1.TeamListTeammatesArg{
-		IncludeImplicitTeams: includeImplicitTeams,
-	})
-	require.NoError(u.tc.T, err)
-	return res
-}
-
 func (u *userPlusDevice) revokePaperKey() {
 	id := u.paperKeyID()
 
@@ -569,6 +562,29 @@ func (u *userPlusDevice) waitForTeamChangedGregor(teamID keybase1.TeamID, toSeqn
 		}
 	}
 	require.Fail(u.tc.T, fmt.Sprintf("timed out waiting for team rotate %s", teamID))
+}
+
+func (u *userPlusDevice) waitForNoMetadataUpdatesGregor() {
+	for i := 0; i < 10; i++ {
+		select {
+		case <-u.notifications.metadataUpdateCh:
+			require.Fail(u.tc.T, fmt.Sprintf("got an unexpected metadata update"))
+		case <-time.After(1 * time.Second * libkb.CITimeMultiplier(u.tc.G)):
+		}
+	}
+}
+
+func (u *userPlusDevice) waitForMetadataUpdateGregor(reason string) {
+	// process 10 team rotations or 10s worth of time
+	for i := 0; i < 10; i++ {
+		select {
+		case <-u.notifications.metadataUpdateCh:
+			u.tc.T.Logf("metadata update received for reason %q", reason)
+			return
+		case <-time.After(1 * time.Second * libkb.CITimeMultiplier(u.tc.G)):
+		}
+	}
+	require.Fail(u.tc.T, fmt.Sprintf("timed out waiting for metadata update for reason %q", reason))
 }
 
 func (u *userPlusDevice) waitForBadgeStateWithReset(numReset int) keybase1.BadgeState {
@@ -757,16 +773,6 @@ func (u *userPlusDevice) untrack(username string) {
 	require.NoError(u.tc.T, err)
 }
 
-func (u *userPlusDevice) getTeamSeqno(teamID keybase1.TeamID) keybase1.Seqno {
-	team, err := teams.Load(context.Background(), u.tc.G, keybase1.LoadTeamArg{
-		ID:          teamID,
-		Public:      teamID.IsPublic(),
-		ForceRepoll: true,
-	})
-	require.NoError(u.tc.T, err)
-	return team.CurrentSeqno()
-}
-
 func (u *userPlusDevice) kickTeamRekeyd() {
 	kickTeamRekeyd(u.tc.G, u.tc.T)
 }
@@ -877,7 +883,7 @@ func (u *userPlusDevice) delete() {
 }
 
 func (u *userPlusDevice) logout() {
-	err := u.tc.G.Logout(context.TODO())
+	err := u.tc.Logout()
 	require.NoError(u.tc.T, err)
 }
 
@@ -912,7 +918,8 @@ func (u *userPlusDevice) loginAfterResetHelper(puk bool) {
 	// the protocols in the genericUI below. If we reuse the previous
 	// socket, then the RPC protocols will not update, and we'll wind
 	// up reusing the old device name.
-	g.ResetSocket(true)
+	_, _, _, err := g.ResetSocket(true)
+	require.NoError(t, err)
 
 	devName := randomDevice()
 	g.Log.Debug("loginAfterResetHelper: new device name is %q", devName)
@@ -926,7 +933,7 @@ func (u *userPlusDevice) loginAfterResetHelper(puk bool) {
 	g.SetUI(&ui)
 	loginCmd := client.NewCmdLoginRunner(g)
 	loginCmd.Username = u.username
-	err := loginCmd.Run()
+	err = loginCmd.Run()
 	require.NoError(t, err, "login after reset")
 }
 
@@ -959,6 +966,14 @@ func (u *userPlusDevice) perUserKeyUpgrade() {
 	m := libkb.NewMetaContextTODO(g).WithUIs(uis)
 	err := engine.RunEngine2(m, eng)
 	require.NoError(t, err, "Run engine.NewPerUserKeyUpgrade")
+}
+
+func (u *userPlusDevice) disableTOFUSearch() {
+	mctx := u.MetaContext()
+	arg := libkb.NewAPIArg("test/disable_tofu_search_for_uid")
+	arg.SessionType = libkb.APISessionTypeREQUIRED
+	_, err := u.tc.G.API.Post(mctx, arg)
+	require.NoError(u.tc.T, err)
 }
 
 func (u *userPlusDevice) MetaContext() libkb.MetaContext {
@@ -1008,19 +1023,6 @@ func enableOpenSweepForTeam(g *libkb.GlobalContext, t libkb.TestingTB, teamID ke
 	require.NoError(t, err)
 }
 
-func clearServerUIDMapCache(g *libkb.GlobalContext, t libkb.TestingTB, uids []keybase1.UID) {
-	arg := libkb.NewAPIArg("user/names")
-	arg.SessionType = libkb.APISessionTypeNONE
-	arg.Args = libkb.HTTPArgs{
-		"uids":     libkb.S{Val: libkb.UidsToString(uids)},
-		"no_cache": libkb.B{Val: true},
-	}
-	t.Logf("Calling user/names with uids: %v and no_cache: true to clear serverside uidmap cache", uids)
-	mctx := libkb.NewMetaContextTODO(g)
-	_, err := g.API.Post(mctx, arg)
-	require.NoError(t, err)
-}
-
 func GetTeamForTestByStringName(ctx context.Context, g *libkb.GlobalContext, name string) (*teams.Team, error) {
 	return teams.Load(ctx, g, keybase1.LoadTeamArg{
 		Name:        name,
@@ -1046,6 +1048,8 @@ type teamNotifyHandler struct {
 	newTeambotKeyCh    chan keybase1.NewTeambotKeyArg
 	teambotKeyNeededCh chan keybase1.TeambotKeyNeededArg
 	newlyAddedToTeam   chan keybase1.TeamID
+	teamRoleMapCh      chan keybase1.UserTeamVersion
+	metadataUpdateCh   chan struct{}
 }
 
 func newTeamNotifyHandler() *teamNotifyHandler {
@@ -1059,6 +1063,8 @@ func newTeamNotifyHandler() *teamNotifyHandler {
 		newTeambotKeyCh:    make(chan keybase1.NewTeambotKeyArg, 10),
 		teambotKeyNeededCh: make(chan keybase1.TeambotKeyNeededArg, 10),
 		newlyAddedToTeam:   make(chan keybase1.TeamID, 10),
+		teamRoleMapCh:      make(chan keybase1.UserTeamVersion, 100),
+		metadataUpdateCh:   make(chan struct{}, 10),
 	}
 }
 
@@ -1081,6 +1087,11 @@ func (n *teamNotifyHandler) TeamExit(ctx context.Context, teamID keybase1.TeamID
 
 func (n *teamNotifyHandler) NewlyAddedToTeam(ctx context.Context, teamID keybase1.TeamID) error {
 	n.newlyAddedToTeam <- teamID
+	return nil
+}
+
+func (n *teamNotifyHandler) TeamMetadataUpdate(ctx context.Context) error {
+	n.metadataUpdateCh <- struct{}{}
 	return nil
 }
 
@@ -1120,6 +1131,11 @@ func (n *teamNotifyHandler) TeambotKeyNeeded(ctx context.Context, arg keybase1.T
 }
 
 func (n *teamNotifyHandler) AvatarUpdated(ctx context.Context, arg keybase1.AvatarUpdatedArg) error {
+	return nil
+}
+
+func (n *teamNotifyHandler) TeamRoleMapChanged(ctx context.Context, version keybase1.UserTeamVersion) error {
+	n.teamRoleMapCh <- version
 	return nil
 }
 
@@ -1346,7 +1362,8 @@ func TestImpTeamLookupWithTrackingFailure(t *testing.T) {
 
 	t.Logf("make rooter unreachable")
 	g.XAPI = &flakeyRooterAPI{orig: g.XAPI, hardFail: true, G: g}
-	g.ProofCache.Reset()
+	err = g.ProofCache.Reset()
+	require.NoError(t, err)
 
 	t.Logf("lookup the implicit team while full identify is failing")
 	team2, err := alice.lookupImplicitTeam(true /*create*/, iTeamNameCreate, false /*isPublic*/)
@@ -1855,4 +1872,134 @@ func TestForceRepollState(t *testing.T) {
 		time.Sleep(w)
 	}
 	require.True(t, found)
+}
+
+func TestTeamMetadataUpdateNotifications(t *testing.T) {
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	tt.addUser("alf")
+	tt.addUser("bra")
+	tt.addUser("cha")
+
+	team := tt.users[0].createTeam()
+	parentName, err := keybase1.TeamNameFromString(team)
+	require.NoError(t, err)
+	_, err = teams.CreateSubteam(context.TODO(), tt.users[0].tc.G, "bb", parentName, keybase1.TeamRole_NONE /* addSelfAs */)
+	require.NoError(t, err)
+	subteamName, err := parentName.Append("bb")
+	require.NoError(t, err)
+	_, err = teams.CreateSubteam(context.TODO(), tt.users[0].tc.G, "cc", subteamName, keybase1.TeamRole_NONE /* addSelfAs */)
+	require.NoError(t, err)
+	subsubteamName, err := subteamName.Append("cc")
+	require.NoError(t, err)
+
+	t.Logf("Start testing metadata updates")
+
+	tt.users[0].addTeamMember(subsubteamName.String(), tt.users[2].username, keybase1.TeamRole_ADMIN)
+	tt.users[2].waitForMetadataUpdateGregor("added to team")
+
+	tt.users[0].addTeamMember(parentName.String(), tt.users[1].username, keybase1.TeamRole_ADMIN)
+	tt.users[1].waitForMetadataUpdateGregor("added to team")
+
+	subsubteamRename, err := subteamName.Append("cc2")
+	require.NoError(t, err)
+	err = teams.RenameSubteam(context.TODO(), tt.users[0].tc.G, subsubteamName, subsubteamRename)
+	require.NoError(t, err)
+	tt.users[1].waitForMetadataUpdateGregor("team user was an implicit admin of changed name")
+	tt.users[2].waitForMetadataUpdateGregor("team user was an implicit admin of changed name")
+
+	subteamRename, err := parentName.Append("bb2")
+	require.NoError(t, err)
+	err = teams.RenameSubteam(context.TODO(), tt.users[0].tc.G, subteamName, subteamRename)
+	require.NoError(t, err)
+	// Suboptimality - but it's fine since renames are rare.
+	tt.users[1].waitForMetadataUpdateGregor("team user was an implicit admin of changed name (subteam)")
+	tt.users[1].waitForMetadataUpdateGregor("team user was an implicit admin of changed name (subsubteam)")
+	tt.users[2].waitForMetadataUpdateGregor("parent team of subteam you're in changed name")
+
+	tt.users[0].changeTeamMember(parentName.String(), tt.users[1].username, keybase1.TeamRole_OWNER)
+	tt.users[1].waitForMetadataUpdateGregor("now an owner")
+
+	tt.users[0].teamSetSettings(subteamRename.String(), keybase1.TeamSettings{Open: true, JoinAs: keybase1.TeamRole_READER})
+	tt.users[1].waitForMetadataUpdateGregor("settings change of subteam")
+
+	newSubsubteamName, err := subteamRename.Append("cc2")
+	require.NoError(t, err)
+	tt.users[0].teamSetSettings(newSubsubteamName.String(), keybase1.TeamSettings{Open: true, JoinAs: keybase1.TeamRole_WRITER})
+	tt.users[1].waitForMetadataUpdateGregor("settings change of subsubteam")
+	tt.users[0].teamSetSettings(newSubsubteamName.String(), keybase1.TeamSettings{Open: true, JoinAs: keybase1.TeamRole_READER})
+	tt.users[1].waitForMetadataUpdateGregor("settings change of subsubteam")
+
+	val := true
+	err = tt.users[0].teamsClient.SetTeamShowcase(context.Background(), keybase1.SetTeamShowcaseArg{
+		Name:        newSubsubteamName.String(),
+		IsShowcased: &val,
+	})
+	require.NoError(tt.users[0].tc.T, err)
+	tt.users[1].waitForMetadataUpdateGregor("change showcase")
+
+	desc := "desc"
+	err = tt.users[0].teamsClient.SetTeamShowcase(context.Background(), keybase1.SetTeamShowcaseArg{
+		Name:        newSubsubteamName.String(),
+		IsShowcased: &val,
+		Description: &desc,
+	})
+	require.NoError(tt.users[0].tc.T, err)
+	tt.users[1].waitForMetadataUpdateGregor("change showcase")
+
+	err = tt.users[0].teamsClient.SetTeamShowcase(context.Background(), keybase1.SetTeamShowcaseArg{
+		Name:              newSubsubteamName.String(),
+		IsShowcased:       &val,
+		Description:       &desc,
+		AnyMemberShowcase: &val,
+	})
+	require.NoError(tt.users[0].tc.T, err)
+	tt.users[1].waitForMetadataUpdateGregor("change showcase")
+
+	newteam := tt.users[1].createTeam()
+	newteamName, err := keybase1.TeamNameFromString(newteam)
+	require.NoError(t, err)
+	tt.users[1].waitForMetadataUpdateGregor("new team")
+	tt.users[1].addTeamMember(newteam, tt.users[0].username, keybase1.TeamRole_OWNER)
+	tt.users[1].waitForMetadataUpdateGregor("added someone to team")
+
+	tui := &teamsUI{}
+	err = teams.Delete(context.Background(), tt.users[0].tc.G, tui, newteamName.String())
+	require.NoError(tt.users[0].tc.T, err)
+	tt.users[1].waitForMetadataUpdateGregor("team deleted")
+
+	tt.users[1].waitForNoMetadataUpdatesGregor()
+}
+
+func TestTeamLoadParentAfterRotate(t *testing.T) {
+	tt := newTeamTester(t)
+	defer tt.cleanup()
+
+	tt.addUser("alf")
+	tt.addUser("bra")
+
+	team := tt.users[0].createTeam()
+	parentName, err := keybase1.TeamNameFromString(team)
+	require.NoError(t, err)
+	_, err = teams.CreateSubteam(context.TODO(), tt.users[0].tc.G, "bb", parentName, keybase1.TeamRole_NONE /* addSelfAs */)
+	require.NoError(t, err)
+	subteamName, err := parentName.Append("bb")
+	require.NoError(t, err)
+	_, err = teams.CreateSubteam(context.TODO(), tt.users[0].tc.G, "cc", subteamName, keybase1.TeamRole_NONE /* addSelfAs */)
+	require.NoError(t, err)
+
+	tt.users[0].addTeamMember(parentName.String(), tt.users[1].username, keybase1.TeamRole_ADMIN)
+	tt.users[0].addTeamMember(subteamName.String(), tt.users[1].username, keybase1.TeamRole_ADMIN)
+
+	parentid, err := teams.ResolveNameToID(context.TODO(), tt.users[0].tc.G, parentName)
+	require.NoError(t, err)
+	err = teams.RotateKey(context.TODO(), tt.users[0].tc.G, keybase1.TeamRotateKeyArg{TeamID: parentid, Rt: keybase1.RotationType_HIDDEN})
+	require.NoError(t, err)
+
+	_, err = teams.Load(context.Background(), tt.users[1].tc.G, keybase1.LoadTeamArg{Name: subteamName.String()})
+	require.NoError(t, err)
+
+	_, err = teams.Load(context.Background(), tt.users[1].tc.G, keybase1.LoadTeamArg{Name: parentName.String()})
+	require.NoError(t, err)
 }

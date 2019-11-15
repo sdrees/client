@@ -1,26 +1,17 @@
 import * as Types from '../constants/types/deeplinks'
-import * as Constants from '../constants/deeplinks'
 import * as DeeplinksGen from '../actions/deeplinks-gen'
+import * as Container from '../util/container'
 
-const initialState = Constants.makeState()
-
-type Actions =
-  | DeeplinksGen.Actions
-
-export default function(state: Types.State = initialState, action: Actions): Types.State {
-  switch (action.type) {
-    case DeeplinksGen.handleKeybaseLink:
-      return state.merge({
-        keybaseLinkError: '',
-      })
-    case DeeplinksGen.setKeybaseLinkError:
-      return state.merge({
-        keybaseLinkError: action.payload.error,
-      })
-    // Saga only actions
-    case DeeplinksGen.link:
-      return state
-    default:
-      return state
-  }
+const initialState: Types.State = {
+  keybaseLinkError: '',
 }
+
+export default Container.makeReducer<DeeplinksGen.Actions, Types.State>(initialState, {
+  [DeeplinksGen.resetStore]: () => initialState,
+  [DeeplinksGen.handleKeybaseLink]: draftState => {
+    draftState.keybaseLinkError = ''
+  },
+  [DeeplinksGen.setKeybaseLinkError]: (draftState, action) => {
+    draftState.keybaseLinkError = action.payload.error
+  },
+})

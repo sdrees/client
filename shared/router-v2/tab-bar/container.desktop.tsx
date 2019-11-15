@@ -1,4 +1,5 @@
 import * as RPCTypes from '../../constants/types/rpc-gen'
+import * as SafeElectron from '../../util/safe-electron.desktop'
 import * as Tabs from '../../constants/tabs'
 import * as Chat2Gen from '../../actions/chat2-gen'
 import * as ConfigGen from '../../actions/config-gen'
@@ -12,10 +13,9 @@ import * as SettingsConstants from '../../constants/settings'
 import * as TrackerConstants from '../../constants/tracker2'
 import TabBar from './index.desktop'
 import * as Container from '../../util/container'
-import {memoize} from '../../util/memoize'
 import {isLinux} from '../../constants/platform'
 import openURL from '../../util/open-url'
-import {quit, hideWindow} from '../../util/quit-helper'
+import {quit} from '../../desktop/app/ctl.desktop'
 import {tabRoots} from '../routes'
 
 type OwnProps = {
@@ -23,82 +23,75 @@ type OwnProps = {
   selectedTab: Tabs.AppTab
 }
 
-const mapStateToProps = (state: Container.TypedState) => ({
-  _badgeNumbers: state.notifications.navBadges,
-  _fullnames: state.users.infoMap,
-  _peopleJustSignedUpEmail: state.signup.justSignedUpEmail,
-  _settingsEmailBanner: state.settings.email.addedEmail,
-  configuredAccounts: state.config.configuredAccounts,
-  fullname: TrackerConstants.getDetails(state, state.config.username).fullname || '',
-  isWalletsNew: state.chat2.isWalletsNew,
-  uploading: state.fs.uploads.syncingPaths.count() > 0 || state.fs.uploads.writingToJournal.count() > 0,
-  username: state.config.username,
-})
-
-const mapDispatchToProps = (dispatch, ownProps) => ({
-  _onProfileClick: username => dispatch(ProfileGen.createShowUserProfile({username})),
-  _onTabClick: (tab, peopleJustSignedUpEmail, settingsEmailBanner) => {
-    if (ownProps.selectedTab === Tabs.peopleTab && tab !== Tabs.peopleTab) {
-      dispatch(PeopleGen.createMarkViewed())
-    }
-    if (ownProps.selectedTab !== Tabs.chatTab && tab === Tabs.chatTab) {
-      dispatch(Chat2Gen.createTabSelected())
-    }
-
-    // Clear "just signed up email" when you leave the people tab after signup
-    if (peopleJustSignedUpEmail && ownProps.selectedTab === Tabs.peopleTab && tab !== Tabs.peopleTab) {
-      dispatch(SignupGen.createClearJustSignedUpEmail())
-    }
-    // Clear "check your inbox" in settings when you leave the settings tab
-    if (settingsEmailBanner && ownProps.selectedTab === Tabs.settingsTab && tab !== Tabs.settingsTab) {
-      dispatch(SettingsGen.createClearAddedEmail())
-    }
-
-    if (ownProps.selectedTab === tab) {
-      ownProps.navigation.navigate(tabRoots[tab])
-    } else {
-      ownProps.navigation.navigate(tab)
-    }
-  },
-  onAddAccount: () => dispatch(ProvisionGen.createStartProvision()),
-  onCreateAccount: () => dispatch(SignupGen.createRequestAutoInvite()), // TODO make this route
-  onHelp: () => openURL('https://keybase.io/docs'),
-  onQuit: () => {
-    if (!__DEV__) {
-      if (isLinux) {
-        dispatch(SettingsGen.createStop({exitCode: RPCTypes.ExitCode.ok}))
-      } else {
-        dispatch(ConfigGen.createDumpLogs({reason: 'quitting through menu'}))
+export default Container.connect(
+  (state: Container.TypedState) => ({
+    _badgeNumbers: state.notifications.navBadges,
+    _filesTabBadge: state.fs.badge,
+    _fullnames: state.users.infoMap,
+    _justSignedUpEmail: state.signup.justSignedUpEmail,
+    _settingsEmailBanner: state.settings.email.addedEmail,
+    fullname: TrackerConstants.getDetails(state, state.config.username).fullname || '',
+    isWalletsNew: state.chat2.isWalletsNew,
+    username: state.config.username,
+  }),
+  (dispatch, ownProps: OwnProps) => ({
+    _onProfileClick: (username: string) => dispatch(ProfileGen.createShowUserProfile({username})),
+    _onTabClick: (tab: Tabs.Tab, justSignedUpEmail: string, settingsEmailBanner: string | null) => {
+      if (ownProps.selectedTab === Tabs.peopleTab && tab !== Tabs.peopleTab) {
+        dispatch(PeopleGen.createMarkViewed())
       }
-    }
-    // In case dump log doesn't exit for us
-    hideWindow()
-    setTimeout(() => {
-      quit('quitButton')
-    }, 2000)
-  },
-  onSettings: () => dispatch(RouteTreeGen.createSwitchTab({tab: Tabs.settingsTab})),
-  onSignOut: () => dispatch(RouteTreeGen.createNavigateAppend({path: [SettingsConstants.logOutTab]})),
-})
+      if (ownProps.selectedTab !== Tabs.chatTab && tab === Tabs.chatTab) {
+        dispatch(Chat2Gen.createTabSelected())
+      }
+      // Clear "just signed up email" when you leave the people tab after signup
+      if (justSignedUpEmail && ownProps.selectedTab === Tabs.peopleTab && tab !== Tabs.peopleTab) {
+        dispatch(SignupGen.createClearJustSignedUpEmail())
+      }
+      // Clear "check your inbox" in settings when you leave the settings tab
+      if (settingsEmailBanner && ownProps.selectedTab === Tabs.settingsTab && tab !== Tabs.settingsTab) {
+        dispatch(SettingsGen.createClearAddedEmail())
+      }
 
-const getBadges = memoize(b => b.toObject())
-
-const mergeProps = (stateProps, dispatchProps, ownProps: OwnProps) => ({
-  badgeNumbers: getBadges(stateProps._badgeNumbers),
-  fullname: stateProps.fullname,
-  isWalletsNew: stateProps.isWalletsNew,
-  onAddAccount: dispatchProps.onAddAccount,
-  onCreateAccount: dispatchProps.onCreateAccount,
-  onHelp: dispatchProps.onHelp,
-  onProfileClick: () => dispatchProps._onProfileClick(stateProps.username),
-  onQuit: dispatchProps.onQuit,
-  onSettings: dispatchProps.onSettings,
-  onSignOut: dispatchProps.onSignOut,
-  onTabClick: (tab: Tabs.AppTab) =>
-    dispatchProps._onTabClick(tab, stateProps._peopleJustSignedUpEmail, stateProps._settingsEmailBanner),
-  selectedTab: ownProps.selectedTab,
-  uploading: stateProps.uploading,
-  username: stateProps.username,
-})
-
-export default Container.connect(mapStateToProps, mapDispatchToProps, mergeProps)(TabBar)
+      if (ownProps.selectedTab === tab) {
+        ownProps.navigation.navigate(tabRoots[tab])
+      } else {
+        ownProps.navigation.navigate(tab)
+      }
+    },
+    onAddAccount: () => dispatch(ProvisionGen.createStartProvision()),
+    onHelp: () => openURL('https://keybase.io/docs'),
+    onQuit: () => {
+      if (!__DEV__) {
+        if (isLinux) {
+          dispatch(SettingsGen.createStop({exitCode: RPCTypes.ExitCode.ok}))
+        } else {
+          dispatch(ConfigGen.createDumpLogs({reason: 'quitting through menu'}))
+        }
+      }
+      // In case dump log doesn't exit for us
+      SafeElectron.getRemote()
+        .getCurrentWindow()
+        .hide()
+      setTimeout(() => {
+        quit()
+      }, 2000)
+    },
+    onSettings: () => dispatch(RouteTreeGen.createSwitchTab({tab: Tabs.settingsTab})),
+    onSignOut: () => dispatch(RouteTreeGen.createNavigateAppend({path: [SettingsConstants.logOutTab]})),
+  }),
+  (stateProps, dispatchProps, ownProps: OwnProps) => ({
+    badgeNumbers: stateProps._badgeNumbers,
+    fullname: stateProps.fullname,
+    isWalletsNew: stateProps.isWalletsNew,
+    onAddAccount: dispatchProps.onAddAccount,
+    onHelp: dispatchProps.onHelp,
+    onProfileClick: () => dispatchProps._onProfileClick(stateProps.username),
+    onQuit: dispatchProps.onQuit,
+    onSettings: dispatchProps.onSettings,
+    onSignOut: dispatchProps.onSignOut,
+    onTabClick: (tab: Tabs.AppTab) =>
+      dispatchProps._onTabClick(tab, stateProps._justSignedUpEmail, stateProps._settingsEmailBanner),
+    selectedTab: ownProps.selectedTab,
+    username: stateProps.username,
+  })
+)(TabBar)

@@ -41,12 +41,14 @@ const Header = (props: HeaderProps) => (
   </Kb.Box2>
 )
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   header: Styles.platformStyles({
     common: {
       backgroundColor: Styles.globalColors.purpleDark,
     },
     isElectron: {
+      borderTopLeftRadius: Styles.borderRadius,
+      borderTopRightRadius: Styles.borderRadius,
       flex: 1,
       minHeight: 160,
     },
@@ -68,6 +70,6 @@ const styles = Styles.styleSheetCreate({
   headerText: {
     color: Styles.globalColors.white,
   },
-})
+}))
 
 export default Header

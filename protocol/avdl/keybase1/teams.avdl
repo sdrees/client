@@ -21,7 +21,8 @@ protocol teams {
     SALTPACK_3,
     GIT_METADATA_4,
     SEITAN_INVITE_TOKEN_5,
-    STELLAR_RELAY_6
+    STELLAR_RELAY_6,
+    KVSTORE_7
   }
 
   enum TeamStatus {
@@ -29,6 +30,12 @@ protocol teams {
     LIVE_1,
     DELETED_2,
     ABANDONED_3
+  }
+
+  enum AuditMode {
+    STANDARD_0,
+    JUST_CREATED_1,
+    SKIP_2
   }
 
   // PerTeamKeyGeneration describes the generation of the secret.
@@ -329,7 +336,13 @@ protocol teams {
     boolean frozen;
     boolean tombstoned;
 
+    // The last link loaded to, but might have stubbed holes before then (due to FTL)
     Seqno last;
+
+    // From 1 to lastFull are fully populated links, with all stubs (via FTL) filled in.
+    // Might be less than last, or 0, since we didn't introduce this field until
+    // bug Y2K-679 came in.
+    Seqno lastFull;
 
     // Update this field when gregor notifications come in, and there is a bump
     // for last seqno. If this is wrong or buggy, it's a performance problem,
@@ -757,6 +770,8 @@ protocol teams {
     Seqno latestSeqno;
     @jsonkey("latest_hidden_seqno")
     Seqno latestHiddenSeqno;
+    @jsonkey("latest_offchain_seqno")
+    Seqno latestOffchainSeqno;
     @jsonkey("implicit_team")
     boolean implicitTeam;
     @jsonkey("misc")
@@ -780,6 +795,9 @@ protocol teams {
     UID uid;
     @jsonkey("eldest_seqno")
     Seqno eldestSeqno;
+    // NOTE: This comes from gregor, but should not be used during actual SBS
+    // resolution - always take inviteID and look at the actual invite from the
+    // sigchain.
     TeamRole role;
   }
 
@@ -943,8 +961,8 @@ protocol teams {
     boolean forceRepoll;               // Force a sync with merkle.
     boolean staleOK;                   // If a very stale cache hit is OK.
     boolean allowNameLookupBurstCache; // If it's ok to hit the nameLookup burst cache
-    boolean skipAudit;                 // don't run the stochastic team audit
     boolean skipNeedHiddenRotateCheck; // don't check the last hidden rotator for device revoke
+    AuditMode auditMode;               // don't run the stochastic team audit
   }
 
   record FastTeamLoadArg {
@@ -1061,6 +1079,7 @@ protocol teams {
 
   record SubteamListEntry {
     TeamName name;
+    TeamID teamID;
     int memberCount;
   }
 
@@ -1121,6 +1140,10 @@ protocol teams {
 
   // A user can hope for success if and only if they are a member of
   // the team or an admin of any of its ancestors.
+  TeamDetails teamGetByID(int sessionID, TeamID id);
+
+  // A user can hope for success if and only if they are a member of
+  // the team or an admin of any of its ancestors.
   TeamDetails teamGet(int sessionID, string name);
 
   // Get the members of the team
@@ -1163,11 +1186,16 @@ protocol teams {
 
   void teamAddMembersMultiRole(int sessionID, string name, array<UserRolePair> users, boolean sendChatNotification);
 
-  void teamRemoveMember(int sessionID, string name, string username, string email, TeamInviteID inviteID);
+  // allowInaction suppresses errors that come from removing an invite that doesn't exist. Relevant for suppressing errors when calling remove while a remove is already in progress.
+  // Note: allowInaction only applies to invite removals, just because that was what was needed.
+  void teamRemoveMember(int sessionID, string name, string username, string email, TeamInviteID inviteID, boolean allowInaction);
 
   void teamLeave(int sessionID, string name, boolean permanent);
 
   void teamEditMember(int sessionID, string name, string username, TeamRole role, union { null, TeamBotSettings } botSettings);
+
+  TeamBotSettings teamGetBotSettings(int sessionID, string name, string username);
+  void teamSetBotSettings(int sessionID, string name, string username, TeamBotSettings botSettings);
 
   void teamRename(int sessionID, TeamName prevName, TeamName newName);
 
@@ -1290,6 +1318,7 @@ protocol teams {
     boolean deleteChatHistory;
     boolean deleteOtherMessages;
     boolean deleteTeam;
+    boolean pinMessage;
   }
 
   record ProfileTeamLoadRes {
@@ -1360,4 +1389,57 @@ protocol teams {
   TeamID getTeamID(string teamName);
 
   FastTeamLoadRes ftl(FastTeamLoadArg arg);
+
+  record MemberEmail {
+    string email;
+    string role;
+  }
+
+  record MemberUsername {
+    string username;
+    string role;
+  }
+
+  record TeamRolePair {
+    TeamRole role;
+    @jsonkey("implicit_role")
+    TeamRole implicitRole;
+  }
+
+  record TeamRoleMapAndVersion {
+    map<TeamID, TeamRolePair> teams;
+    @jsonkey("user_team_version")
+    UserTeamVersion version;
+  }
+
+  record TeamRoleMapStored {
+    TeamRoleMapAndVersion data;
+    Time cachedAt;
+  }
+
+  TeamRoleMapAndVersion getTeamRoleMap();
+
+  @typedef("int")
+  record UserTeamVersion {}
+
+  record UserTeamVersionUpdate {
+    UserTeamVersion version;
+  }
+
+  record AnnotatedTeam {
+    TeamID teamID;
+    string name;
+    SubteamListResult transitiveSubteamsUnverified;
+
+    array<TeamMemberDetails> members;
+    array<AnnotatedTeamInvite> invites;
+    array<TeamJoinRequest> joinRequests;
+
+    boolean userIsShowcasing;
+    boolean tarsDisabled;
+    TeamSettings settings;
+    TeamShowcase showcase;
+  }
+
+  AnnotatedTeam getAnnotatedTeam(TeamID teamID);
 }

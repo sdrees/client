@@ -3,7 +3,7 @@ import {EmojiData} from './data'
 import {ClickableBox, Box2, Emoji, SectionList, Text} from '../../../../../common-adapters'
 import {collapseStyles, globalColors, globalMargins, styleSheetCreate} from '../../../../../styles'
 import {isAndroid} from '../../../../../constants/platform'
-import {chunk} from 'lodash-es'
+import chunk from 'lodash/chunk'
 import {memoize} from '../../../../../util/memoize'
 
 // defer loading this until we need to, very expensive
@@ -107,7 +107,7 @@ class EmojiPicker extends React.Component<Props, State> {
       category: c.category,
       data: chunk(c.data.emojis, emojisPerLine).map((c: any, idx: number) => ({
         emojis: c,
-        key: (c && c.length && c[0].short_name) || String(idx),
+        key: (c && c.length && c[0] && c[0].short_name) || String(idx),
       })),
       key: c.key,
     }))
@@ -194,23 +194,26 @@ const HeaderRow = ({section}: {section: Section}) => (
   </Box2>
 )
 
-const styles = styleSheetCreate({
-  alignItemsCenter: {
-    alignItems: 'center',
-  },
-  emoji: {
-    padding: emojiPadding,
-    width: emojiWidthWithPadding,
-  },
-  flexWrap: {
-    flexWrap: 'wrap',
-  },
-  sectionHeader: {
-    alignItems: 'center',
-    backgroundColor: globalColors.white,
-    height: 32,
-    paddingLeft: globalMargins.tiny,
-  },
-})
+const styles = styleSheetCreate(
+  () =>
+    ({
+      alignItemsCenter: {
+        alignItems: 'center',
+      },
+      emoji: {
+        padding: emojiPadding,
+        width: emojiWidthWithPadding,
+      },
+      flexWrap: {
+        flexWrap: 'wrap',
+      },
+      sectionHeader: {
+        alignItems: 'center',
+        backgroundColor: globalColors.white,
+        height: 32,
+        paddingLeft: globalMargins.tiny,
+      },
+    } as const)
+)
 
 export default EmojiPicker

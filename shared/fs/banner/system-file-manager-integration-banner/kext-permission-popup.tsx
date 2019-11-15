@@ -9,11 +9,9 @@ type Props = {
   openSecurityPrefs: () => void
 }
 
-const securityPreferenceIllustration = require('../../../images/illustrations/security-preferences.png')
-
 const Illustration = () => (
   <Kb.Box style={styles.illustrationContainer}>
-    <Kb.Image style={styles.image} resizeMode="contain" src={securityPreferenceIllustration} />
+    <Kb.Icon style={styles.image} type="illustration-security-preferences" />
     <Kb.Box
       style={Styles.collapseStyles([styles.highlight, {bottom: 49, height: 24, left: 36, width: 136}])}
     />
@@ -85,7 +83,7 @@ const InstallSecurityPrefs = (props: Props) => (
     {props.driverStatus.type === Types.DriverStatusType.Disabled && props.driverStatus.isEnabling && (
       <Kb.Box style={styles.enablingContainer}>
         <Kb.Box2 direction="vertical" gap="small" fullWidth={true} fullHeight={true} centerChildren={true}>
-          <Kb.ProgressIndicator white={true} />
+          <Kb.ProgressIndicator type="Small" white={true} />
           <Kb.Text type="BodySmall" negative={true}>
             Checking ...
           </Kb.Text>
@@ -95,62 +93,65 @@ const InstallSecurityPrefs = (props: Props) => (
   </>
 )
 
-const styles = Styles.styleSheetCreate({
-  container: {
-    maxWidth: 700,
-    minWidth: 700,
-    paddingBottom: Styles.globalMargins.mediumLarge,
-    paddingLeft: Styles.globalMargins.large,
-    paddingRight: Styles.globalMargins.large,
-    paddingTop: Styles.globalMargins.mediumLarge,
-    width: 700,
-  },
-  enablingContainer: {
-    backgroundColor: Styles.globalColors.black_63,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-  },
-  highlight: {
-    backgroundColor: Styles.globalColors.black_05,
-    borderColor: Styles.globalColors.blue,
-    borderRadius: Styles.borderRadius,
-    borderStyle: 'solid',
-    borderWidth: 2,
-    position: 'absolute',
-  },
-  illustrationContainer: {
-    position: 'relative',
-  },
-  image: {
-    width: 408,
-  },
-  listText: {
-    paddingBottom: 16,
-    paddingTop: 1,
-  },
-  numberList: Styles.platformStyles({
-    isElectron: {
-      backgroundColor: Styles.globalColors.blue,
-      borderRadius: '50%',
-      color: Styles.globalColors.white,
-      height: 20,
-      marginRight: 13,
-      minWidth: 20,
-      paddingTop: 1,
-      textAlign: 'center',
-      width: 20,
-    },
-  }),
-  numberListContainer: {
-    paddingTop: Styles.globalMargins.large,
-  },
-  title: {
-    maxWidth: 480,
-    textAlign: 'center',
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: {
+        maxWidth: 700,
+        minWidth: 700,
+        paddingBottom: Styles.globalMargins.mediumLarge,
+        paddingLeft: Styles.globalMargins.large,
+        paddingRight: Styles.globalMargins.large,
+        paddingTop: Styles.globalMargins.mediumLarge,
+        width: 700,
+      },
+      enablingContainer: {
+        backgroundColor: Styles.globalColors.black_63,
+        bottom: 0,
+        left: 0,
+        position: 'absolute',
+        right: 0,
+        top: 0,
+      },
+      highlight: {
+        backgroundColor: Styles.globalColors.black_05,
+        borderColor: Styles.globalColors.blue,
+        borderRadius: Styles.borderRadius,
+        borderStyle: 'solid',
+        borderWidth: 2,
+        position: 'absolute',
+      },
+      illustrationContainer: {
+        position: 'relative',
+      },
+      image: {
+        width: 408,
+      },
+      listText: {
+        paddingBottom: 16,
+        paddingTop: 1,
+      },
+      numberList: Styles.platformStyles({
+        isElectron: {
+          backgroundColor: Styles.globalColors.blue,
+          borderRadius: '50%',
+          color: Styles.globalColors.white,
+          height: 20,
+          marginRight: 13,
+          minWidth: 20,
+          paddingTop: 1,
+          textAlign: 'center',
+          width: 20,
+        },
+      }),
+      numberListContainer: {
+        paddingTop: Styles.globalMargins.large,
+      },
+      title: {
+        maxWidth: 480,
+        textAlign: 'center',
+      },
+    } as const)
+)
 
 export default Kb.HeaderOrPopup(InstallSecurityPrefs)

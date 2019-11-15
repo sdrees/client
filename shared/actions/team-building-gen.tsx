@@ -12,10 +12,12 @@ export const changeSendNotification = 'team-building:changeSendNotification'
 export const fetchUserRecs = 'team-building:fetchUserRecs'
 export const fetchedUserRecs = 'team-building:fetchedUserRecs'
 export const finishedTeamBuilding = 'team-building:finishedTeamBuilding'
+export const labelsSeen = 'team-building:labelsSeen'
 export const removeUsersFromTeamSoFar = 'team-building:removeUsersFromTeamSoFar'
 export const search = 'team-building:search'
 export const searchResultsLoaded = 'team-building:searchResultsLoaded'
 export const selectRole = 'team-building:selectRole'
+export const tbResetStore = 'team-building:tbResetStore'
 
 // Payload Types
 type _AddUsersToTeamSoFarPayload = {
@@ -27,6 +29,7 @@ type _ChangeSendNotificationPayload = {readonly namespace: 'teams'; readonly sen
 type _FetchUserRecsPayload = {readonly includeContacts: boolean; readonly namespace: Types.AllowedNamespace}
 type _FetchedUserRecsPayload = {readonly namespace: Types.AllowedNamespace; readonly users: Array<Types.User>}
 type _FinishedTeamBuildingPayload = {readonly namespace: Types.AllowedNamespace; readonly teamname?: string}
+type _LabelsSeenPayload = {readonly namespace: Types.AllowedNamespace}
 type _RemoveUsersFromTeamSoFarPayload = {
   readonly namespace: Types.AllowedNamespace
   readonly users: Array<Types.UserID>
@@ -45,8 +48,16 @@ type _SearchResultsLoadedPayload = {
   readonly service: Types.ServiceIdWithContact
 }
 type _SelectRolePayload = {readonly namespace: 'teams'; readonly role: TeamRoleType}
+type _TbResetStorePayload = {readonly namespace: Types.AllowedNamespace}
 
 // Action Creators
+/**
+ * our own reset store so we don't have conflicts with parent reducers
+ */
+export const createTbResetStore = (payload: _TbResetStorePayload): TbResetStorePayload => ({
+  payload,
+  type: tbResetStore,
+})
 export const createAddUsersToTeamSoFar = (
   payload: _AddUsersToTeamSoFarPayload
 ): AddUsersToTeamSoFarPayload => ({payload, type: addUsersToTeamSoFar})
@@ -68,6 +79,10 @@ export const createFetchedUserRecs = (payload: _FetchedUserRecsPayload): Fetched
 export const createFinishedTeamBuilding = (
   payload: _FinishedTeamBuildingPayload
 ): FinishedTeamBuildingPayload => ({payload, type: finishedTeamBuilding})
+export const createLabelsSeen = (payload: _LabelsSeenPayload): LabelsSeenPayload => ({
+  payload,
+  type: labelsSeen,
+})
 export const createRemoveUsersFromTeamSoFar = (
   payload: _RemoveUsersFromTeamSoFarPayload
 ): RemoveUsersFromTeamSoFarPayload => ({payload, type: removeUsersFromTeamSoFar})
@@ -105,6 +120,7 @@ export type FinishedTeamBuildingPayload = {
   readonly payload: _FinishedTeamBuildingPayload
   readonly type: typeof finishedTeamBuilding
 }
+export type LabelsSeenPayload = {readonly payload: _LabelsSeenPayload; readonly type: typeof labelsSeen}
 export type RemoveUsersFromTeamSoFarPayload = {
   readonly payload: _RemoveUsersFromTeamSoFarPayload
   readonly type: typeof removeUsersFromTeamSoFar
@@ -115,6 +131,7 @@ export type SearchResultsLoadedPayload = {
   readonly type: typeof searchResultsLoaded
 }
 export type SelectRolePayload = {readonly payload: _SelectRolePayload; readonly type: typeof selectRole}
+export type TbResetStorePayload = {readonly payload: _TbResetStorePayload; readonly type: typeof tbResetStore}
 
 // All Actions
 // prettier-ignore
@@ -125,8 +142,10 @@ export type Actions =
   | FetchUserRecsPayload
   | FetchedUserRecsPayload
   | FinishedTeamBuildingPayload
+  | LabelsSeenPayload
   | RemoveUsersFromTeamSoFarPayload
   | SearchPayload
   | SearchResultsLoadedPayload
   | SelectRolePayload
+  | TbResetStorePayload
   | {type: 'common:resetStore', payload: {}}

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
+import * as Platform from '../../constants/platform'
 import {SignupScreen, errorBanner, InfoIcon} from '../common'
 
 type Props = {
@@ -29,9 +30,17 @@ const EnterDevicename = (props: Props) => {
         fullWidth={true}
         style={Styles.globalStyles.flexOne}
       >
-        <Kb.Icon type={Styles.isMobile ? 'icon-phone-96' : 'icon-computer-96'} />
+        <Kb.Icon
+          type={
+            Styles.isMobile
+              ? Platform.isLargeScreen
+                ? 'icon-phone-background-1-96'
+                : 'icon-phone-background-1-64'
+              : 'icon-computer-background-1-96'
+          }
+        />
         <Kb.Box2 direction="vertical" gap="tiny" style={styles.inputBox}>
-          <Kb.NewInput
+          <Kb.LabeledInput
             autoFocus={true}
             containerStyle={styles.input}
             placeholder={Styles.isMobile ? 'Phone 1' : 'Computer 1'}
@@ -61,17 +70,10 @@ EnterDevicename.navigationOptions = {
   ),
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   input: Styles.platformStyles({
-    common: {},
     isElectron: {
-      ...Styles.padding(0, Styles.globalMargins.xsmall),
-      height: 38,
       width: 368,
-    },
-    isMobile: {
-      ...Styles.padding(0, Styles.globalMargins.small),
-      height: 48,
     },
   }),
   inputBox: Styles.platformStyles({
@@ -79,10 +81,13 @@ const styles = Styles.styleSheetCreate({
       // need to set width so subtext will wrap
       width: 368,
     },
+    isMobile: {
+      width: '100%',
+    },
   }),
   inputSub: {
     marginLeft: 2,
   },
-})
+}))
 
 export default EnterDevicename

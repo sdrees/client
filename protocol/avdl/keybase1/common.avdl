@@ -29,6 +29,9 @@ protocol Common {
   @typedef("string")
   record UID {}
 
+  @typedef("string") @lint("ignore")
+  record VID {}
+
   @typedef("string")
   record DeviceID {}
 
@@ -46,16 +49,11 @@ protocol Common {
   @typedef("string")
   record PhoneNumber {}
 
-  // Phone number, coming from the user, in no particular format. 
+  // Phone number, coming from the user, in no particular format.
   // Possibly invalid. Should be validated and converted to PhoneNumber
   // for internal use.
   @typedef("string")
   record RawPhoneNumber {}
-
-  // 2-letter country region code
-  // Used for phone number and email assertions
-  @typedef("string")
-  record RegionCode {}
 
   // Chain link IDs
   @typedef("string")
@@ -180,6 +178,8 @@ protocol Common {
     string type;
     string name;
     DeviceID deviceID;
+    // For the GUI to display the correct icon for the device
+    int deviceNumberOfType;
     Time cTime;
     Time mTime;
     Time lastUsedTime;
@@ -215,6 +215,12 @@ protocol Common {
     GUI_MAIN_2,
     KBFS_3,
     GUI_HELPER_4
+  }
+
+  record KBFSPathInfo {
+    string standardPath;
+    string deeplinkPath;
+    string platformAfterMountPath;
   }
 
   record UserVersionVector {

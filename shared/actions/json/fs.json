@@ -19,20 +19,21 @@
     "pollJournalStatus": {},
     "getOnlineStatus": {},
     "folderListLoad": {
+      "recursive": "boolean",
       "path": "Types.Path"
     },
     "folderListLoaded": {
       "path": "Types.Path",
-      "pathItems": "I.Map<Types.Path, Types.PathItem>"
+      "pathItems": "Map<Types.Path, Types.PathItem>"
     },
     "favoritesLoad": {},
     "favoritesLoaded": {
-      "private": "I.Map<string, Types.Tlf>",
-      "public": "I.Map<string, Types.Tlf>",
-      "team": "I.Map<string, Types.Tlf>"
+      "private": "Types.TlfList",
+      "public": "Types.TlfList",
+      "team": "Types.TlfList"
     },
     "setFolderViewFilter": {
-      "filter": "string"
+      "filter": "string|null"
     },
     "tlfSyncConfigLoaded": {
       "tlfType": "Types.TlfType",
@@ -57,41 +58,11 @@
       "path": "Types.Path",
       "sortSetting": "Types.SortSetting"
     },
-    "download": {
-      "path": "Types.Path",
-      "key": "string"
-    },
     "shareNative": {
-      "path": "Types.Path",
-      "key": "string"
+      "path": "Types.Path"
     },
     "saveMedia": {
-      "path": "Types.Path",
-      "key": "string"
-    },
-    "downloadStarted": {
-      "entryType?": "Types.PathType",
-      "key": "string",
-      "path": "Types.Path",
-      "localPath": "Types.LocalPath",
-      "intent": "Types.DownloadIntent",
-      "opID": "RPCTypes.OpID"
-    },
-    "downloadSuccess": {
-      "intent": "Types.DownloadIntent",
-      "key": "string",
-      "mimeType": "string"
-    },
-    "downloadProgress": {
-      "key": "string",
-      "completePortion": "number",
-      "endEstimate?": "number"
-    },
-    "cancelDownload": {
-      "key": "string"
-    },
-    "dismissDownload": {
-      "key": "string"
+      "path": "Types.Path"
     },
     "upload": {
       "parentPath": "Types.Path",
@@ -137,11 +108,6 @@
     },
 
     "openSecurityPreferences": {},
-    "refreshLocalHTTPServerInfo": {},
-    "localHTTPServerInfo": {
-      "address": "string",
-      "token": "string"
-    },
     "favoriteIgnore": {
       "path": "Types.Path"
     },
@@ -212,7 +178,6 @@
       "localPath": "Types.LocalPath"
     },
     "showIncomingShare": {"initialDestinationParentPath": "Types.Path"},
-    "closeDestinationPicker": {},
     "move": {"destinationParentPath": "Types.Path"},
     "copy": {"destinationParentPath": "Types.Path"},
 
@@ -229,25 +194,9 @@
       "title": "string"
     },
     "sentAttachmentToChat": {},
-    "initSendLinkToChat": {
-      "path": "Types.Path"
-    },
-    "setSendLinkToChatConvID": {
-      "convID": "ChatTypes.ConversationIDKey"
-    },
-    "setSendLinkToChatChannels": {
-      "channels": "I.Map<ChatTypes.ConversationIDKey, string>"
-    },
-    "triggerSendLinkToChat": {},
-    "sentLinkToChat": {
-      "convID": "ChatTypes.ConversationIDKey"
-    },
 
     "setPathItemActionMenuView": {
       "view": "Types.PathItemActionMenuView"
-    },
-    "setPathItemActionMenuDownloadKey": {
-      "key": "string | null"
     },
     "waitForKbfsDaemon": {},
     "kbfsDaemonRpcStatusChanged": {
@@ -280,6 +229,53 @@
     },
     "setTlfsAsUnloaded": {},
     "placeholderAction": {},
+    "refreshMountDirsAfter10s": {},
+    "setDirectMountDir": {"directMountDir": "string"},
+    "setPreferredMountDirs": {"preferredMountDirs": "Array<string>"},
+    "loadPathInfo": {"path": "Types.Path"},
+    "loadedPathInfo": {"path": "Types.Path", "pathInfo": "Types.PathInfo"},
+    "download": {"path": "Types.Path"},
+    "loadDownloadStatus": {},
+    "loadDownloadInfo": {"downloadID": "string"},
+    "loadedDownloadStatus": {
+      "regularDownloads": "Array<string>",
+      "state": "Map<string, Types.DownloadState>"
+    },
+    "loadedDownloadInfo": {"downloadID": "string", "info": "Types.DownloadInfo"},
+    "cancelDownload": {"downloadID": "string"},
+    "dismissDownload": {"downloadID": "string"},
+    "setPathItemActionMenuDownload": {
+      "downloadID": "string | null",
+      "intent": "Types.DownloadIntent | null"
+    },
+    "finishedDownloadWithIntent": {
+      "downloadID": "string",
+      "downloadIntent": "Types.DownloadIntent",
+      "mimeType": "string"
+    },
+    "finishedRegularDownload": {
+      "downloadID": "string",
+      "mimeType": "string"
+    },
+    "loadFileContext": {
+      "path": "Types.Path"
+    },
+    "loadedFileContext": {
+      "path": "Types.Path",
+      "fileContext": "Types.FileContext"
+    },
+    "loadAdditionalTlf": {
+      "tlfPath": "Types.Path"
+    },
+    "loadedAdditionalTlf": {
+      "tlf": "Types.Tlf",
+      "tlfPath": "Types.Path"
+    },
+    "loadFilesTabBadge": {},
+    "loadedFilesTabBadge": {
+      "badge": "RPCTypes.FilesTabBadge"
+    },
+
     "setDebugLevel": {
       "level": "string"
     }

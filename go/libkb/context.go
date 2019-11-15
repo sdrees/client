@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	logger "github.com/keybase/client/go/logger"
 	"github.com/keybase/client/go/profiling"
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 	context "golang.org/x/net/context"
@@ -268,7 +269,10 @@ func (m MetaContext) WithNewProvisionalLoginContextForUser(u *User) MetaContext 
 
 func (m MetaContext) WithNewProvisionalLoginContextForUserVersionAndUsername(uv keybase1.UserVersion, un NormalizedUsername) MetaContext {
 	plc := newProvisionalLoginContextWithUserVersionAndUsername(m, uv, un)
-	m.ActiveDevice().CopyCacheToLoginContextIfForUserVersion(m, plc, uv)
+	err := m.ActiveDevice().CopyCacheToLoginContextIfForUserVersion(m, plc, uv)
+	if err != nil {
+		m.Debug("WithNewProvisionalLoginContextForUserVersionAndUsername: error %+v", err)
+	}
 	return m.WithLoginContext(plc)
 }
 
@@ -367,14 +371,20 @@ func (m MetaContext) switchUserNewConfig(u keybase1.UID, n NormalizedUsername, s
 	if err := cw.SetUserConfig(NewUserConfig(u, n, salt, d), true /* overwrite */); err != nil {
 		return err
 	}
-	g.ActiveDevice.SetOrClear(m, ad)
-	return nil
+	// Clear stayLoggedOut, so that if the service restarts for any reason
+	// we will know that we are logged in.
+	if g.Env.GetStayLoggedOut() {
+		if err := cw.SetStayLoggedOut(false); err != nil {
+			return err
+		}
+	}
+	return g.ActiveDevice.SetOrClear(m, ad)
 }
 
 // SwitchUserNewConfigActiveDevice creates a new config file stanza and an
 // active device for the given user, all while holding the switchUserMu lock.
-func (m MetaContext) SwitchUserNewConfigActiveDevice(uv keybase1.UserVersion, n NormalizedUsername, salt []byte, d keybase1.DeviceID, sigKey GenericKey, encKey GenericKey, deviceName string) error {
-	ad := NewProvisionalActiveDevice(m, uv, d, sigKey, encKey, deviceName)
+func (m MetaContext) SwitchUserNewConfigActiveDevice(uv keybase1.UserVersion, n NormalizedUsername, salt []byte, d keybase1.DeviceID, sigKey GenericKey, encKey GenericKey, deviceName string, keychainMode KeychainMode) error {
+	ad := NewProvisionalActiveDevice(m, uv, d, sigKey, encKey, deviceName, keychainMode)
 	return m.switchUserNewConfig(uv.Uid, n, salt, d, ad)
 }
 
@@ -398,7 +408,10 @@ func (m MetaContext) SwitchUserNukeConfig(n NormalizedUsername) error {
 		return err
 	}
 	if g.ActiveDevice.UID().Equal(uid) {
-		g.ActiveDevice.Clear()
+		err := g.ActiveDevice.Clear()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -492,7 +505,10 @@ func (m MetaContext) SwitchUserLoggedOut() (err error) {
 	if cw == nil {
 		return NoConfigWriterError{}
 	}
-	g.ActiveDevice.Clear()
+	err = g.ActiveDevice.Clear()
+	if err != nil {
+		return err
+	}
 	err = cw.SetUserConfig(nil, false)
 	if err != nil {
 		return err
@@ -507,13 +523,13 @@ func (m MetaContext) SwitchUserLoggedOut() (err error) {
 // `current_user` in the config file, or edit the global config file in any
 // way.
 func (m MetaContext) SetActiveDevice(uv keybase1.UserVersion, deviceID keybase1.DeviceID,
-	sigKey, encKey GenericKey, deviceName string) error {
+	sigKey, encKey GenericKey, deviceName string, keychainMode KeychainMode) error {
 	g := m.G()
 	defer g.switchUserMu.Acquire(m, "SetActiveDevice")()
 	if !g.Env.GetUID().Equal(uv.Uid) {
 		return NewUIDMismatchError("UID switched out from underneath provisioning process")
 	}
-	return g.ActiveDevice.Set(m, uv, deviceID, sigKey, encKey, deviceName, 0)
+	return g.ActiveDevice.Set(m, uv, deviceID, sigKey, encKey, deviceName, 0, keychainMode)
 }
 
 func (m MetaContext) SetSigningKey(uv keybase1.UserVersion, deviceID keybase1.DeviceID, sigKey GenericKey, deviceName string) error {
@@ -563,7 +579,7 @@ func (m MetaContext) LogoutAndDeprovisionIfRevoked() (err error) {
 
 	if doLogout {
 		username := m.G().Env.GetUsername()
-		if err := m.G().Logout(m.Ctx()); err != nil {
+		if err := m.LogoutWithOptions(LogoutOptions{KeepSecrets: false, Force: true}); err != nil {
 			return err
 		}
 		return ClearSecretsOnDeprovision(m, username)
@@ -681,4 +697,10 @@ func (m MetaContext) Keyring() (ret *SKBKeyringFile, err error) {
 		return m.LoginContext().Keyring(m)
 	}
 	return m.ActiveDevice().Keyring(m)
+}
+
+var _ logger.ContextInterface = MetaContext{}
+
+func (m MetaContext) UpdateContextToLoggerContext(c context.Context) logger.ContextInterface {
+	return m.WithContext(c)
 }

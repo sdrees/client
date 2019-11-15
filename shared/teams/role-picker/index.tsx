@@ -1,12 +1,18 @@
 import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
-import {map, capitalize} from 'lodash-es'
+import map from 'lodash/map'
+import capitalize from 'lodash/capitalize'
 import {Position} from '../../common-adapters/relative-popup-hoc.types'
-import {TeamRoleType as Role} from '../../constants/types/teams'
+import {TeamRoleType} from '../../constants/types/teams'
 import {StylesCrossPlatform} from '../../styles/css'
 // Controls the ordering of the role picker
 const orderedRoles = ['owner', 'admin', 'writer', 'reader'] as const
+
+// TODO include bot roles in here; this is short term to allow bots to show up in the gui
+type Role = Exclude<TeamRoleType, 'bot' | 'restrictedbot'>
+const filterRole = (r: TeamRoleType | null | undefined): Role | null =>
+  r === 'bot' || r === 'restrictedbot' || !r ? null : r
 
 type DisabledReason = string
 
@@ -18,8 +24,8 @@ export type Props = {
   confirmLabel?: string // Defaults to "Make ${selectedRole}"
   onSelectRole: (role: Role) => void
   footerComponent?: React.ReactNode
-  presetRole?: Role | null
-  selectedRole?: Role | null
+  presetRole?: TeamRoleType | null
+  selectedRole?: TeamRoleType | null
 }
 
 type RoleRowProps = {
@@ -32,11 +38,11 @@ type RoleRowProps = {
 }
 
 const RoleRow = (p: RoleRowProps) => (
-  <Kb.Box2 direction={'vertical'} fullWidth={true} alignItems={'flex-start'} style={styles.row}>
-    <Kb.Box2 direction={'vertical'} fullWidth={true} style={styles.rowChild}>
+  <Kb.Box2 direction="vertical" fullWidth={true} alignItems="flex-start" style={styles.row}>
+    <Kb.Box2 direction="vertical" fullWidth={true} style={styles.rowChild}>
       <Kb.Box2
-        direction={'horizontal'}
-        alignItems={'center'}
+        direction="horizontal"
+        alignItems="center"
         fullWidth={true}
         style={p.disabledReason ? styles.disabledRow : undefined}
       >
@@ -68,27 +74,31 @@ const rolesMetaInfo = (infoForRole: Role): RolesMetaInfo => {
     case 'admin':
       return {
         cans: [
-          'Can manage team members roles',
-          'Can create subteams and channels',
-          'Can write and read in chats and folders',
+          `Can create chat channels`,
+          `Can create subteams`,
+          `Can add and remove members`,
+          `Can manage team members' roles`,
+          `Can write and read in chats and folders`,
         ],
         cants: [`Can't delete the team`],
         icon: (
           <Kb.Icon
             boxStyle={{paddingBottom: 0}}
             style={styles.roleIcon}
-            type={'iconfont-crown-admin'}
-            sizeType={'Small'}
+            type="iconfont-crown-admin"
+            sizeType="Small"
           />
         ),
       }
     case 'owner':
       return {
         cans: [
-          'Can manage team members roles',
-          'Can create subteams and channels',
-          'Can write and read in chats and folders',
-          'Can delete team',
+          `Can create chat channels`,
+          `Can create subteams`,
+          `Can add and remove members`,
+          `Can manage team members' roles`,
+          `Can write and read in chats and folders`,
+          `Can delete team`,
         ],
         cants: [],
         extra: ['A team can have multiple owners'],
@@ -96,8 +106,8 @@ const rolesMetaInfo = (infoForRole: Role): RolesMetaInfo => {
           <Kb.Icon
             style={styles.roleIcon}
             boxStyle={{paddingBottom: 0}}
-            type={'iconfont-crown-owner'}
-            sizeType={'Small'}
+            type="iconfont-crown-owner"
+            sizeType="Small"
           />
         ),
       }
@@ -105,7 +115,7 @@ const rolesMetaInfo = (infoForRole: Role): RolesMetaInfo => {
       return {
         cans: ['Can write in chats but read only in folders'],
         cants: [
-          `Can't create channels`,
+          `Can't create chat channels`,
           `Can't create subteams`,
           `Can't add and remove members`,
           `Can't manage team members' roles`,
@@ -115,7 +125,7 @@ const rolesMetaInfo = (infoForRole: Role): RolesMetaInfo => {
       }
     case 'writer':
       return {
-        cans: ['Can create channels', 'Can write and read in chats and folders'],
+        cans: ['Can write and read in chats and folders', 'Can create chat channels'],
         cants: [
           `Can't create subteams`,
           `Can't add and remove members`,
@@ -213,9 +223,9 @@ const confirmLabelHelper = (presetRole: Role | null, selectedRole: Role | null):
 }
 
 const RolePicker = (props: Props) => {
-  let selectedRole = props.selectedRole || props.presetRole
+  let selectedRole = filterRole(props.selectedRole || props.presetRole)
   return (
-    <Kb.Box2 direction="vertical" alignItems={'stretch'} style={styles.container}>
+    <Kb.Box2 direction="vertical" alignItems="stretch" style={styles.container}>
       {headerTextHelper(props.headerText)}
       {map(
         roleElementHelper(selectedRole || null),
@@ -245,102 +255,105 @@ const RolePicker = (props: Props) => {
           selectedRole && props.selectedRole !== props.presetRole
             ? () => selectedRole && props.onConfirm(selectedRole)
             : undefined,
-          props.confirmLabel || confirmLabelHelper(props.presetRole || null, selectedRole || null)
+          props.confirmLabel || confirmLabelHelper(filterRole(props.presetRole), selectedRole || null)
         )}
       </Kb.Box2>
     </Kb.Box2>
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  abilityCheck: Styles.platformStyles({
-    common: {
-      paddingRight: Styles.globalMargins.tiny,
-    },
-    isElectron: {
-      paddingTop: 6,
-    },
-    isMobile: {paddingTop: 4},
-  }),
-  checkIcon: {
-    left: -24,
-    paddingTop: 2,
-    position: 'absolute',
-  },
-  container: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.white,
-    },
-    isElectron: {
-      borderColor: Styles.globalColors.blue,
-      borderRadius: Styles.borderRadius,
-      borderStyle: 'solid',
-      borderWidth: 1,
-      boxShadow: `0 0 3px 0 rgba(0, 0, 0, 0.15), 0 0 5px 0 ${Styles.globalColors.black_20_on_white}`,
-      minHeight: 350,
-      width: 310,
-    },
-    isMobile: {
-      flex: 1,
-    },
-  }),
-  disabledRow: {
-    opacity: 0.4,
-  },
-  footer: {
-    flexGrow: 2,
-    justifyContent: 'flex-end',
-    paddingBottom: Styles.globalMargins.small,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-  footerButtonBar: {
-    minHeight: undefined,
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-  },
-  headerText: {
-    alignSelf: 'center',
-    paddingBottom: Styles.globalMargins.tiny,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-  radioButton: Styles.platformStyles({
-    isMobile: {paddingRight: Styles.globalMargins.tiny},
-  }),
-  roleIcon: {
-    paddingRight: Styles.globalMargins.xtiny,
-  },
-  row: {
-    position: 'relative',
-  },
-  rowBody: Styles.platformStyles({
-    // Width of the radio button. Used to align text with title
-    isElectron: {
-      paddingLeft: 22,
-    },
-    isMobile: {
-      paddingLeft: 38,
-    },
-  }),
-  rowChild: Styles.platformStyles({
-    common: {
-      paddingBottom: Styles.globalMargins.tiny,
-      paddingLeft: Styles.globalMargins.small,
-      paddingRight: Styles.globalMargins.small,
-      paddingTop: Styles.globalMargins.tiny,
-    },
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      abilityCheck: Styles.platformStyles({
+        common: {
+          paddingRight: Styles.globalMargins.tiny,
+        },
+        isElectron: {
+          paddingTop: 6,
+        },
+        isMobile: {paddingTop: 4},
+      }),
+      checkIcon: {
+        left: -24,
+        paddingTop: 2,
+        position: 'absolute',
+      },
+      container: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.white,
+        },
+        isElectron: {
+          borderColor: Styles.globalColors.blue,
+          borderRadius: Styles.borderRadius,
+          borderStyle: 'solid',
+          borderWidth: 1,
+          boxShadow: `0 0 3px 0 rgba(0, 0, 0, 0.15), 0 0 5px 0 ${Styles.globalColors.black_20_on_white}`,
+          minHeight: 350,
+          width: 310,
+        },
+        isMobile: {
+          flex: 1,
+        },
+      }),
+      disabledRow: {
+        opacity: 0.4,
+      },
+      footer: {
+        flexGrow: 2,
+        justifyContent: 'flex-end',
+        paddingBottom: Styles.globalMargins.small,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      footerButtonBar: {
+        minHeight: undefined,
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+      },
+      headerText: {
+        alignSelf: 'center',
+        paddingBottom: Styles.globalMargins.tiny,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      radioButton: Styles.platformStyles({
+        isMobile: {paddingRight: Styles.globalMargins.tiny},
+      }),
+      roleIcon: {
+        paddingRight: Styles.globalMargins.xtiny,
+      },
+      row: {
+        position: 'relative',
+      },
+      rowBody: Styles.platformStyles({
+        // Width of the radio button. Used to align text with title
+        isElectron: {
+          paddingLeft: 22,
+        },
+        isMobile: {
+          paddingLeft: 38,
+        },
+      }),
+      rowChild: Styles.platformStyles({
+        common: {
+          paddingBottom: Styles.globalMargins.tiny,
+          paddingLeft: Styles.globalMargins.small,
+          paddingRight: Styles.globalMargins.small,
+          paddingTop: Styles.globalMargins.tiny,
+        },
 
-    isMobile: {
-      paddingBottom: Styles.globalMargins.small,
-      paddingTop: Styles.globalMargins.small,
-    },
-  }),
-  scroll: {
-    backgroundColor: Styles.globalColors.white,
-  },
-  text: {
-    textAlign: 'left',
-  },
-})
+        isMobile: {
+          paddingBottom: Styles.globalMargins.small,
+          paddingTop: Styles.globalMargins.small,
+        },
+      }),
+      scroll: {
+        backgroundColor: Styles.globalColors.white,
+      },
+      text: {
+        textAlign: 'left',
+      },
+    } as const)
+)
 
 // Helper to use this as a floating box
 export type FloatingProps = {
@@ -364,7 +377,8 @@ export class FloatingRolePicker extends React.Component<FloatingProps, {ref: Kb.
     )
     return (
       <>
-        <Kb.Box ref={this._setRef}>{children}</Kb.Box>
+        {children}
+        <Kb.Box ref={this._setRef} />
         {open && (
           <Kb.FloatingBox
             attachTo={this._returnRef}
@@ -372,9 +386,9 @@ export class FloatingRolePicker extends React.Component<FloatingProps, {ref: Kb.
             onHidden={onCancel}
             hideKeyboard={true}
           >
-            <Kb.Box2 direction={'vertical'} fullHeight={Styles.isMobile} style={floatingContainerStyle}>
+            <Kb.Box2 direction="vertical" fullHeight={Styles.isMobile} style={floatingContainerStyle}>
               {Styles.isMobile && (
-                <Kb.HeaderHocHeader onLeftAction={onCancel} leftAction={'cancel'} title="Pick a role" />
+                <Kb.HeaderHocHeader onLeftAction={onCancel} leftAction="cancel" title="Pick a role" />
               )}
               {wrappedPicker}
             </Kb.Box2>
@@ -394,9 +408,9 @@ export const sendNotificationFooter = (
   <Kb.Box2
     direction="horizontal"
     fullWidth={!Styles.isMobile}
-    centerChildren={true}
     style={{
       paddingBottom: Styles.globalMargins.tiny,
+      paddingLeft: Styles.globalMargins.small,
       paddingTop: Styles.globalMargins.tiny,
     }}
   >

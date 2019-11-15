@@ -6,12 +6,12 @@ import {AllowedColors} from '../common-adapters/text'
 import {assertionToDisplay} from '../common-adapters/usernames'
 import * as Tabs from './tabs'
 import * as Flow from '../util/flow'
-import * as Router2Constants from './router2'
 import * as SettingsConstants from './settings'
-import {invert} from 'lodash-es'
+import invert from 'lodash/invert'
 import {TypedState} from './reducer'
 import HiddenString from '../util/hidden-string'
 import flags from '../util/feature-flags'
+import * as TeamBuildingConstants from './team-building'
 
 export const balanceDeltaToString = invert(RPCTypes.BalanceDelta) as {
   [K in RPCTypes.BalanceDelta]: keyof typeof RPCTypes.BalanceDelta
@@ -102,19 +102,6 @@ export const makeStellarDetails = I.Record<Types._StellarDetails>({
   isPromoted: false,
 })
 
-export const makeInflationDestination = I.Record<Types._InflationDestination>({
-  address: '',
-  link: '',
-  name: '',
-  recommended: false,
-})
-
-export const makeAccountInflationDestination = I.Record<Types._AccountInflationDestination>({
-  accountID: Types.noAccountID,
-  name: '',
-})
-export const noAccountInflationDestination = makeAccountInflationDestination()
-
 export const makeReserve = I.Record<Types._Reserve>({
   amount: '',
   description: '',
@@ -191,6 +178,7 @@ export const makeBuiltPayment = I.Record<Types._BuiltPayment>({
   displayAmountXLM: '',
   from: Types.noAccountID,
   publicMemoErrMsg: new HiddenString(''),
+  publicMemoOverride: new HiddenString(''),
   readyToReview: false,
   readyToSend: 'spinning',
   reviewBanners: null,
@@ -281,9 +269,6 @@ export const makeState = I.Record<Types._State>({
   exportedSecretKey: new HiddenString(''),
   exportedSecretKeyAccountID: Types.noAccountID,
   externalPartners: I.List(),
-  inflationDestinationError: '',
-  inflationDestinationMap: I.Map(),
-  inflationDestinations: I.List(),
   lastSentXLM: false,
   linkExistingAccountError: '',
   mobileOnlyMap: I.Map(),
@@ -305,7 +290,9 @@ export const makeState = I.Record<Types._State>({
   sep7ConfirmInfo: null,
   sep7ConfirmPath: emptyBuiltPaymentAdvanced,
   sep7ConfirmURI: '',
+  sep7SendError: '',
   staticConfig: null,
+  teamBuilding: TeamBuildingConstants.makeSubState(),
   trustline: emptyTrustline,
   unreadPaymentsMap: I.Map(),
 })
@@ -319,6 +306,7 @@ export const buildPaymentResultToBuiltPayment = (b: RPCTypes.BuildPaymentResLoca
     displayAmountXLM: b.displayAmountXLM,
     from: b.from ? Types.stringToAccountID(b.from) : Types.noAccountID,
     publicMemoErrMsg: new HiddenString(b.publicMemoErrMsg),
+    publicMemoOverride: new HiddenString(b.publicMemoOverride),
     readyToReview: b.readyToReview,
     secretNoteErrMsg: new HiddenString(b.secretNoteErrMsg),
     sendingIntentionXLM: b.sendingIntentionXLM,
@@ -706,16 +694,6 @@ export const updatePaymentsReceived = (
   )
 }
 
-export const inflationDestResultToAccountInflationDest = (res: RPCTypes.InflationDestinationResultLocal) => {
-  if (!res.destination) {
-    return noAccountInflationDestination
-  }
-  return makeAccountInflationDestination({
-    accountID: Types.stringToAccountID(res.destination),
-    name: res.knownDestination ? res.knownDestination.name : undefined,
-  })
-}
-
 export const airdropWaitingKey = 'wallets:airdrop'
 export const assetDepositWaitingKey = (issuerAccountID: Types.AccountID, assetCode: string) =>
   `wallets:assetDeposit:${Types.makeAssetID(issuerAccountID, assetCode)}`
@@ -742,7 +720,6 @@ export const validateAccountNameWaitingKey = 'wallets:validateAccountName'
 export const validateSecretKeyWaitingKey = 'wallets:validateSecretKey'
 export const getRequestDetailsWaitingKey = (id: Types.PaymentID) =>
   `wallets:requestDetailsWaitingKey:${Types.paymentIDToString(id)}`
-export const inflationDestinationWaitingKey = 'wallets:inflationDestination'
 export const setAccountMobileOnlyWaitingKey = (id: Types.AccountID) =>
   `wallets:setAccountMobileOnly:${Types.accountIDToString(id)}`
 export const checkOnlineWaitingKey = 'wallets:checkOnline'
@@ -760,16 +737,8 @@ export const getAccountIDs = (state: TypedState) => state.wallets.accountMap.key
 
 export const getAccounts = (state: TypedState) => state.wallets.accountMap.valueSeq().toList()
 
-export const getAirdropSelected = () => {
-  const path = Router2Constants.getFullRoute()
-  const topPath = path[path.length - 1].routeName
-  const nextPathDown = path[path.length - 2].routeName
-  return (
-    topPath === 'airdrop' ||
-    topPath === 'airdropQualify' ||
-    (topPath === 'whatIsStellarModal' && nextPathDown === 'airdrop')
-  )
-}
+export const getAirdropSelected = (state: TypedState) =>
+  state.wallets.selectedAccount === Types.airdropAccountID
 
 export const getSelectedAccount = (state: TypedState) => state.wallets.selectedAccount
 
@@ -809,8 +778,10 @@ export const getDefaultAccountID = (state: TypedState) => {
   return defaultAccount ? defaultAccount.accountID : null
 }
 
-export const getInflationDestination = (state: TypedState, accountID: Types.AccountID) =>
-  state.wallets.inflationDestinationMap.get(accountID, noAccountInflationDestination)
+export const getDefaultAccount = (state: TypedState) => {
+  const defaultAccount = state.wallets.accountMap.find(a => a.isDefault)
+  return defaultAccount || unknownAccount
+}
 
 export const getExternalPartners = (state: TypedState) => state.wallets.externalPartners
 

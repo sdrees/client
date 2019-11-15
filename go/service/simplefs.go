@@ -350,17 +350,6 @@ func (s *SimpleFSHandler) SimpleFSSyncStatus(ctx context.Context, filter keybase
 	return cli.SimpleFSSyncStatus(ctx, filter)
 }
 
-// SimpleFSGetHTTPAddressAndToken implements the SimpleFSInterface.
-func (s *SimpleFSHandler) SimpleFSGetHTTPAddressAndToken(ctx context.Context) (keybase1.SimpleFSGetHTTPAddressAndTokenResponse, error) {
-	ctx, cancel := s.wrapContextWithTimeout(ctx)
-	defer cancel()
-	cli, err := s.client()
-	if err != nil {
-		return keybase1.SimpleFSGetHTTPAddressAndTokenResponse{}, err
-	}
-	return cli.SimpleFSGetHTTPAddressAndToken(ctx)
-}
-
 // SimpleFSUserEditHistory implements the SimpleFSInterface.
 func (s *SimpleFSHandler) SimpleFSUserEditHistory(ctx context.Context) (
 	res []keybase1.FSFolderEditHistory, err error) {
@@ -388,14 +377,14 @@ func (s *SimpleFSHandler) SimpleFSFolderEditHistory(
 
 // SimpleFSReset implements the SimpleFSInterface.
 func (s *SimpleFSHandler) SimpleFSReset(
-	ctx context.Context, path keybase1.Path) (err error) {
+	ctx context.Context, arg keybase1.SimpleFSResetArg) (err error) {
 	ctx, cancel := s.wrapContextWithTimeout(ctx)
 	defer cancel()
 	cli, err := s.client()
 	if err != nil {
 		return err
 	}
-	return cli.SimpleFSReset(ctx, path)
+	return cli.SimpleFSReset(ctx, arg)
 }
 
 // SimpleFSGetUserQuotaUsage implements the SimpleFSInterface.
@@ -421,6 +410,19 @@ func (s *SimpleFSHandler) SimpleFSGetTeamQuotaUsage(
 		return keybase1.SimpleFSQuotaUsage{}, err
 	}
 	return cli.SimpleFSGetTeamQuotaUsage(ctx, teamName)
+}
+
+// SimpleFSGetFolder implements the SimpleFSInterface.
+func (s *SimpleFSHandler) SimpleFSGetFolder(
+	ctx context.Context, kbfsPath keybase1.KBFSPath) (
+	res keybase1.FolderWithFavFlags, err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return keybase1.FolderWithFavFlags{}, err
+	}
+	return cli.SimpleFSGetFolder(ctx, kbfsPath)
 }
 
 // SimpleFSFolderSyncConfigAndStatus implements the SimpleFSInterface.
@@ -619,4 +621,94 @@ func (s *SimpleFSHandler) SimpleFSUnsubscribe(ctx context.Context, arg keybase1.
 		return err
 	}
 	return cli.SimpleFSUnsubscribe(ctx, arg)
+}
+
+func (s *SimpleFSHandler) SimpleFSStartDownload(
+	ctx context.Context, arg keybase1.SimpleFSStartDownloadArg) (downloadID string, err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return "", err
+	}
+	return cli.SimpleFSStartDownload(ctx, arg)
+}
+
+func (s *SimpleFSHandler) SimpleFSGetDownloadStatus(ctx context.Context) (
+	status keybase1.DownloadStatus, err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return keybase1.DownloadStatus{}, err
+	}
+	return cli.SimpleFSGetDownloadStatus(ctx)
+}
+
+func (s *SimpleFSHandler) SimpleFSCancelDownload(
+	ctx context.Context, downloadID string) (err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return err
+	}
+	return cli.SimpleFSCancelDownload(ctx, downloadID)
+}
+
+func (s *SimpleFSHandler) SimpleFSDismissDownload(
+	ctx context.Context, downloadID string) (err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return err
+	}
+	return cli.SimpleFSDismissDownload(ctx, downloadID)
+}
+
+func (s *SimpleFSHandler) SimpleFSGetDownloadInfo(
+	ctx context.Context, downloadID string) (downloadInfo keybase1.DownloadInfo, err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return keybase1.DownloadInfo{}, err
+	}
+	return cli.SimpleFSGetDownloadInfo(ctx, downloadID)
+}
+
+func (s *SimpleFSHandler) SimpleFSConfigureDownload(
+	ctx context.Context, arg keybase1.SimpleFSConfigureDownloadArg) (err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return err
+	}
+	return cli.SimpleFSConfigureDownload(ctx, arg)
+}
+
+// SimpleFSGetGUIFileContext implements the SimpleFSInterface.
+func (s *SimpleFSHandler) SimpleFSGetGUIFileContext(ctx context.Context,
+	path keybase1.KBFSPath) (resource keybase1.GUIFileContext, err error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return keybase1.GUIFileContext{}, err
+	}
+	return cli.SimpleFSGetGUIFileContext(ctx, path)
+}
+
+// SimpleFSGetFilesTabBadge implements the SimpleFSInterface.
+func (s *SimpleFSHandler) SimpleFSGetFilesTabBadge(ctx context.Context) (
+	keybase1.FilesTabBadge, error) {
+	ctx, cancel := s.wrapContextWithTimeout(ctx)
+	defer cancel()
+	cli, err := s.client()
+	if err != nil {
+		return keybase1.FilesTabBadge_NONE, err
+	}
+	return cli.SimpleFSGetFilesTabBadge(ctx)
 }

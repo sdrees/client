@@ -47,7 +47,7 @@ js_tests() {
     has_js_files
 
     echo 'yarn install'
-    yarn modules
+    yarn modules --ignore-engines
     check_rc $? 'yarn install fail' 1
 
     echo 'checking no mutated yarn.lock file'
@@ -71,6 +71,10 @@ js_tests() {
     echo 'yarn test'
     yarn test
     check_rc $? 'yarn test fail' 1
+
+    echo 'yarn prettier-check'
+    yarn prettier-check
+    check_rc $? 'yarn prettier-check fail' 1
 }
 
 js_tests

@@ -1,7 +1,7 @@
 import * as React from 'react'
-import {WebView} from 'react-native'
+import {WebView as NativeWebView} from 'react-native-webview'
 import {WebViewInjections, WebViewProps} from './web-view'
-import {memoize} from 'lodash-es'
+import memoize from 'lodash/memoize'
 
 const escape = (str?: string): string => (str ? str.replace(/\\/g, '\\\\').replace(/`/g, '\\`') : '')
 
@@ -20,9 +20,9 @@ const combineJavaScriptAndCSS = (injections?: WebViewInjections) =>
 `
 
 const KBWebView = (props: WebViewProps) => {
-  const {onLoadingStateChange} = props
+  const {onLoadingStateChange, onError} = props
   return (
-    <WebView
+    <NativeWebView
       allowsInlineMediaPlayback={true}
       useWebKit={true}
       source={{uri: props.url}}
@@ -30,6 +30,7 @@ const KBWebView = (props: WebViewProps) => {
       style={props.style}
       onLoadStart={onLoadingStateChange && (() => onLoadingStateChange(true))}
       onLoadEnd={onLoadingStateChange && (() => onLoadingStateChange(false))}
+      onError={onError && (syntheticEvent => onError(syntheticEvent.nativeEvent.description))}
     />
   )
 }

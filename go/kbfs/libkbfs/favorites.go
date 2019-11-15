@@ -58,14 +58,16 @@ func (e errIncorrectFavoritesCacheVersion) Error() string {
 // given ctx is used for all network operations.
 type favReq struct {
 	// Request types
-	clear       bool
-	refresh     bool
-	buffered    bool
-	toAdd       []favorites.ToAdd
-	toDel       []favorites.Folder
-	favs        chan<- []favorites.Folder
-	favsAll     chan<- keybase1.FavoritesResult
-	homeTLFInfo *homeTLFInfo
+	clear              bool
+	refresh            bool
+	buffered           bool
+	toAdd              []favorites.ToAdd
+	toDel              []favorites.Folder
+	toGet              *favorites.Folder
+	folderWithFavFlags chan<- *keybase1.FolderWithFavFlags
+	favs               chan<- []favorites.Folder
+	favsAll            chan<- keybase1.FavoritesResult
+	homeTLFInfo        *homeTLFInfo
 
 	// For asynchronous refreshes, pass in the Favorites from the server here
 	favResult *keybase1.FavoritesResult
@@ -99,7 +101,8 @@ type Favorites struct {
 	// Channel that is full when there is already a refresh queued
 	refreshWaiting chan struct{}
 
-	wg kbfssync.RepeatedWaitGroup
+	wg     kbfssync.RepeatedWaitGroup
+	loopWG kbfssync.RepeatedWaitGroup
 
 	// cache tracks the favorites for this user, that we know about.
 	// It may not be consistent with the server's view of the user's
@@ -117,8 +120,9 @@ type Favorites struct {
 	inFlightLock sync.Mutex
 	inFlightAdds map[favorites.Folder]*favReq
 
-	muShutdown sync.RWMutex
-	shutdown   bool
+	shutdownChan chan struct{}
+	muShutdown   sync.RWMutex
+	shutdown     bool
 }
 
 func newFavoritesWithChan(config Config, reqChan chan *favReq) *Favorites {
@@ -143,6 +147,7 @@ func newFavoritesWithChan(config Config, reqChan chan *favReq) *Favorites {
 		refreshWaiting:  make(chan struct{}, 1),
 		inFlightAdds:    make(map[favorites.Folder]*favReq),
 		log:             log,
+		shutdownChan:    make(chan struct{}),
 	}
 
 	return f
@@ -396,7 +401,7 @@ func (f *Favorites) handleReq(req *favReq) (err error) {
 	defer func() {
 		f.closeReq(req, err)
 		if changed {
-			f.config.SubscriptionManagerPublisher().FavoritesChanged()
+			f.config.SubscriptionManagerPublisher().PublishChange(keybase1.SubscriptionTopic_FAVORITES)
 			f.config.Reporter().NotifyFavoritesChanged(req.ctx)
 		}
 	}()
@@ -592,6 +597,28 @@ func (f *Favorites) handleReq(req *favReq) (err error) {
 		}
 	}
 
+	if req.folderWithFavFlags != nil && req.toGet != nil {
+		fav := *req.toGet
+		if data, ok := f.favCache[fav]; ok {
+			req.folderWithFavFlags <- &keybase1.FolderWithFavFlags{
+				Folder:     favoriteToFolder(fav, data),
+				IsFavorite: true,
+			}
+		} else if data, ok := f.newCache[*req.toGet]; ok {
+			req.folderWithFavFlags <- &keybase1.FolderWithFavFlags{
+				Folder: favoriteToFolder(fav, data),
+				IsNew:  true,
+			}
+		} else if data, ok := f.ignoredCache[*req.toGet]; ok {
+			req.folderWithFavFlags <- &keybase1.FolderWithFavFlags{
+				Folder:    favoriteToFolder(fav, data),
+				IsIgnored: true,
+			}
+		} else {
+			req.folderWithFavFlags <- nil
+		}
+	}
+
 	if req.homeTLFInfo != nil {
 		f.homeTLFInfo = *req.homeTLFInfo
 	}
@@ -600,6 +627,8 @@ func (f *Favorites) handleReq(req *favReq) (err error) {
 }
 
 func (f *Favorites) loop() {
+	f.loopWG.Add(1)
+	defer f.loopWG.Done()
 	bufferedTicker := time.NewTicker(favoritesBufferedReqInterval)
 	defer bufferedTicker.Stop()
 
@@ -646,6 +675,7 @@ func (f *Favorites) Shutdown() error {
 	f.shutdown = true
 	close(f.reqChan)
 	close(f.bufferedReqChan)
+	close(f.shutdownChan)
 	if f.diskCache != nil {
 		err := f.diskCache.Close()
 		if err != nil {
@@ -653,7 +683,11 @@ func (f *Favorites) Shutdown() error {
 				"Could not close disk favorites cache: %v", err)
 		}
 	}
-	return f.wg.Wait(context.Background())
+	err := f.wg.Wait(context.Background())
+	if err != nil {
+		return err
+	}
+	return f.loopWG.Wait(context.Background())
 }
 
 func (f *Favorites) waitOnReq(ctx context.Context,
@@ -882,10 +916,13 @@ func (f *Favorites) RefreshCacheWhenMTimeChanged(ctx context.Context) {
 	select {
 	case f.bufferedReqChan <- req:
 		go func() {
-			<-req.done
-			if req.err != nil {
-				f.log.CDebugf(ctx, "Failed to refresh cached Favorites ("+
-					"error in main loop): %+v", req.err)
+			select {
+			case <-req.done:
+				if req.err != nil {
+					f.log.CDebugf(ctx, "Failed to refresh cached Favorites ("+
+						"error in main loop): %+v", req.err)
+				}
+			case <-f.shutdownChan:
 			}
 		}()
 	default:
@@ -915,6 +952,33 @@ func (f *Favorites) ClearCache(ctx context.Context) {
 		f.wg.Done()
 		return
 	}
+}
+
+// GetFolderWithFavFlags returns the a FolderWithFavFlags for give folder, if found.
+func (f *Favorites) GetFolderWithFavFlags(
+	ctx context.Context, fav favorites.Folder) (
+	folderWithFavFlags *keybase1.FolderWithFavFlags, errr error) {
+	if f.disabled {
+		return nil, nil
+	}
+	f.muShutdown.RLock()
+	defer f.muShutdown.RUnlock()
+	if f.shutdown {
+		return nil, data.ShutdownHappenedError{}
+	}
+	ch := make(chan *keybase1.FolderWithFavFlags, 1)
+	req := &favReq{
+		ctx:                ctx,
+		toGet:              &fav,
+		folderWithFavFlags: ch,
+		done:               make(chan struct{}),
+	}
+	err := f.sendReq(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	folderWithFavFlags = <-ch
+	return folderWithFavFlags, nil
 }
 
 // Get returns the logged-in user's list of favorites. It uses the cache.

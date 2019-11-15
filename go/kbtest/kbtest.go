@@ -155,7 +155,8 @@ func DeleteAccount(tc libkb.TestContext, u *FakeUser) {
 
 // copied from engine/common_test.go
 func Logout(tc libkb.TestContext) {
-	if err := tc.G.Logout(context.TODO()); err != nil {
+	mctx := libkb.NewMetaContextForTest(tc)
+	if err := mctx.LogoutKillSecrets(); err != nil {
 		tc.T.Fatalf("logout error: %s", err)
 	}
 }
@@ -176,10 +177,10 @@ func RotatePaper(tc libkb.TestContext, u *FakeUser) {
 	user, err := libkb.LoadUser(arg)
 	require.NoError(tc.T, err)
 
-	activeDevices := []*libkb.Device{}
+	activeDevices := make([]*libkb.Device, 0)
 	for _, device := range user.GetComputedKeyFamily().GetAllDevices() {
 		if device.Status != nil && *device.Status == libkb.DeviceStatusActive {
-			activeDevices = append(activeDevices, device)
+			activeDevices = append(activeDevices, device.Device)
 		}
 	}
 
@@ -286,7 +287,8 @@ func ProvisionNewDeviceKex(tcX *libkb.TestContext, tcY *libkb.TestContext, userX
 }
 
 type TestProvisionUI struct {
-	SecretCh chan kex2.Secret
+	SecretCh   chan kex2.Secret
+	DeviceType string
 }
 
 func (u *TestProvisionUI) ChooseProvisioningMethod(_ context.Context, _ keybase1.ChooseProvisioningMethodArg) (keybase1.ProvisionMethod, error) {
@@ -302,6 +304,11 @@ func (u *TestProvisionUI) SwitchToGPGSignOK(ctx context.Context, arg keybase1.Sw
 }
 
 func (u *TestProvisionUI) ChooseDevice(_ context.Context, arg keybase1.ChooseDeviceArg) (keybase1.DeviceID, error) {
+	for _, d := range arg.Devices {
+		if d.Type == u.DeviceType {
+			return d.DeviceID, nil
+		}
+	}
 	return "", nil
 }
 

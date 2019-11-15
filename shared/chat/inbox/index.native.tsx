@@ -1,43 +1,33 @@
-import * as I from 'immutable'
-import * as React from 'react'
 import * as Kb from '../../common-adapters/mobile.native'
+import * as React from 'react'
+import * as RowSizes from './row/sizes'
 import * as Styles from '../../styles'
-import {makeRow} from './row'
+import * as T from './index.d'
+import * as Types from '../../constants/types/chat2'
+import BigTeamsDivider from './row/big-teams-divider/container'
 import BuildTeam from './row/build-team/container'
 import ChatInboxHeader from './row/chat-inbox-header/container'
-import BigTeamsDivider from './row/big-teams-divider/container'
-import TeamsDivider from './row/teams-divider/container'
-import {virtualListMarks} from '../../local-debug'
-import {debounce} from 'lodash-es'
-import UnreadShortcut from './unread-shortcut'
-import * as RowSizes from './row/sizes'
 import InboxSearch from '../inbox-search/container'
-import * as T from './index.types.d'
-import * as Types from '../../constants/types/chat2'
+import TeamsDivider from './row/teams-divider/container'
+import UnreadShortcut from './unread-shortcut'
+import debounce from 'lodash/debounce'
+import {makeRow} from './row'
+import {virtualListMarks} from '../../local-debug'
+import shallowEqual from 'shallowequal'
 
 const NoChats = (props: {onNewChat: () => void}) => (
-  <Kb.Box
-    style={{
-      ...Styles.globalStyles.flexBoxColumn,
-      ...Styles.globalStyles.fillAbsolute,
-      alignItems: 'center',
-      justifyContent: 'center',
-    }}
-  >
-    <Kb.Text type="BodySmall" negative={true} style={styles.text}>
-      All conversations are
-    </Kb.Text>
-    <Kb.Text type="BodySmall" negative={true} style={styles.text}>
-      end-to-end encrypted.
-    </Kb.Text>
-    <Kb.Button
-      onClick={props.onNewChat}
-      type="Success"
-      mode="Primary"
-      label="Start a new chat"
-      style={{marginTop: Styles.globalMargins.small}}
-    />
-  </Kb.Box>
+  <Kb.Box2 direction="vertical" gap="small" style={styles.noChatsContainer}>
+    <Kb.Icon type="icon-fancy-encrypted-phone-mobile-226-96" />
+    <Kb.Box2 direction="vertical">
+      <Kb.Text type="BodySmall" center={true}>
+        All conversations are
+      </Kb.Text>
+      <Kb.Text type="BodySmall" center={true}>
+        end-to-end encrypted.
+      </Kb.Text>
+    </Kb.Box2>
+    <Kb.Button onClick={props.onNewChat} mode="Primary" label="Start a new chat" style={styles.button} />
+  </Kb.Box2>
 )
 
 type State = {
@@ -58,7 +48,7 @@ class Inbox extends React.PureComponent<T.Props, State> {
   state = {showFloating: false, showUnread: false}
 
   componentDidUpdate(prevProps: T.Props) {
-    if (!I.is(prevProps.unreadIndices, this.props.unreadIndices)) {
+    if (!shallowEqual(prevProps.unreadIndices, this.props.unreadIndices)) {
       this._updateShowUnread()
     }
     if (this.props.rows.length !== prevProps.rows.length) {
@@ -79,11 +69,19 @@ class Inbox extends React.PureComponent<T.Props, State> {
           rows={this.props.rows}
         />
       )
+    } else if (row.type === 'teamBuilder') {
+      element = <BuildTeam />
     } else {
       element = makeRow({
         channelname: row.channelname,
         conversationIDKey: row.conversationIDKey,
+        isTeam: row.isTeam,
+        navKey: this.props.navKey,
+        snippet: row.snippet,
+        snippetDecoration: row.snippetDecoration,
+        teamID: (row.type === 'bigHeader' && row.teamID) || '',
         teamname: row.teamname,
+        time: row.time || undefined,
         type: row.type,
       })
     }
@@ -98,7 +96,7 @@ class Inbox extends React.PureComponent<T.Props, State> {
   _keyExtractor = item => {
     const row = item
 
-    if (row.type === 'divider' || row.type === 'bigTeamsLabel') {
+    if (row.type === 'divider' || row.type === 'bigTeamsLabel' || row.type === 'teamBuilder') {
       return row.type
     }
 
@@ -137,7 +135,7 @@ class Inbox extends React.PureComponent<T.Props, State> {
   }
 
   _updateShowUnread = () => {
-    if (!this.props.unreadIndices.size || this._lastVisibleIdx < 0) {
+    if (!this.props.unreadIndices.length || this._lastVisibleIdx < 0) {
       this.setState(s => (s.showUnread ? {showUnread: false} : null))
       return
     }
@@ -244,6 +242,11 @@ class Inbox extends React.PureComponent<T.Props, State> {
     return (
       <Kb.ErrorBoundary>
         <Kb.Box style={styles.container}>
+          {!!this.props.isLoading && (
+            <Kb.Box style={styles.loadingContainer}>
+              <Kb.LoadingLine />
+            </Kb.Box>
+          )}
           {this.props.isSearching ? (
             <Kb.Box2 direction="vertical" fullWidth={true}>
               <InboxSearch header={HeadComponent} />
@@ -262,7 +265,10 @@ class Inbox extends React.PureComponent<T.Props, State> {
             />
           )}
           {noChats}
-          {floatingDivider || (!this.props.isSearching && <BuildTeam />)}
+          {floatingDivider ||
+            ((this.props.rows.length === 0 || !this.props.hasBigTeams) &&
+              !this.props.isLoading &&
+              !this.props.neverLoaded && <BuildTeam />)}
           {this.state.showUnread && !this.props.isSearching && !this.state.showFloating && (
             <UnreadShortcut onClick={this._scrollToUnread} />
           )}
@@ -272,17 +278,33 @@ class Inbox extends React.PureComponent<T.Props, State> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  container: {
-    ...Styles.globalStyles.flexBoxColumn,
-    backgroundColor: Styles.globalColors.fastBlank,
-    flex: 1,
-    position: 'relative',
-  },
-  text: {
-    color: Styles.globalColors.black_50,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      button: {width: '100%'},
+      container: {
+        ...Styles.globalStyles.flexBoxColumn,
+        backgroundColor: Styles.globalColors.fastBlank,
+        flex: 1,
+        position: 'relative',
+      },
+      loadingContainer: {
+        left: 0,
+        position: 'absolute',
+        right: 0,
+        top: 0,
+        zIndex: 1000,
+      },
+      noChatsContainer: {
+        ...Styles.globalStyles.fillAbsolute,
+        alignItems: 'center',
+        flex: 1,
+        justifyContent: 'center',
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+      },
+    } as const)
+)
 
 export default Inbox
 export type RowItem = T.RowItem

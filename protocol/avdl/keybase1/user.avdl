@@ -39,6 +39,7 @@ protocol user {
     boolean isVerified;
     boolean isPrimary;
     IdentityVisibility visibility;
+    UnixTime lastVerifyEmailDate;
   }
 
   record UserSettings {
@@ -123,6 +124,7 @@ protocol user {
     UID uid;
     string username;
     string fullname;
+    map<string, string> serviceMap;
   }
   array<InterestingPerson> interestingPeople(int maxUsers);
 
@@ -154,6 +156,7 @@ protocol user {
     boolean belowFold;
     string profileText; // "Prove your Twitter", "Add a PGP key"
     array<SizedImage> profileIcon;
+    array<SizedImage> profileIconWhite;
     string pickerText; // "Twitter", "Your own website", "octodon.xyz"
     string pickerSubtext; // "twitter.com", "Mastodon instance"
     array<SizedImage> pickerIcon;
@@ -178,17 +181,58 @@ protocol user {
   */
   NextMerkleRootRes findNextMerkleRootAfterReset(UID uid, Seqno resetSeqno, ResetMerkleRoot prev);
 
-  boolean loadHasRandomPw(int sessionID, boolean forceRepoll, boolean noShortTimeout);
+  /**
+   PassphraseState values are used in .config.json, so should not be changed without a migration strategy
+  */
+  enum PassphraseState {
+    KNOWN_0,
+    RANDOM_1
+  }
 
   record CanLogoutRes {
     boolean canLogout;
-    string reason; // CLI prints this string.
-    boolean setPassphrase; // GUI is driven by this boolean.
+    string reason;
+    PassphraseState passphraseState;
   }
   CanLogoutRes canLogout(int sessionID);
 
+  PassphraseState loadPassphraseState(int sessionID);
+
   union { null, UserCard } userCard(int sessionID, string username, boolean useSession);
 
+  // user.passphrase_state gregor message body
+  @lint("ignore")
+  record UserPassphraseStateMsg {
+    @jsonkey("state")
+    PassphraseState passphraseState;
+  }
+
+  // User Blocking
+
+  record UserBlock {
+    string username;
+    boolean chatBlocked;
+    boolean followBlocked;
+    union { null, Time } createTime;
+    union { null, Time } modifyTime;
+  }
+
+  record RecordInfoArg {
+    string reportText;
+    boolean attachMessages;
+  }
+
+  record UserBlockArg {
+    string username;
+    union { null, boolean } setChatBlock;
+    union { null, boolean } setFollowBlock;
+    union { null, RecordInfoArg } report;
+  }
+
+  void setUserBlocks(int sessionID, array<UserBlockArg> blocks);
+  array<UserBlock> getUserBlocks(int sessionID, array<string> usernames);
+
+  // Legacy user blocking:
   void blockUser(string username);
   void unblockUser(string username);
 }

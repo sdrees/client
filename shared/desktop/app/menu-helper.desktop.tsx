@@ -1,157 +1,145 @@
-import * as SafeElectron from '../../util/safe-electron.desktop'
-import {executeActionsForContext} from '../../util/quit-helper.desktop'
+import * as Electron from 'electron'
 import {isDarwin} from '../../constants/platform'
 
 let devToolsState = false
 
-export default function makeMenu(window: any) {
-  const editMenu = {
+const windowQuit = () => {
+  Electron.app.emit('KBkeybase', '', {type: 'closeWindows'})
+}
+
+export default function makeMenu(window: Electron.BrowserWindow) {
+  const editMenu = new Electron.MenuItem({
     label: 'Edit',
-    submenu: [
-      {accelerator: 'CmdOrCtrl+Z', label: 'Undo', role: 'undo'},
-      {accelerator: 'Shift+CmdOrCtrl+Z', label: 'Redo', role: 'redo'},
-      {type: 'separator'},
-      {accelerator: 'CmdOrCtrl+X', label: 'Cut', role: 'cut'},
-      {accelerator: 'CmdOrCtrl+C', label: 'Copy', role: 'copy'},
-      {accelerator: 'CmdOrCtrl+V', label: 'Paste', role: 'paste'},
-      {accelerator: 'CmdOrCtrl+A', label: 'Select All', role: 'selectall'},
-    ],
-  }
-  const windowMenu = {
+    submenu: Electron.Menu.buildFromTemplate([
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+Z', label: 'Undo', role: 'undo'}),
+      new Electron.MenuItem({accelerator: 'Shift+CmdOrCtrl+Z', label: 'Redo', role: 'redo'}),
+      new Electron.MenuItem({type: 'separator'}),
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+X', label: 'Cut', role: 'cut'}),
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+C', label: 'Copy', role: 'copy'}),
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+V', label: 'Paste', role: 'paste'}),
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+A', label: 'Select All', role: 'selectAll'}),
+    ]),
+  })
+
+  const windowMenu = new Electron.MenuItem({
     label: 'Window',
-    submenu: [
-      {accelerator: 'CmdOrCtrl+=', label: 'Zoom In', role: 'zoomIn'},
-      {label: 'Zoom Out', role: 'zoomOut'},
-      {label: 'Reset zoom ', role: 'resetZoom'},
-      {label: 'Minimize', role: 'minimize'},
-      {accelerator: 'CmdOrCtrl+W', label: 'Close', role: 'close'},
-      {type: 'separator'},
-      {label: 'Bring All to Front', role: 'front'},
-    ].concat(
-      __DEV__
+    submenu: Electron.Menu.buildFromTemplate([
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+=', label: 'Zoom In', role: 'zoomIn'}),
+      new Electron.MenuItem({label: 'Zoom Out', role: 'zoomOut'}),
+      new Electron.MenuItem({label: 'Reset zoom ', role: 'resetZoom'}),
+      new Electron.MenuItem({label: 'Minimize', role: 'minimize'}),
+      new Electron.MenuItem({accelerator: 'CmdOrCtrl+W', label: 'Close', role: 'close'}),
+      new Electron.MenuItem({type: 'separator'}),
+      new Electron.MenuItem({label: 'Bring All to Front', role: 'front'}),
+      ...(__DEV__
         ? [
-            // eslint-disable-line no-undef
-            {
+            new Electron.MenuItem({
               accelerator: 'CmdOrCtrl+R',
-              // @ts-ignore codemode issue
-              click: (item, focusedWindow) => focusedWindow && focusedWindow.reload(),
+              click: (_, focusedWindow) => {
+                focusedWindow && focusedWindow.reload()
+              },
               label: 'Reload',
-            },
-            {
+            }),
+            new Electron.MenuItem({
               accelerator: (() => (isDarwin ? 'Alt+Command+I' : 'Ctrl+Shift+I'))(),
               click: () => {
                 devToolsState = !devToolsState
-                SafeElectron.BrowserWindow.getAllWindows().map(bw =>
+                Electron.BrowserWindow.getAllWindows().map(bw =>
                   devToolsState
                     ? bw.webContents.openDevTools({mode: 'detach'})
                     : bw.webContents.closeDevTools()
                 )
               },
               label: 'Toggle Developer Tools',
-            },
+            }),
           ]
-        : []
-    ),
-  }
-  const helpMenu = {
+        : []),
+    ]),
+  })
+  const helpMenu = new Electron.MenuItem({
     label: 'Help',
-    submenu: [
-      {
-        click() {
-          SafeElectron.getShell().openExternal('https://keybase.io')
+    submenu: Electron.Menu.buildFromTemplate([
+      new Electron.MenuItem({
+        click: () => {
+          Electron.shell.openExternal('https://keybase.io')
         },
         label: 'Learn More',
-      },
-    ],
-  }
+      }),
+    ]),
+  })
 
   if (isDarwin) {
     const template = [
-      {
+      new Electron.MenuItem({
         label: 'Keybase',
-        submenu: [
-          {label: 'About Keybase', role: 'about'},
-          {type: 'separator'},
-          {accelerator: 'CmdOrCtrl+H', label: 'Hide Keybase', role: 'hide'},
-          {accelerator: 'CmdOrCtrl+Shift+H', label: 'Hide Others', role: 'hideothers'},
-          {label: 'Show All', role: 'unhide'},
-          {type: 'separator'},
-          {
+        submenu: Electron.Menu.buildFromTemplate([
+          new Electron.MenuItem({label: 'About Keybase', role: 'about'}),
+          new Electron.MenuItem({type: 'separator'}),
+          new Electron.MenuItem({accelerator: 'CmdOrCtrl+H', label: 'Hide Keybase', role: 'hide'}),
+          new Electron.MenuItem({accelerator: 'CmdOrCtrl+Shift+H', label: 'Hide Others', role: 'hideOthers'}),
+          new Electron.MenuItem({label: 'Show All', role: 'unhide'}),
+          new Electron.MenuItem({type: 'separator'}),
+          new Electron.MenuItem({
             accelerator: 'CmdOrCtrl+Q',
             click() {
-              executeActionsForContext('uiWindow')
+              windowQuit()
             },
             label: 'Minimize to Tray',
-          },
-        ],
-      },
-      {
-        ...editMenu,
-      },
-      {
-        ...windowMenu,
-      },
-      {
-        ...helpMenu,
-      },
+          }),
+        ]),
+      }),
+      {...editMenu},
+      {...windowMenu},
+      {...helpMenu},
     ]
-    const menu = SafeElectron.Menu.buildFromTemplate(template)
-    SafeElectron.Menu.setApplicationMenu(menu)
+    const menu = Electron.Menu.buildFromTemplate(template)
+    Electron.Menu.setApplicationMenu(menu)
   } else {
-    const template = [
-      {
+    const menu = Electron.Menu.buildFromTemplate([
+      new Electron.MenuItem({
         label: '&File',
         submenu: [
           {accelerator: 'CmdOrCtrl+W', label: '&Close', role: 'close'},
           {
             accelerator: 'CmdOrCtrl+Q',
             click() {
-              executeActionsForContext('uiWindow')
+              windowQuit()
             },
             label: '&Minimize to Tray',
           },
         ],
-      },
-      {
-        ...editMenu,
-        label: '&Edit',
-      },
-      {
-        ...windowMenu,
-        label: '&Window',
-      },
-      {
-        ...helpMenu,
-        label: '&Help',
-      },
-    ]
-    const menu = SafeElectron.Menu.buildFromTemplate(template)
+      }),
+      {...editMenu, label: '&Edit'},
+      {...windowMenu, label: '&Window'},
+      {...helpMenu, label: '&Help'},
+    ])
     window.setAutoHideMenuBar(true)
     window.setMenuBarVisibility(false)
     window.setMenu(menu)
   }
+  setupContextMenu(window)
 }
 
-export function setupContextMenu(window: any) {
-  const selectionMenu = SafeElectron.Menu.buildFromTemplate([{role: 'copy'}])
+function setupContextMenu(window: Electron.BrowserWindow) {
+  const selectionMenu = Electron.Menu.buildFromTemplate([{role: 'copy'}])
 
-  const inputMenu = SafeElectron.Menu.buildFromTemplate([
-    {role: 'undo'},
-    {role: 'redo'},
-    {type: 'separator'},
-    {role: 'cut'},
-    {role: 'copy'},
-    {role: 'paste'},
-    {type: 'separator'},
-    {role: 'selectall'},
+  const inputMenu = Electron.Menu.buildFromTemplate([
+    new Electron.MenuItem({role: 'undo'}),
+    new Electron.MenuItem({role: 'redo'}),
+    new Electron.MenuItem({type: 'separator'}),
+    new Electron.MenuItem({role: 'cut'}),
+    new Electron.MenuItem({role: 'copy'}),
+    new Electron.MenuItem({role: 'paste'}),
+    new Electron.MenuItem({type: 'separator'}),
+    new Electron.MenuItem({role: 'selectAll'}),
   ])
 
-  window.webContents.on('context-menu', (_, props) => {
+  window.webContents.on('context-menu', (_: Electron.Event, props: Electron.ContextMenuParams) => {
     const {selectionText, isEditable} = props
     if (isEditable) {
-      inputMenu.popup(window)
+      inputMenu.popup({window})
     } else if (selectionText && selectionText.trim() !== '') {
-      selectionMenu.popup(window)
+      selectionMenu.popup({window})
     }
   })
 }

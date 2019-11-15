@@ -23,6 +23,10 @@ export type Props = {
   isMuted: boolean
   isSelected: boolean
   isTypingSnippet: boolean
+  layoutIsTeam: boolean
+  layoutName: string
+  layoutSnippet?: string
+  layoutSnippetDecoration?: string
   onHideConversation: () => void
   onMuteConversation: () => void
   onSelectConversation: () => void
@@ -48,11 +52,11 @@ type State = {
 
 const SmallTeamBox = Styles.isMobile
   ? Kb.ClickableBox
-  : Styles.styled(Kb.Box)({
+  : Styles.styled(Kb.Box)(() => ({
       '& .conversation-gear': {display: 'none'},
       ':hover .conversation-gear': {display: 'unset'},
       ':hover .conversation-timestamp': {display: 'none'},
-    })
+    }))
 
 class SmallTeam extends React.PureComponent<Props, State> {
   state = {
@@ -151,8 +155,8 @@ class SmallTeam extends React.PureComponent<Props, State> {
                     participantNeedToRekey={props.participantNeedToRekey}
                     youAreReset={props.youAreReset}
                     showBold={props.showBold}
-                    snippet={props.snippet}
-                    snippetDecoration={props.snippetDecoration}
+                    snippet={props.snippet || props.layoutSnippet || ''}
+                    snippetDecoration={props.snippetDecoration || props.layoutSnippetDecoration || ''}
                     subColor={props.subColor}
                     hasResetUsers={props.hasResetUsers}
                     youNeedToRekey={props.youNeedToRekey}
@@ -171,7 +175,7 @@ class SmallTeam extends React.PureComponent<Props, State> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   container: {flexShrink: 0, height: RowSizes.smallRowHeight},
   conversationRow: {
     ...Styles.globalStyles.flexBoxColumn,
@@ -197,6 +201,6 @@ const styles = Styles.styleSheetCreate({
     },
     isElectron: Styles.desktopStyles.clickable,
   }),
-})
+}))
 
 export {SmallTeam}

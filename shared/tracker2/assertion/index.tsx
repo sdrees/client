@@ -9,20 +9,21 @@ type Props = {
   color: Types.AssertionColor
   isSuggestion: boolean
   isYours: boolean
-  metas: ReadonlyArray<Types._AssertionMeta>
+  metas: ReadonlyArray<Types.AssertionMeta>
   notAUser: boolean
   onCopyAddress: () => void
   onRequestLumens: () => void
-  onRecheck: (() => void) | null
-  onRevoke: (() => void) | null
+  onRecheck?: () => void
+  onRevoke?: () => void
   onSendLumens: () => void
   onShowProof?: () => void
-  onShowSite: (() => void) | null
-  onCreateProof: (() => void) | null
+  onShowSite?: () => void
+  onCreateProof?: () => void
   onWhatIsStellar: () => void
   proofURL: string
-  siteIcon: Types.SiteIconSet | null
-  siteIconFull: Types.SiteIconSet | null
+  siteIcon?: Types.SiteIconSet
+  siteIconFull?: Types.SiteIconSet
+  siteIconWhite?: Types.SiteIconSet
   siteURL: string
   state: Types.AssertionState
   timestamp: number
@@ -30,7 +31,7 @@ type Props = {
   value: string
 }
 
-const proofTypeToDesc = proofType => {
+const proofTypeToDesc = (proofType: string) => {
   switch (proofType) {
     case 'btc':
     case 'zcash':
@@ -40,7 +41,7 @@ const proofTypeToDesc = proofType => {
   }
 }
 
-const stateToIcon = state => {
+const stateToIcon = (state: Types.AssertionState) => {
   switch (state) {
     case 'checking':
       return 'iconfont-proof-pending'
@@ -58,7 +59,7 @@ const stateToIcon = state => {
 }
 
 // alternate versions of the ones from `stateToIcon` for the popup menu header
-const stateToDecorationIcon = state => {
+const stateToDecorationIcon = (state: Types.AssertionState) => {
   switch (state) {
     case 'checking':
       return 'icon-proof-pending'
@@ -75,7 +76,7 @@ const stateToDecorationIcon = state => {
   }
 }
 
-const stateToValueTextStyle = state => {
+const stateToValueTextStyle = (state: Types.AssertionState) => {
   switch (state) {
     case 'revoked':
       return styles.strikeThrough
@@ -130,9 +131,7 @@ const assertionColorToColor = (c: Types.AssertionColor) => {
 
 class _StellarValue extends React.PureComponent<
   Props & Kb.OverlayParentProps,
-  {
-    storedAttachmentRef: Kb.Box | null
-  }
+  {storedAttachmentRef: Kb.Box | null}
 > {
   state = {storedAttachmentRef: null}
   // only set this once ever
@@ -157,7 +156,9 @@ class _StellarValue extends React.PureComponent<
       </Kb.Text>
     ) : (
       <Kb.Box ref={r => this._storeAttachmentRef(r)} style={styles.tooltip}>
-        <Kb.WithTooltip text={Styles.isMobile || this.props.showingMenu ? '' : 'Stellar Federation Address'}>
+        <Kb.WithTooltip
+          tooltip={Styles.isMobile || this.props.showingMenu ? '' : 'Stellar Federation Address'}
+        >
           <Kb.Text
             type="BodyPrimaryLink"
             onClick={this.props.toggleShowingMenu}
@@ -224,12 +225,12 @@ const Value = (p: Props) => {
   return content
 }
 
-const HoverOpacity = Styles.styled(Kb.Box)({
+const HoverOpacity = Styles.styled(Kb.Box)(() => ({
   '&:hover': {
     opacity: 1,
   },
   opacity: 0.5,
-})
+}))
 
 type State = {
   showingMenu: boolean
@@ -272,7 +273,7 @@ class Assertion extends React.PureComponent<Props, State> {
     }
 
     if (p.metas.find(m => m.label === 'pending')) {
-      let pendingMessage
+      let pendingMessage: undefined | string
       switch (p.type) {
         case 'hackernews':
           pendingMessage =
@@ -325,7 +326,11 @@ class Assertion extends React.PureComponent<Props, State> {
     }
   }
   _siteIcon = (full: boolean) => {
-    const set = full ? this.props.siteIconFull : this.props.siteIcon
+    const set = full
+      ? this.props.siteIconFull
+      : Styles.isDarkMode()
+      ? this.props.siteIconWhite
+      : this.props.siteIcon
     if (!set) return null
     let child = <SiteIcon full={full} set={set} />
     if (full) {
@@ -412,38 +417,41 @@ class Assertion extends React.PureComponent<Props, State> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  container: {flexShrink: 0, paddingBottom: 4, paddingTop: 4},
-  crypto: Styles.platformStyles({
-    isElectron: {display: 'inline-block', fontSize: 11, wordBreak: 'break-all'},
-  }),
-  floatingMenu: {
-    maxWidth: 240,
-    minWidth: 196,
-  },
-  halfOpacity: Styles.platformStyles({
-    isMobile: {opacity: 0.5}, // desktop is handled by emotion
-  }),
-  menuHeader: {
-    borderBottomColor: Styles.globalColors.black_10,
-    borderBottomWidth: 1,
-    borderStyle: 'solid',
-    padding: Styles.globalMargins.small,
-  },
-  metaContainer: {flexShrink: 0, paddingLeft: 20 + Styles.globalMargins.tiny * 2 - 4}, // icon spacing plus meta has 2 padding for some reason
-  positionRelative: {position: 'relative'},
-  site: {color: Styles.globalColors.black_20},
-  siteIconFullDecoration: {bottom: -8, position: 'absolute', right: -10},
-  statusContainer: Styles.platformStyles({
-    isMobile: {position: 'relative', top: -2},
-  }),
-  strikeThrough: {textDecorationLine: 'line-through'},
-  textContainer: {flexGrow: 1, flexShrink: 1, marginTop: -1},
-  tooltip: Styles.platformStyles({isElectron: {display: 'inline-flex'}}),
-  username: Styles.platformStyles({
-    common: {letterSpacing: 0.2},
-    isElectron: {wordBreak: 'break-all'},
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: {flexShrink: 0, paddingBottom: 4, paddingTop: 4},
+      crypto: Styles.platformStyles({
+        isElectron: {display: 'inline-block', fontSize: 11, wordBreak: 'break-all'},
+      }),
+      floatingMenu: {
+        maxWidth: 240,
+        minWidth: 196,
+      },
+      halfOpacity: Styles.platformStyles({
+        isMobile: {opacity: 0.5}, // desktop is handled by emotion
+      }),
+      menuHeader: {
+        borderBottomColor: Styles.globalColors.black_10,
+        borderBottomWidth: 1,
+        borderStyle: 'solid',
+        padding: Styles.globalMargins.small,
+      },
+      metaContainer: {flexShrink: 0, paddingLeft: 20 + Styles.globalMargins.tiny * 2 - 4}, // icon spacing plus meta has 2 padding for some reason
+      positionRelative: {position: 'relative'},
+      site: {color: Styles.globalColors.black_20},
+      siteIconFullDecoration: {bottom: -8, position: 'absolute', right: -10},
+      statusContainer: Styles.platformStyles({
+        isMobile: {position: 'relative', top: -2},
+      }),
+      strikeThrough: {textDecorationLine: 'line-through'},
+      textContainer: {flexGrow: 1, flexShrink: 1, marginTop: -1},
+      tooltip: Styles.platformStyles({isElectron: {display: 'inline-flex'}}),
+      username: Styles.platformStyles({
+        common: {letterSpacing: 0.2},
+        isElectron: {wordBreak: 'break-all'},
+      }),
+    } as const)
+)
 
 export default Assertion

@@ -4,7 +4,6 @@ import {isMobile, isIOS} from '../../../constants/platform'
 import * as Flow from '../../../util/flow'
 
 export type Layout = {
-  copyPath: boolean
   delete: boolean
   download: boolean
   ignoreTlf: boolean
@@ -15,13 +14,11 @@ export type Layout = {
   saveMedia: boolean
   showInSystemFileManager: boolean
   sendAttachmentToChat: boolean
-  sendLinkToChat: boolean
   sendToOtherApp: boolean
   share: boolean
 }
 
 const empty = {
-  copyPath: false,
   delete: false,
   download: false,
   ignoreTlf: false,
@@ -34,7 +31,6 @@ const empty = {
   // share items
   // eslint-disable-next-line sort-keys
   sendAttachmentToChat: false,
-  sendLinkToChat: false,
   sendToOtherApp: false,
   share: false,
 }
@@ -50,6 +46,7 @@ const getRawLayout = (
   mode: 'row' | 'screen',
   path: Types.Path,
   pathItem: Types.PathItem,
+  fileContext: Types.FileContext,
   me: string
 ): Layout => {
   const parsedPath = Constants.parsePath(path)
@@ -60,7 +57,6 @@ const getRawLayout = (
     case Types.PathKind.TlfList:
       return {
         ...empty,
-        copyPath: true,
         showInSystemFileManager: !isMobile,
       }
     case Types.PathKind.GroupTlf:
@@ -74,9 +70,7 @@ const getRawLayout = (
               openChatTeam: parsedPath.kind === Types.PathKind.TeamTlf,
             }
           : {}),
-        copyPath: true,
         ignoreTlf: parsedPath.kind === Types.PathKind.TeamTlf || !isMyOwn(parsedPath, me),
-        sendLinkToChat: Constants.canSendLinkToChat(parsedPath),
         showInSystemFileManager: !isMobile,
       }
     case Types.PathKind.InGroupTlf:
@@ -91,16 +85,15 @@ const getRawLayout = (
               openChatTeam: parsedPath.kind === Types.PathKind.InTeamTlf,
             }
           : {}),
-        copyPath: true,
         delete: pathItem.writable,
         download: pathItem.type === Types.PathType.File && !isIOS,
         moveOrCopy: true,
-        saveMedia: isMobile && pathItem.type === Types.PathType.File && Constants.canSaveMedia(pathItem),
+        saveMedia:
+          isMobile && pathItem.type === Types.PathType.File && Constants.canSaveMedia(pathItem, fileContext),
         showInSystemFileManager: !isMobile,
         // share menu items
         // eslint-disable-next-line sort-keys
         sendAttachmentToChat: pathItem.type === Types.PathType.File,
-        sendLinkToChat: Constants.canSendLinkToChat(parsedPath),
         sendToOtherApp: pathItem.type === Types.PathType.File && isMobile,
       }
     default:
@@ -109,15 +102,13 @@ const getRawLayout = (
   }
 }
 
-const totalShare = layout =>
-  (layout.sendAttachmentToChat ? 1 : 0) + (layout.sendLinkToChat ? 1 : 0) + (layout.sendToOtherApp ? 1 : 0)
+const totalShare = layout => (layout.sendAttachmentToChat ? 1 : 0) + (layout.sendToOtherApp ? 1 : 0)
 
 const consolidateShares = (layout: Layout): Layout =>
   isMobile && totalShare(layout) > 1
     ? {
         ...layout,
         sendAttachmentToChat: false,
-        sendLinkToChat: false,
         sendToOtherApp: false,
         share: true,
       }
@@ -126,7 +117,6 @@ const consolidateShares = (layout: Layout): Layout =>
 const filterForOnlyShares = (layout: Layout): Layout => ({
   ...empty,
   sendAttachmentToChat: layout.sendAttachmentToChat,
-  sendLinkToChat: layout.sendLinkToChat,
   sendToOtherApp: layout.sendToOtherApp,
 })
 
@@ -134,15 +124,22 @@ export const getRootLayout = (
   mode: 'row' | 'screen',
   path: Types.Path,
   pathItem: Types.PathItem,
+  fileContext: Types.FileContext,
   me: string
-): Layout => consolidateShares(getRawLayout(mode, path, pathItem, me))
+): Layout => consolidateShares(getRawLayout(mode, path, pathItem, fileContext, me))
 
 export const getShareLayout = (
   mode: 'row' | 'screen',
   path: Types.Path,
   pathItem: Types.PathItem,
+  fileContext: Types.FileContext,
   me: string
-): Layout => filterForOnlyShares(getRawLayout(mode, path, pathItem, me))
+): Layout => filterForOnlyShares(getRawLayout(mode, path, pathItem, fileContext, me))
 
-export const hasShare = (mode: 'row' | 'screen', path: Types.Path, pathItem: Types.PathItem): boolean =>
-  totalShare(getRawLayout(mode, path, pathItem, '' /* username doesn't matter for shares */)) > 0
+export const hasShare = (
+  mode: 'row' | 'screen',
+  path: Types.Path,
+  pathItem: Types.PathItem,
+  fileContext: Types.FileContext
+): boolean =>
+  totalShare(getRawLayout(mode, path, pathItem, fileContext, '' /* username doesn't matter for shares */)) > 0

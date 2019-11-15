@@ -1,4 +1,3 @@
-import * as Constants from '../../../../constants/chat2'
 import * as Chat2Gen from '../../../../actions/chat2-gen'
 import * as RouteTreeGen from '../../../../actions/route-tree-gen'
 import {appendNewChatBuilder} from '../../../../actions/typed-routes'
@@ -18,18 +17,14 @@ type OwnProps = {
 const mapStateToProps = (state, ownProps: OwnProps) => {
   return {
     filter: ownProps.query,
-    isLoading: Constants.anyChatWaitingKeys(state),
     isSearching: !!state.chat2.inboxSearch,
-    showNewTag: state.chat2.inboxShowNew,
   }
 }
 
-const mapDispatchToProps = (dispatch) => ({
+const mapDispatchToProps = dispatch => ({
   _onHotkey: (cmd: string) => {
     if (cmd.endsWith('+n')) {
       dispatch(appendNewChatBuilder())
-    } else {
-      dispatch(Chat2Gen.createToggleInboxSearch({enabled: true}))
     }
   },
   onBack: () => dispatch(RouteTreeGen.createNavigateUp()),
@@ -40,8 +35,7 @@ const mapDispatchToProps = (dispatch) => ({
 const mergeProps = (stateProps, dispatchProps, ownProps) => ({
   _onHotkey: dispatchProps._onHotkey,
   filter: stateProps.filter,
-  hotkeys: isDarwin ? ['command+n', 'command+k'] : ['ctrl+n', 'ctrl+k'],
-  isLoading: stateProps.isLoading,
+  hotkeys: isDarwin ? ['command+n'] : ['ctrl+n'],
   isSearching: stateProps.isSearching,
   onBack: dispatchProps.onBack,
   onEnsureSelection: ownProps.onEnsureSelection,
@@ -51,7 +45,6 @@ const mergeProps = (stateProps, dispatchProps, ownProps) => ({
   onSetFilter: ownProps.onQueryChanged,
   onStartSearch: dispatchProps.onStartSearch,
   onStopSearch: dispatchProps.onStopSearch,
-  showNewTag: stateProps.showNewTag,
 })
 
 const KeyHandler = isMobile ? c => c : require('../../../../util/key-handler.desktop').default

@@ -12,7 +12,7 @@ const mapStateToProps = (state, {message}) => ({
   _meta: Constants.getMeta(state, message.conversationIDKey),
   author: message.author,
   authorIsYou: state.config.username === message.author,
-  joiners: message.joiners,
+  joiners: !message.joiners.length && !message.leavers.length ? [message.author] : message.joiners,
   leavers: message.leavers,
   timestamp: message.timestamp,
 })
@@ -52,8 +52,4 @@ const mergeProps = (stateProps, dispatchProps, _: OwnProps) => {
   }
 }
 
-export default connect(
-  mapStateToProps,
-  mapDispatchToProps,
-  mergeProps
-)(Joined)
+export default connect(mapStateToProps, mapDispatchToProps, mergeProps)(Joined)

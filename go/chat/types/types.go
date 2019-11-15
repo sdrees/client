@@ -44,8 +44,9 @@ func NewAllCryptKeys() AllCryptKeys {
 }
 
 type NameInfo struct {
-	ID            chat1.TLFID
-	CanonicalName string
+	ID              chat1.TLFID
+	CanonicalName   string
+	VerifiedMembers []gregor1.UID // may be empty if we couldn't satisfy the request
 }
 
 func NewNameInfo() *NameInfo {
@@ -53,6 +54,7 @@ func NewNameInfo() *NameInfo {
 }
 
 type MembershipUpdateRes struct {
+	RoleUpdates        []chat1.ConversationLocal
 	UserJoinedConvs    []chat1.ConversationLocal
 	UserRemovedConvs   []chat1.ConversationMember
 	UserResetConvs     []chat1.ConversationMember
@@ -91,10 +93,15 @@ type RemoteConversation struct {
 	LocalMetadata  *RemoteConversationMetadata `codec:"l"`
 	LocalReadMsgID chat1.MessageID             `codec:"r"`
 	LocalDraft     *string                     `codec:"d"`
+	LocalMtime     gregor1.Time                `codec:"t"`
 }
 
 func (rc RemoteConversation) GetMtime() gregor1.Time {
-	return rc.Conv.GetMtime()
+	res := rc.Conv.GetMtime()
+	if res > rc.LocalMtime {
+		return res
+	}
+	return rc.LocalMtime
 }
 
 func (rc RemoteConversation) GetConvID() chat1.ConversationID {
@@ -120,34 +127,16 @@ func (rc RemoteConversation) GetTopicName() string {
 	return ""
 }
 
-func (rc RemoteConversation) GetTLFName() string {
-	if len(rc.Conv.MaxMsgSummaries) == 0 {
-		return ""
-	}
-	return rc.Conv.MaxMsgSummaries[0].TlfName
-}
-
-func (rc RemoteConversation) GetName() string {
-	switch rc.Conv.Metadata.TeamType {
-	case chat1.TeamType_COMPLEX:
-		if rc.LocalMetadata != nil && len(rc.Conv.MaxMsgSummaries) > 0 {
-			return fmt.Sprintf("%s#%s", rc.Conv.MaxMsgSummaries[0].TlfName, rc.LocalMetadata.TopicName)
-		}
-		fallthrough
-	default:
-		if len(rc.Conv.MaxMsgSummaries) == 0 {
-			return ""
-		}
-		return rc.Conv.MaxMsgSummaries[0].TlfName
-	}
-}
-
 func (rc RemoteConversation) GetTopicType() chat1.TopicType {
 	return rc.Conv.GetTopicType()
 }
 
 func (rc RemoteConversation) IsLocallyRead() bool {
 	return rc.LocalReadMsgID >= rc.Conv.MaxVisibleMsgID()
+}
+
+func (rc RemoteConversation) MaxVisibleMsgID() chat1.MessageID {
+	return rc.Conv.MaxVisibleMsgID()
 }
 
 type UnboxMode int
@@ -174,6 +163,19 @@ type Inbox struct {
 	Pagination      *chat1.Pagination
 }
 
+type InboxSyncRes struct {
+	FilteredConvs      []RemoteConversation
+	TeamTypeChanged    bool
+	MembersTypeChanged []chat1.ConversationID
+	Expunges           []InboxSyncResExpunge
+	TopicNameChanged   []chat1.ConversationID
+}
+
+type InboxSyncResExpunge struct {
+	ConvID  chat1.ConversationID
+	Expunge chat1.Expunge
+}
+
 type ConvLoaderPriority int
 
 var (
@@ -188,11 +190,18 @@ func (c ConvLoaderPriority) HigherThan(c2 ConvLoaderPriority) bool {
 	return int(c) > int(c2)
 }
 
+type ConvLoaderUniqueness int
+
+const (
+	ConvLoaderUnique ConvLoaderUniqueness = iota
+	ConvLoaderGeneric
+)
+
 type ConvLoaderJob struct {
 	ConvID       chat1.ConversationID
-	Query        *chat1.GetThreadQuery
 	Pagination   *chat1.Pagination
 	Priority     ConvLoaderPriority
+	Uniqueness   ConvLoaderUniqueness
 	PostLoadHook func(context.Context, chat1.ThreadView, ConvLoaderJob)
 }
 
@@ -201,17 +210,16 @@ func (j ConvLoaderJob) HigherPriorityThan(j2 ConvLoaderJob) bool {
 }
 
 func (j ConvLoaderJob) String() string {
-	return fmt.Sprintf("[convID: %s pagination: %s]", j.ConvID, j.Pagination)
+	return fmt.Sprintf("[convID: %s pagination: %s unique: %v]", j.ConvID, j.Pagination, j.Uniqueness)
 }
 
-func NewConvLoaderJob(convID chat1.ConversationID, query *chat1.GetThreadQuery,
-	pagination *chat1.Pagination, priority ConvLoaderPriority,
-	postLoadHook func(context.Context, chat1.ThreadView, ConvLoaderJob)) ConvLoaderJob {
+func NewConvLoaderJob(convID chat1.ConversationID, pagination *chat1.Pagination, priority ConvLoaderPriority,
+	uniqueness ConvLoaderUniqueness, postLoadHook func(context.Context, chat1.ThreadView, ConvLoaderJob)) ConvLoaderJob {
 	return ConvLoaderJob{
 		ConvID:       convID,
-		Query:        query,
 		Pagination:   pagination,
 		Priority:     priority,
+		Uniqueness:   uniqueness,
 		PostLoadHook: postLoadHook,
 	}
 }
@@ -580,6 +588,10 @@ func (d DummyBotCommandManager) Advertise(ctx context.Context, alias *string,
 
 func (d DummyBotCommandManager) Clear(context.Context) error { return nil }
 
+func (d DummyBotCommandManager) PublicCommandsConv(ctx context.Context, username string) (chat1.ConversationID, error) {
+	return nil, nil
+}
+
 func (d DummyBotCommandManager) ListCommands(ctx context.Context, convID chat1.ConversationID) ([]chat1.UserBotCommandOutput, error) {
 	return nil, nil
 }
@@ -597,3 +609,58 @@ func (d DummyBotCommandManager) Stop(ctx context.Context) chan struct{} {
 	close(ch)
 	return ch
 }
+
+type DummyUIInboxLoader struct{}
+
+func (d DummyUIInboxLoader) Start(ctx context.Context, uid gregor1.UID) {}
+func (d DummyUIInboxLoader) Stop(ctx context.Context) chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (d DummyUIInboxLoader) LoadNonblock(ctx context.Context, query *chat1.GetInboxLocalQuery,
+	pagination *chat1.Pagination, maxUnbox *int, skipUnverified bool) error {
+	return nil
+}
+
+func (d DummyUIInboxLoader) UpdateLayout(ctx context.Context, reselectMode chat1.InboxLayoutReselectMode,
+	reason string) {
+}
+
+func (d DummyUIInboxLoader) UpdateConvs(ctx context.Context, convIDs []chat1.ConversationID) error {
+	return nil
+}
+
+func (d DummyUIInboxLoader) UpdateLayoutFromNewMessage(ctx context.Context, conv RemoteConversation) {
+}
+
+func (d DummyUIInboxLoader) UpdateLayoutFromSubteamRename(ctx context.Context, convs []RemoteConversation) {
+}
+
+type DummyAttachmentUploader struct{}
+
+var _ AttachmentUploader = (*DummyAttachmentUploader)(nil)
+
+func (d DummyAttachmentUploader) Register(ctx context.Context, uid gregor1.UID, convID chat1.ConversationID,
+	outboxID chat1.OutboxID, title, filename string, metadata []byte,
+	callerPreview *chat1.MakePreviewRes) (AttachmentUploaderResultCb, error) {
+	return nil, nil
+}
+func (d DummyAttachmentUploader) Status(ctx context.Context, outboxID chat1.OutboxID) (AttachmentUploaderTaskStatus, AttachmentUploadResult, error) {
+	return 0, AttachmentUploadResult{}, nil
+}
+func (d DummyAttachmentUploader) Retry(ctx context.Context, outboxID chat1.OutboxID) (AttachmentUploaderResultCb, error) {
+	return nil, nil
+}
+func (d DummyAttachmentUploader) Cancel(ctx context.Context, outboxID chat1.OutboxID) error {
+	return nil
+}
+func (d DummyAttachmentUploader) Complete(ctx context.Context, outboxID chat1.OutboxID) {}
+func (d DummyAttachmentUploader) GetUploadTempFile(ctx context.Context, outboxID chat1.OutboxID, filename string) (string, error) {
+	return "", nil
+}
+func (d DummyAttachmentUploader) CancelUploadTempFile(ctx context.Context, outboxID chat1.OutboxID) error {
+	return nil
+}
+func (d DummyAttachmentUploader) OnDbNuke(mctx libkb.MetaContext) error { return nil }

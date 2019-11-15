@@ -2,17 +2,17 @@
   "protocol": "chatUi",
   "imports": [
     {
-      "path": "github.com/keybase/client/go/protocol/keybase1",
+      "path": "../keybase1",
       "type": "idl",
       "import_as": "keybase1"
     },
     {
-      "path": "github.com/keybase/client/go/protocol/gregor1",
+      "path": "../gregor1",
       "type": "idl",
       "import_as": "gregor1"
     },
     {
-      "path": "github.com/keybase/client/go/protocol/stellar1",
+      "path": "../stellar1",
       "type": "idl",
       "import_as": "stellar1"
     },
@@ -49,6 +49,179 @@
         {
           "type": "boolean",
           "name": "last"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "UIInboxSmallTeamRow",
+      "fields": [
+        {
+          "type": "string",
+          "name": "convID"
+        },
+        {
+          "type": "string",
+          "name": "name"
+        },
+        {
+          "type": "gregor1.Time",
+          "name": "time"
+        },
+        {
+          "type": [
+            null,
+            "string"
+          ],
+          "name": "snippet"
+        },
+        {
+          "type": [
+            null,
+            "string"
+          ],
+          "name": "snippetDecoration"
+        },
+        {
+          "type": [
+            null,
+            "string"
+          ],
+          "name": "draft"
+        },
+        {
+          "type": "boolean",
+          "name": "isMuted"
+        },
+        {
+          "type": "boolean",
+          "name": "isTeam"
+        }
+      ]
+    },
+    {
+      "type": "enum",
+      "name": "UIInboxBigTeamRowTyp",
+      "symbols": [
+        "LABEL_1",
+        "CHANNEL_2"
+      ]
+    },
+    {
+      "type": "record",
+      "name": "UIInboxBigTeamChannelRow",
+      "fields": [
+        {
+          "type": "string",
+          "name": "convID"
+        },
+        {
+          "type": "string",
+          "name": "teamname"
+        },
+        {
+          "type": "string",
+          "name": "channelname"
+        },
+        {
+          "type": [
+            null,
+            "string"
+          ],
+          "name": "draft"
+        },
+        {
+          "type": "boolean",
+          "name": "isMuted"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "UIInboxBigTeamLabelRow",
+      "fields": [
+        {
+          "type": "string",
+          "name": "name"
+        },
+        {
+          "type": "string",
+          "name": "id"
+        }
+      ]
+    },
+    {
+      "type": "variant",
+      "name": "UIInboxBigTeamRow",
+      "switch": {
+        "type": "UIInboxBigTeamRowTyp",
+        "name": "state"
+      },
+      "cases": [
+        {
+          "label": {
+            "name": "LABEL",
+            "def": false
+          },
+          "body": "UIInboxBigTeamLabelRow"
+        },
+        {
+          "label": {
+            "name": "CHANNEL",
+            "def": false
+          },
+          "body": "UIInboxBigTeamChannelRow"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "UIInboxReselectInfo",
+      "fields": [
+        {
+          "type": "string",
+          "name": "oldConvID"
+        },
+        {
+          "type": [
+            null,
+            "string"
+          ],
+          "name": "newConvID"
+        }
+      ]
+    },
+    {
+      "type": "record",
+      "name": "UIInboxLayout",
+      "fields": [
+        {
+          "type": {
+            "type": "array",
+            "items": "UIInboxSmallTeamRow"
+          },
+          "name": "smallTeams"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "UIInboxBigTeamRow"
+          },
+          "name": "bigTeams"
+        },
+        {
+          "type": [
+            null,
+            "UIInboxReselectInfo"
+          ],
+          "name": "reselectInfo"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "UIInboxSmallTeamRow"
+          },
+          "name": "widgetList"
         }
       ]
     },
@@ -99,6 +272,10 @@
         {
           "type": "string",
           "name": "convID"
+        },
+        {
+          "type": "string",
+          "name": "tlfID"
         },
         {
           "type": "TopicType",
@@ -265,6 +442,10 @@
           "name": "assertion"
         },
         {
+          "type": "boolean",
+          "name": "inConvName"
+        },
+        {
           "type": [
             null,
             "string"
@@ -282,11 +463,29 @@
     },
     {
       "type": "record",
+      "name": "UIPinnedMessage",
+      "fields": [
+        {
+          "type": "UIMessage",
+          "name": "message"
+        },
+        {
+          "type": "string",
+          "name": "pinnerUsername"
+        }
+      ]
+    },
+    {
+      "type": "record",
       "name": "InboxUIItem",
       "fields": [
         {
           "type": "string",
           "name": "convID"
+        },
+        {
+          "type": "string",
+          "name": "tlfID"
         },
         {
           "type": "TopicType",
@@ -452,6 +651,13 @@
         {
           "type": "ConversationCommandGroups",
           "name": "botCommands"
+        },
+        {
+          "type": [
+            null,
+            "UIPinnedMessage"
+          ],
+          "name": "pinnedMsg"
         }
       ]
     },
@@ -849,6 +1055,17 @@
             "UIMessage"
           ],
           "name": "replyTo"
+        },
+        {
+          "type": [
+            null,
+            "MessageID"
+          ],
+          "name": "pinnedMessageID"
+        },
+        {
+          "type": "string",
+          "name": "botUsername"
         }
       ]
     },
@@ -923,13 +1140,32 @@
       ]
     },
     {
+      "type": "record",
+      "name": "UIMessageJourneycard",
+      "fields": [
+        {
+          "type": "double",
+          "name": "ordinal"
+        },
+        {
+          "type": "JourneycardType",
+          "name": "cardType"
+        },
+        {
+          "type": "MessageID",
+          "name": "highlightMsgID"
+        }
+      ]
+    },
+    {
       "type": "enum",
       "name": "MessageUnboxedState",
       "symbols": [
         "VALID_1",
         "ERROR_2",
         "OUTBOX_3",
-        "PLACEHOLDER_4"
+        "PLACEHOLDER_4",
+        "JOURNEYCARD_5"
       ]
     },
     {
@@ -967,6 +1203,13 @@
             "def": false
           },
           "body": "MessageUnboxedPlaceholder"
+        },
+        {
+          "label": {
+            "name": "JOURNEYCARD",
+            "def": false
+          },
+          "body": "UIMessageJourneycard"
         }
       ]
     },
@@ -1041,7 +1284,8 @@
         "CHANNELNAMEMENTION_2",
         "MAYBEMENTION_3",
         "LINK_4",
-        "MAILTO_5"
+        "MAILTO_5",
+        "KBFSPATH_6"
       ]
     },
     {
@@ -1065,6 +1309,10 @@
         {
           "type": "string",
           "name": "url"
+        },
+        {
+          "type": "string",
+          "name": "punycode"
         }
       ]
     },
@@ -1155,6 +1403,13 @@
             "def": false
           },
           "body": "UILinkDecoration"
+        },
+        {
+          "label": {
+            "name": "KBFSPATH",
+            "def": false
+          },
+          "body": "KBFSPath"
         }
       ]
     },
@@ -1650,6 +1905,14 @@
     },
     {
       "type": "enum",
+      "name": "UIWatchPositionPerm",
+      "symbols": [
+        "BASE_0",
+        "ALWAYS_1"
+      ]
+    },
+    {
+      "type": "enum",
       "name": "UICommandStatusDisplayTyp",
       "symbols": [
         "STATUS_0",
@@ -1712,6 +1975,19 @@
       ],
       "response": null
     },
+    "chatInboxLayout": {
+      "request": [
+        {
+          "name": "sessionID",
+          "type": "int"
+        },
+        {
+          "name": "layout",
+          "type": "string"
+        }
+      ],
+      "response": null
+    },
     "chatInboxUnverified": {
       "request": [
         {
@@ -1732,7 +2008,7 @@
           "type": "int"
         },
         {
-          "name": "conv",
+          "name": "convs",
           "type": "string"
         }
       ],
@@ -2075,6 +2351,10 @@
         {
           "name": "convID",
           "type": "ConversationID"
+        },
+        {
+          "name": "perm",
+          "type": "UIWatchPositionPerm"
         }
       ],
       "response": "LocationWatchID"
@@ -2133,6 +2413,15 @@
         {
           "name": "status",
           "type": "UIBotCommandsUpdateStatus"
+        }
+      ],
+      "response": null
+    },
+    "triggerContactSync": {
+      "request": [
+        {
+          "name": "sessionID",
+          "type": "int"
         }
       ],
       "response": null

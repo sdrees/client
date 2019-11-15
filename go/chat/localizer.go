@@ -18,7 +18,6 @@ import (
 	"github.com/keybase/client/go/protocol/chat1"
 	"github.com/keybase/client/go/protocol/gregor1"
 	"github.com/keybase/client/go/protocol/keybase1"
-	"github.com/keybase/client/go/teams"
 	"github.com/keybase/client/go/uidmap"
 	"golang.org/x/sync/errgroup"
 )
@@ -504,10 +503,12 @@ func (s *localizerPipeline) localizeConversations(localizeJob *localizerPipeline
 
 	// Fetch conversation local information in parallel
 	eg, ctx := errgroup.WithContext(ctx)
+	ctx = libkb.WithLogTag(ctx, "CHTLOCS")
 	pending := localizeJob.getPending()
 	if len(pending) == 0 {
 		return nil
 	}
+	s.Debug(ctx, "localizeConversations: pending: %d", len(pending))
 	convCh := make(chan types.RemoteConversation, len(pending))
 	retCh := make(chan chat1.ConversationID, len(pending))
 	eg.Go(func() error {
@@ -546,15 +547,19 @@ func (s *localizerPipeline) localizeConversations(localizeJob *localizerPipeline
 					ConvLocal: convLocal,
 					Conv:      conv,
 				}
+				s.Debug(ctx, "localizeConversations: localized: %d convID: %s", index, conv.GetConvID())
 			}
 			return nil
 		})
 	}
 	go func() {
-		eg.Wait()
+		_ = eg.Wait()
 		close(retCh)
 	}()
+	complete := 0
 	for convID := range retCh {
+		complete++
+		s.Debug(ctx, "localizeConversations: complete: %d remaining: %d", complete, len(pending)-complete)
 		localizeJob.complete(convID)
 	}
 	return eg.Wait()
@@ -579,34 +584,9 @@ func getUnverifiedTlfNameForErrors(conversationRemote chat1.Conversation) string
 	return tlfName
 }
 
-func (s *localizerPipeline) getMessagesOffline(ctx context.Context, convID chat1.ConversationID,
-	uid gregor1.UID, msgs []chat1.MessageSummary, finalizeInfo *chat1.ConversationFinalizeInfo) ([]chat1.MessageUnboxed, chat1.ConversationErrorType, error) {
-
-	st := storage.New(s.G(), s.G().ConvSource)
-	res, err := st.FetchMessages(ctx, convID, uid, utils.PluckMessageIDs(msgs))
-	if err != nil {
-		// Just say we didn't find it in this case
-		return nil, chat1.ConversationErrorType_TRANSIENT, err
-	}
-
-	// Make sure we got legit msgs
-	var foundMsgs []chat1.MessageUnboxed
-	for _, msg := range res {
-		if msg != nil {
-			foundMsgs = append(foundMsgs, *msg)
-		}
-	}
-
-	if len(foundMsgs) == 0 {
-		return nil, chat1.ConversationErrorType_TRANSIENT, errors.New("missing messages locally")
-	}
-
-	return foundMsgs, chat1.ConversationErrorType_NONE, nil
-}
-
 func (s *localizerPipeline) getMinWriterRoleInfoLocal(ctx context.Context, uid gregor1.UID,
 	conv chat1.Conversation) (*chat1.ConversationMinWriterRoleInfoLocal, error) {
-	if conv.ConvSettings == nil {
+	if conv.ConvSettings == nil || conv.ReaderInfo == nil {
 		return nil, nil
 	}
 	info := conv.ConvSettings.MinWriterRoleInfo
@@ -614,31 +594,11 @@ func (s *localizerPipeline) getMinWriterRoleInfoLocal(ctx context.Context, uid g
 		return nil, nil
 	}
 
-	// determine if the current user can write.
-	teamID, err := keybase1.TeamIDFromString(conv.Metadata.IdTriple.Tlfid.String())
-	if err != nil {
-		return nil, err
-	}
-	extG := s.G().ExternalG()
-	team, err := teams.Load(ctx, extG, keybase1.LoadTeamArg{
-		ID:     teamID,
-		Public: conv.Metadata.Visibility == keybase1.TLFVisibility_PUBLIC,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	upak, _, err := s.G().GetUPAKLoader().LoadV2(
-		libkb.NewLoadUserByUIDArg(ctx, extG, keybase1.UID(uid.String())))
-	if err != nil {
-		return nil, err
-	}
-
-	uv := upak.Current.ToUserVersion()
-	role, err := team.MemberRole(ctx, uv)
-	if err != nil {
-		return nil, err
-	}
+	// NOTE We use the UntrustedTeamRole here since MinWriterRole is based on
+	// server trust. A nefarious server could stop our messages by rejecting
+	// them or violate the MinWriterRole by allowing them; lying about our role
+	// here doesn't help.
+	role := conv.ReaderInfo.UntrustedTeamRole
 
 	// get the changed by username
 	name, err := s.G().GetUPAKLoader().LookupUsername(ctx, keybase1.UID(info.Uid.String()))
@@ -692,16 +652,10 @@ func (s *localizerPipeline) getResetUsernamesMetadata(ctx context.Context, uidMa
 
 // returns an incomplete list in case of error
 func (s *localizerPipeline) getResetUsernamesPegboard(ctx context.Context, uidMapper libkb.UIDMapper,
-	teamIDasTLFID chat1.TLFID, public bool) (res []string, err error) {
+	membersType chat1.ConversationMembersType, info types.NameInfo, public bool) (res []string, err error) {
 	// NOTE: If this is too slow, it could be cached on local metadata.
-	teamID, err := keybase1.TeamIDFromString(teamIDasTLFID.String())
-	if err != nil {
-		return nil, err
-	}
-	team, err := teams.Load(ctx, s.G().ExternalG(), keybase1.LoadTeamArg{
-		ID:     teamID,
-		Public: public,
-	})
+	team, err := NewTeamLoader(s.G().ExternalG()).loadTeam(ctx, info.ID, info.CanonicalName,
+		membersType, public, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -724,8 +678,50 @@ func (s *localizerPipeline) getResetUsernamesPegboard(ctx context.Context, uidMa
 	return res, nil
 }
 
+func (s *localizerPipeline) getPinnedMsg(ctx context.Context, uid gregor1.UID, conv chat1.Conversation,
+	pinMessage chat1.MessageUnboxed) (pinnedMsg chat1.MessageUnboxed, pinnerUsername string, valid bool, err error) {
+	defer s.Trace(ctx, func() error { return err }, "getPinnedMsg: %v", pinMessage.GetMessageID())()
+	if !pinMessage.IsValidFull() {
+		s.Debug(ctx, "getPinnedMsg: not a valid pin message")
+		return pinnedMsg, pinnerUsername, false, nil
+	}
+	if storage.NewPinIgnore(s.G(), uid).IsIgnored(ctx, conv.GetConvID(), pinMessage.GetMessageID()) {
+		s.Debug(ctx, "getPinnedMsg: ignored pinned message")
+		return pinnedMsg, pinnerUsername, false, nil
+	}
+	body := pinMessage.Valid().MessageBody
+	pinnedMsgID := body.Pin().MsgID
+	messages, err := s.G().ConvSource.GetMessages(ctx, conv, uid, []chat1.MessageID{pinnedMsgID}, nil)
+	if err != nil {
+		return pinnedMsg, pinnerUsername, false, nil
+	}
+	xformRes, err := s.G().ConvSource.TransformSupersedes(ctx, conv, uid, messages, &chat1.GetThreadQuery{
+		EnableDeletePlaceholders: true,
+	}, nil, nil)
+	if err != nil {
+		return pinnedMsg, pinnerUsername, false, nil
+	}
+	if len(xformRes) == 0 {
+		s.Debug(ctx, "getPinnedMsg: no pin message after xform supersedes")
+		return pinnedMsg, pinnerUsername, false, nil
+	}
+	pinnedMsg = xformRes[0]
+	if !pinnedMsg.IsValidFull() {
+		s.Debug(ctx, "getPinnedMsg: not a valid pinned message")
+		return pinnedMsg, pinnerUsername, false, nil
+	}
+	return pinnedMsg, pinMessage.Valid().SenderUsername, true, nil
+}
+
 func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor1.UID,
 	rc types.RemoteConversation) (conversationLocal chat1.ConversationLocal) {
+	ctx = libkb.WithLogTag(ctx, "CHTLOC")
+	conversationRemote := rc.Conv
+	unverifiedTLFName := getUnverifiedTlfNameForErrors(conversationRemote)
+	defer s.Trace(ctx, func() error { return nil },
+		"localizeConversation: TLF: %s convID: %s offline: %v vis: %v", unverifiedTLFName,
+		conversationRemote.GetConvID(), s.offline, conversationRemote.Metadata.Visibility)()
+
 	var err error
 	// Pick a source of usernames based on offline status, if we are offline then just use a
 	// type that just returns errors all the time (this will just use TLF name as the ordering)
@@ -735,11 +731,6 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 	} else {
 		umapper = s.G().UIDMapper
 	}
-
-	conversationRemote := rc.Conv
-	unverifiedTLFName := getUnverifiedTlfNameForErrors(conversationRemote)
-	s.Debug(ctx, "localizing: TLF: %s convID: %s offline: %v vis: %v", unverifiedTLFName,
-		conversationRemote.GetConvID(), s.offline, conversationRemote.Metadata.Visibility)
 
 	conversationLocal.Info = chat1.ConversationInfoLocal{
 		Id:           conversationRemote.Metadata.ConversationID,
@@ -751,15 +742,14 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 		TeamType:     conversationRemote.Metadata.TeamType,
 		Version:      conversationRemote.Metadata.Version,
 		LocalVersion: conversationRemote.Metadata.LocalVersion,
+		FinalizeInfo: conversationRemote.Metadata.FinalizeInfo,
 		Draft:        rc.LocalDraft,
 	}
-	conversationLocal.Info.FinalizeInfo = conversationRemote.Metadata.FinalizeInfo
-	for _, super := range conversationRemote.Metadata.Supersedes {
-		conversationLocal.Supersedes = append(conversationLocal.Supersedes, super)
-	}
-	for _, super := range conversationRemote.Metadata.SupersededBy {
-		conversationLocal.SupersededBy = append(conversationLocal.SupersededBy, super)
-	}
+
+	conversationLocal.Supersedes = append(
+		conversationLocal.Supersedes, conversationRemote.Metadata.Supersedes...)
+	conversationLocal.SupersededBy = append(
+		conversationLocal.SupersededBy, conversationRemote.Metadata.SupersededBy...)
 	if conversationRemote.ReaderInfo == nil {
 		errMsg := "empty ReaderInfo from server?"
 		conversationLocal.Error = chat1.NewConversationErrorLocal(
@@ -819,22 +809,22 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 		if err == nil {
 			summaries = append(summaries, headlineSummary)
 		}
-		if len(summaries) == 0 {
+		pinSummary, err := conversationRemote.GetMaxMessage(chat1.MessageType_PIN)
+		if err == nil {
+			summaries = append(summaries, pinSummary)
+		}
+		if len(summaries) == 0 ||
+			conversationRemote.GetMembersType() == chat1.ConversationMembersType_IMPTEAMUPGRADE ||
+			conversationRemote.GetMembersType() == chat1.ConversationMembersType_KBFS {
 			tlfSummary, err := conversationRemote.GetMaxMessage(chat1.MessageType_TLFNAME)
 			if err == nil {
 				summaries = append(summaries, tlfSummary)
 			}
 		}
-		var msgs []chat1.MessageUnboxed
-		if s.offline {
-			msgs, errTyp, err = s.getMessagesOffline(ctx, conversationRemote.GetConvID(),
-				uid, summaries, conversationRemote.Metadata.FinalizeInfo)
-		} else {
-			msgs, err = s.G().ConvSource.GetMessages(ctx, conversationRemote,
-				uid, utils.PluckMessageIDs(summaries), nil)
-			if !s.isErrPermanent(err) {
-				errTyp = chat1.ConversationErrorType_TRANSIENT
-			}
+		msgs, err := s.G().ConvSource.GetMessages(ctx, conversationRemote,
+			uid, utils.PluckMessageIDs(summaries), nil)
+		if !s.isErrPermanent(err) {
+			errTyp = chat1.ConversationErrorType_TRANSIENT
 		}
 		if err != nil {
 			convErr := s.checkRekeyError(ctx, err, conversationRemote, unverifiedTLFName)
@@ -890,12 +880,29 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 				conversationLocal.Info.TopicName = body.Metadata().ConversationTitle
 			case chat1.MessageType_HEADLINE:
 				conversationLocal.Info.Headline = body.Headline().Headline
+			case chat1.MessageType_PIN:
+				pinnedMsg, pinnerUsername, valid, err := s.getPinnedMsg(ctx, uid, conversationRemote, mm)
+				if err != nil {
+					conversationLocal.Error = chat1.NewConversationErrorLocal(
+						fmt.Sprintf("unable to get pinned message: %s", err),
+						conversationRemote, unverifiedTLFName, chat1.ConversationErrorType_TRANSIENT, nil)
+					return conversationLocal
+				}
+				if valid {
+					conversationLocal.Info.PinnedMsg = &chat1.ConversationPinnedMessage{
+						Message:        pinnedMsg,
+						PinnerUsername: pinnerUsername,
+					}
+				}
 			}
 			if mm.GetMessageID() >= maxValidID {
 				conversationLocal.Info.Triple = mm.Valid().ClientHeader.Conv
 				conversationLocal.Info.TlfName = mm.Valid().ClientHeader.TlfName
 				maxValidID = mm.GetMessageID()
 			}
+		} else {
+			_, err := mm.State()
+			s.Debug(ctx, "skipping invalid max msg: state: %v", err)
 		}
 	}
 	// Resolve edits/deletes on snippet message
@@ -929,15 +936,29 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 		return conversationLocal
 	}
 
+	membersType := conversationRemote.GetMembersType()
 	infoSource := CreateNameInfoSource(ctx, s.G(), conversationLocal.GetMembersType())
 	var info types.NameInfo
 	var ierr error
-	switch conversationRemote.GetMembersType() {
-	case chat1.ConversationMembersType_TEAM, chat1.ConversationMembersType_IMPTEAMNATIVE:
+	switch membersType {
+	case chat1.ConversationMembersType_TEAM, chat1.ConversationMembersType_IMPTEAMNATIVE,
+		chat1.ConversationMembersType_IMPTEAMUPGRADE:
+		tlfName := conversationLocal.Info.TlfName
+		if tlfName == "" {
+			tlfName = unverifiedTLFName
+		}
 		info, ierr = infoSource.LookupName(ctx,
 			conversationLocal.Info.Triple.Tlfid,
-			conversationLocal.Info.Visibility == keybase1.TLFVisibility_PUBLIC)
+			conversationLocal.Info.Visibility == keybase1.TLFVisibility_PUBLIC,
+			tlfName,
+		)
 	default:
+		if len(conversationLocal.Info.TlfName) == 0 {
+			conversationLocal.Error = chat1.NewConversationErrorLocal(
+				"unable to get conversation name from message history", conversationRemote,
+				unverifiedTLFName, chat1.ConversationErrorType_TRANSIENT, nil)
+			return conversationLocal
+		}
 		info, ierr = infoSource.LookupID(ctx,
 			conversationLocal.Info.TlfName,
 			conversationLocal.Info.Visibility == keybase1.TLFVisibility_PUBLIC)
@@ -953,7 +974,7 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 
 	// Form the writers name list, either from the active list + TLF name, or from the
 	// channel information for a team chat
-	switch conversationRemote.GetMembersType() {
+	switch membersType {
 	case chat1.ConversationMembersType_TEAM:
 		var kuids []keybase1.UID
 		for _, uid := range conversationRemote.Metadata.AllList {
@@ -963,7 +984,7 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 		rows, err := umapper.MapUIDsToUsernamePackages(ctx, s.G(), kuids, time.Hour*24,
 			10*time.Second, true)
 		if err != nil {
-			s.Debug(ctx, "localizeConversation: UIDMapper returned an error: %s", err)
+			s.Debug(ctx, "localizeConversation: team UIDMapper returned an error: %s", err)
 		}
 		for _, row := range rows {
 			conversationLocal.Info.Participants = append(conversationLocal.Info.Participants,
@@ -975,8 +996,8 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 				conversationLocal.Info.Participants[j].Username
 		})
 	case chat1.ConversationMembersType_IMPTEAMNATIVE, chat1.ConversationMembersType_IMPTEAMUPGRADE:
-		resetUsernamesPegboard, err := s.getResetUsernamesPegboard(ctx, umapper, info.ID,
-			conversationLocal.Info.Visibility == keybase1.TLFVisibility_PUBLIC)
+		public := conversationLocal.Info.Visibility == keybase1.TLFVisibility_PUBLIC
+		resetUsernamesPegboard, err := s.getResetUsernamesPegboard(ctx, umapper, membersType, info, public)
 		if err != nil {
 			s.Debug(ctx, "getResetUsernamesPegboard error: %v", err)
 			resetUsernamesPegboard = nil
@@ -985,16 +1006,45 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 			s.getResetUsernamesMetadata(ctx, umapper, conversationRemote),
 			resetUsernamesPegboard,
 		)
-		fallthrough
-	case chat1.ConversationMembersType_KBFS:
+		var kuids []keybase1.UID
+		for _, uid := range info.VerifiedMembers {
+			kuids = append(kuids, keybase1.UID(uid.String()))
+		}
+		rows, err := umapper.MapUIDsToUsernamePackages(ctx, s.G(), kuids, time.Hour*24, 10*time.Second, true)
+		if err != nil {
+			s.Debug(ctx, "localizeConversation: impteam UIDMapper returned an error: %s", err)
+			errMsg := fmt.Sprintf("error getting usernames of participants: %s", err)
+			conversationLocal.Error = chat1.NewConversationErrorLocal(
+				errMsg, conversationRemote, unverifiedTLFName, chat1.ConversationErrorType_TRANSIENT, nil)
+			return conversationLocal
+		}
+		var verifiedUsernames []string
+		for _, row := range rows {
+			verifiedUsernames = append(verifiedUsernames, row.NormalizedUsername.String())
+		}
 		conversationLocal.Info.Participants, err = utils.ReorderParticipants(
+			s.G().MetaContext(ctx),
+			s.G(),
+			umapper,
+			conversationLocal.Info.TlfName,
+			verifiedUsernames,
+			conversationRemote.Metadata.ActiveList)
+		if err != nil {
+			errMsg := fmt.Sprintf("error reordering participants: %s", err)
+			conversationLocal.Error = chat1.NewConversationErrorLocal(
+				errMsg, conversationRemote, unverifiedTLFName, chat1.ConversationErrorType_TRANSIENT, nil)
+			return conversationLocal
+		}
+		utils.AttachContactNames(s.G().MetaContext(ctx), conversationLocal.Info.Participants)
+	case chat1.ConversationMembersType_KBFS:
+		conversationLocal.Info.Participants, err = utils.ReorderParticipantsKBFS(
 			s.G().MetaContext(ctx),
 			s.G(),
 			umapper,
 			conversationLocal.Info.TlfName,
 			conversationRemote.Metadata.ActiveList)
 		if err != nil {
-			errMsg := fmt.Sprintf("error reordering participants: %v", err.Error())
+			errMsg := fmt.Sprintf("error reordering participants: %s", err)
 			conversationLocal.Error = chat1.NewConversationErrorLocal(
 				errMsg, conversationRemote, unverifiedTLFName, chat1.ConversationErrorType_TRANSIENT, nil)
 			return conversationLocal
@@ -1012,16 +1062,13 @@ func (s *localizerPipeline) localizeConversation(ctx context.Context, uid gregor
 	if err != nil {
 		s.Debug(ctx, "localizeConversation: failed to list commands: %s", err)
 	}
-	botCommands, err := s.G().BotCommandManager.ListCommands(ctx,
-		conversationLocal.GetConvID())
+	botCommands, err := s.G().BotCommandManager.ListCommands(ctx, conversationLocal.GetConvID())
 	if err != nil {
 		s.Debug(ctx, "localizeConversation: failed to list bot commands: %s", err)
+	} else if len(botCommands) > 0 {
+		conversationLocal.BotCommands = bots.MakeConversationCommandGroups(botCommands)
 	} else {
-		if len(botCommands) > 0 {
-			conversationLocal.BotCommands = bots.MakeConversationCommandGroups(botCommands)
-		} else {
-			conversationLocal.BotCommands = chat1.NewConversationCommandGroupsWithNone()
-		}
+		conversationLocal.BotCommands = chat1.NewConversationCommandGroupsWithNone()
 	}
 	return conversationLocal
 }
@@ -1051,11 +1098,11 @@ func (s *localizerPipeline) checkRekeyError(ctx context.Context, fromErr error, 
 // Returns (nil, nil) if it is a different kind of error
 // Returns (nil, err) if there is an error building the ConversationErrorRekey
 func (s *localizerPipeline) checkRekeyErrorInner(ctx context.Context, fromErr error, conversationRemote chat1.Conversation, unverifiedTLFName string) (*chat1.ConversationErrorLocal, error) {
-	convErrTyp := chat1.ConversationErrorType_TRANSIENT
 	var rekeyInfo *chat1.ConversationErrorRekey
 	var ok bool
 
 	// check for rekey error type
+	var convErrTyp chat1.ConversationErrorType
 	if convErrTyp, ok = IsRekeyError(fromErr); !ok {
 		return nil, nil
 	}
@@ -1069,7 +1116,7 @@ func (s *localizerPipeline) checkRekeyErrorInner(ctx context.Context, fromErr er
 	rekeyInfo.TlfPublic = conversationRemote.MaxMsgSummaries[0].TlfPublic
 
 	// Fill readers and writers
-	parts, err := utils.ReorderParticipants(
+	parts, err := utils.ReorderParticipantsKBFS(
 		s.G().MetaContext(ctx),
 		s.G(),
 		s.G().UIDMapper,

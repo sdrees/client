@@ -213,7 +213,7 @@ func (m *FlipManager) Start(ctx context.Context, uid gregor1.UID) {
 	m.shutdownMu.Unlock()
 
 	go func(shutdownCh chan struct{}) {
-		m.dealer.Run(dealerCtx)
+		_ = m.dealer.Run(dealerCtx)
 		close(shutdownCh)
 	}(dealerShutdownCh)
 	go m.updateLoop(shutdownCh)
@@ -419,13 +419,11 @@ func (m *FlipManager) addCardHandResult(ctx context.Context, status *chat1.UICoi
 			})
 			continue
 		}
-		var hand []string
 		uiHand := chat1.UICoinFlipHand{
 			Target: target,
 		}
 		for di := deckIndex; di < deckIndex+handSize; di++ {
 			card := hmi.ShuffleItems[result.Shuffle[di]]
-			hand = append(hand, card)
 			cardIndex, err := m.cardIndex(card)
 			if err != nil {
 				m.Debug(ctx, "addCardHandResult: failed to get card: %s", err)
@@ -706,7 +704,10 @@ func (m *FlipManager) updateLoop(shutdownCh chan struct{}) {
 	for {
 		select {
 		case msg := <-m.dealer.UpdateCh():
-			m.handleUpdate(m.makeBkgContext(), msg, false)
+			err := m.handleUpdate(m.makeBkgContext(), msg, false)
+			if err != nil {
+				m.Debug(context.TODO(), "updateLoop: error handling update: %+v", err)
+			}
 		case <-shutdownCh:
 			m.Debug(context.Background(), "updateLoop: exiting")
 			return
@@ -971,15 +972,26 @@ func (m *FlipManager) StartFlip(ctx context.Context, uid gregor1.UID, hostConvID
 	go func() {
 		var err error
 		topicName := m.gameTopicNameFromGameID(gameID)
+		membersType := hostConv.GetMembersType()
+		switch membersType {
+		case chat1.ConversationMembersType_IMPTEAMUPGRADE:
+			// just override this to use native
+			membersType = chat1.ConversationMembersType_IMPTEAMNATIVE
+			fallthrough
+		case chat1.ConversationMembersType_IMPTEAMNATIVE:
+			tlfName = utils.AddUserToTLFName(m.G(), tlfName, keybase1.TLFVisibility_PRIVATE,
+				membersType)
+		default:
+		}
 		conv, err = NewConversationWithMemberSourceConv(ctx, m.G(), uid, tlfName, &topicName,
-			chat1.TopicType_DEV, hostConv.GetMembersType(),
+			chat1.TopicType_DEV, membersType,
 			keybase1.TLFVisibility_PRIVATE, m.ri, NewConvFindExistingSkip, &hostConvID)
 		convCreatedCh <- err
 	}()
 
 	listener := newSentMessageListener(m.G(), outboxID)
 	nid := m.G().NotifyRouter.AddListener(listener)
-	if err := m.sendNonblock(ctx, hostConvID, text, tlfName, outboxID, gameID, chat1.TopicType_CHAT); err != nil {
+	if err := m.sendNonblock(ctx, uid, hostConvID, text, tlfName, outboxID, gameID, chat1.TopicType_CHAT); err != nil {
 		m.Debug(ctx, "StartFlip: failed to send flip message: %s", err)
 		m.setStartFlipSendStatus(ctx, outboxID, types.FlipSendStatusError, nil)
 		m.G().NotifyRouter.RemoveListener(nid)
@@ -1006,7 +1018,7 @@ func (m *FlipManager) StartFlip(ctx context.Context, uid gregor1.UID, hostConvID
 		return err
 	} else if elf != nil {
 		m.Debug(ctx, "StartFlip: setting ephemeral retention for conv: %v", *elf)
-		if m.ri().SetConvRetention(ctx, chat1.SetConvRetentionArg{
+		if _, err := m.ri().SetConvRetention(ctx, chat1.SetConvRetentionArg{
 			ConvID: conv.GetConvID(),
 			Policy: chat1.NewRetentionPolicyWithEphemeral(chat1.RpEphemeral{Age: *elf}),
 		}); err != nil {
@@ -1414,6 +1426,8 @@ func (m *FlipManager) IsFlipConversationCreated(ctx context.Context, outboxID ch
 		switch status.status {
 		case types.FlipSendStatusSent:
 			convID = status.flipConvID
+		default:
+			// Nothing to do for other status types.
 		}
 		return convID, status.status
 	}
@@ -1444,8 +1458,9 @@ func (m *FlipManager) ServerTime(ctx context.Context) (res time.Time, err error)
 	return sres.Now.Time(), nil
 }
 
-func (m *FlipManager) sendNonblock(ctx context.Context, convID chat1.ConversationID, text, tlfName string,
-	outboxID chat1.OutboxID, gameID chat1.FlipGameID, topicType chat1.TopicType) error {
+func (m *FlipManager) sendNonblock(ctx context.Context, initiatorUID gregor1.UID,
+	convID chat1.ConversationID, text, tlfName string, outboxID chat1.OutboxID,
+	gameID chat1.FlipGameID, topicType chat1.TopicType) error {
 	sender := NewNonblockingSender(m.G(), NewBlockingSender(m.G(), NewBoxer(m.G()), m.ri))
 	_, _, err := sender.Send(ctx, convID, chat1.MessagePlaintext{
 		MessageBody: chat1.NewMessageBodyWithFlip(chat1.MessageFlip{
@@ -1458,6 +1473,9 @@ func (m *FlipManager) sendNonblock(ctx context.Context, convID chat1.Conversatio
 			Conv: chat1.ConversationIDTriple{
 				TopicType: topicType,
 			},
+			// Prefill this value in case a restricted bot is running the flip
+			// so bot keys are used instead of regular team keys.
+			BotUID: &initiatorUID,
 		},
 	}, 0, &outboxID, nil, nil)
 	return err
@@ -1488,7 +1506,7 @@ func (m *FlipManager) registerSentOutboxID(ctx context.Context, gameID chat1.Fli
 }
 
 // SendChat implements the flip.DealersHelper interface
-func (m *FlipManager) SendChat(ctx context.Context, convID chat1.ConversationID, gameID chat1.FlipGameID,
+func (m *FlipManager) SendChat(ctx context.Context, initatorUID gregor1.UID, convID chat1.ConversationID, gameID chat1.FlipGameID,
 	msg flip.GameMessageEncoded) (err error) {
 	ctx = globals.ChatCtx(ctx, m.G(), keybase1.TLFIdentifyBehavior_CHAT_SKIP, nil, nil)
 	defer m.Trace(ctx, func() error { return err }, "SendChat: convID: %s", convID)()
@@ -1505,7 +1523,7 @@ func (m *FlipManager) SendChat(ctx context.Context, convID chat1.ConversationID,
 		return err
 	}
 	m.registerSentOutboxID(ctx, gameID, outboxID)
-	return m.sendNonblock(ctx, convID, msg.String(), conv.Info.TlfName, outboxID, gameID,
+	return m.sendNonblock(ctx, initatorUID, convID, msg.String(), conv.Info.TlfName, outboxID, gameID,
 		chat1.TopicType_DEV)
 }
 
@@ -1620,8 +1638,8 @@ func (v *FlipVisualizer) Visualize(status *chat1.UICoinFlipStatus) {
 		}
 	}
 	var commitmentBuf, secretBuf bytes.Buffer
-	png.Encode(&commitmentBuf, commitmentImg)
-	png.Encode(&secretBuf, secretImg)
+	_ = png.Encode(&commitmentBuf, commitmentImg)
+	_ = png.Encode(&secretBuf, secretImg)
 	status.CommitmentVisualization = base64.StdEncoding.EncodeToString(commitmentBuf.Bytes())
 	status.RevealVisualization = base64.StdEncoding.EncodeToString(secretBuf.Bytes())
 }

@@ -1,8 +1,9 @@
 import * as React from 'react'
+import * as Kb from '../common-adapters'
+import {Props as IconProps} from '../common-adapters/icon'
+import * as Styles from '../styles'
 import shallowEqual from 'shallowequal'
-import {Avatar, MultiAvatar, Icon, Box, IconType} from '../common-adapters'
-import {globalStyles, globalColors, globalMargins, isMobile} from '../styles'
-import {memoize} from 'lodash-es'
+import memoize from 'lodash/memoize'
 
 // All this complexity isn't great but the current implementation of avatar forces us to juggle all these colors and
 // forces us to explicitly choose undefined/the background/ etc. This can be cleaned up when avatar is simplified
@@ -25,34 +26,87 @@ type AvatarProps = {
   backgroundColor?: string
 }
 
-const MutedIcon = (p: {
+const MobileMutedIcon = (p: {
+  isHovered: boolean
+  isMuted: boolean
+  isSelected: boolean
+  isLocked: boolean
+}): React.ReactElement<any> | null => {
+  const {isMuted, isSelected, isLocked} = p
+  const type = isMuted
+    ? isSelected
+      ? 'icon-shh-active-26-21'
+      : 'icon-shh-26-21'
+    : isLocked
+    ? isSelected
+      ? 'icon-addon-lock-active-22'
+      : 'icon-addon-lock-22'
+    : null
+  return type ? <Kb.Icon type={type} style={styles.mutedIcon} /> : null
+}
+
+type StrokedIconProps = IconProps & {
+  isHovered: boolean
+  isSelected: boolean
+}
+const StrokedIcon = Styles.styled<typeof Kb.Icon, StrokedIconProps>(Kb.Icon)(props => ({
+  '&.stroke': {
+    '-webkit-text-stroke': `3px ${
+      props.isHovered && !props.isSelected
+        ? Styles.globalColors.blueGreyDark
+        : props.isSelected
+        ? Styles.globalColors.blue
+        : Styles.globalColors.blueGrey
+    }`,
+    bottom: 0,
+    color:
+      props.isHovered && !props.isSelected
+        ? Styles.globalColors.blueGreyDark
+        : props.isSelected
+        ? Styles.globalColors.blue
+        : Styles.globalColors.blueGrey,
+    right: 0,
+  },
+  bottom: 1,
+  color:
+    props.isHovered && !props.isSelected
+      ? Styles.globalColors.black_20
+      : props.isSelected
+      ? Styles.globalColors.white
+      : Styles.globalColors.black_20,
+  position: 'absolute',
+  right: 1,
+}))
+
+const DesktopMutedIcon = (p: {
   isHovered: boolean
   isMuted: boolean
   isSelected: boolean
   isLocked: boolean
 }): React.ReactElement<any> | null => {
   const {isHovered, isMuted, isSelected, isLocked} = p
-  let type: IconType
-  if (isMuted) {
-    if (isMobile) {
-      type = isSelected ? 'icon-shh-active-26-21' : 'icon-shh-26-21'
-    } else {
-      type = isSelected ? 'icon-shh-active-19-16' : isHovered ? 'icon-shh-hover-19-16' : 'icon-shh-19-16'
-    }
-    return <Icon type={type} style={avatarIconStyle} />
-  } else if (isLocked) {
-    if (isMobile) {
-      type = isSelected ? 'icon-addon-lock-active-22' : 'icon-addon-lock-22'
-    } else {
-      type = isSelected
-        ? 'icon-addon-lock-active-16'
-        : isHovered
-        ? 'icon-addon-lock-hover-16'
-        : 'icon-addon-lock-16'
-    }
-    return <Icon type={type} style={avatarIconStyle} />
-  }
-  return null
+  const type = isMuted ? 'iconfont-shh' : isLocked ? 'iconfont-lock' : null
+  return type ? (
+    <Kb.Box style={styles.mutedIcon}>
+      <StrokedIcon
+        isSelected={isSelected}
+        isHovered={isHovered}
+        className="stroke"
+        type={type}
+        fontSize={18}
+      />
+      <StrokedIcon isSelected={isSelected} isHovered={isHovered} type={type} fontSize={16} />
+    </Kb.Box>
+  ) : null
+}
+
+const MutedIcon = (p: {
+  isHovered: boolean
+  isMuted: boolean
+  isSelected: boolean
+  isLocked: boolean
+}): React.ReactElement<any> | null => {
+  return Styles.isMobile ? MobileMutedIcon(p) : DesktopMutedIcon(p)
 }
 
 class Avatars extends React.Component<AvatarProps> {
@@ -75,57 +129,71 @@ class Avatars extends React.Component<AvatarProps> {
       (username, idx) =>
         ({
           borderColor: rowBorderColor(idx, idx === avatarCount - 1, backgroundColor),
-          loadingColor: globalColors.greyLight,
+          loadingColor: Styles.globalColors.greyLight,
           size: 32,
-          skipBackground: isMobile,
+          skipBackground: Styles.isMobile,
           username,
         } as const)
     )
 
     return (
-      <Box style={avatarBoxStyle}>
-        <Box style={avatarInnerBoxStyle}>
-          <MultiAvatar
+      <Kb.Box style={styles.avatarBox}>
+        <Kb.Box style={styles.avatarInnerBox}>
+          <Kb.MultiAvatar
             singleSize={48}
             multiSize={32}
             avatarProps={avatarProps}
-            multiPadding={isMobile ? 2 : 0}
+            multiPadding={Styles.isMobile ? 2 : 0}
             style={opacity === 1 ? multiStyle(backgroundColor) : {...multiStyle(backgroundColor), opacity}}
           />
           <MutedIcon isHovered={isHovered} isSelected={isSelected} isMuted={isMuted} isLocked={isLocked} />
-        </Box>
-      </Box>
+        </Kb.Box>
+      </Kb.Box>
     )
   }
 }
 
 const multiStyle = memoize(backgroundColor => {
   return {
-    ...(isMobile ? {backgroundColor, paddingBottom: 10, paddingTop: 10} : {}),
+    ...(Styles.isMobile ? {backgroundColor, paddingBottom: 10, paddingTop: 10} : {}),
     height: 48,
     width: 48,
   }
 })
 
-const avatarBoxStyle = {
-  ...globalStyles.flexBoxRow,
-  alignItems: 'center',
-  flexShrink: 0,
-  height: 48,
-  justifyContent: 'flex-start',
-  marginLeft: globalMargins.tiny,
-  marginRight: globalMargins.tiny,
-  maxWidth: 48,
-  minWidth: 48,
-  position: 'relative',
-}
-
-const avatarInnerBoxStyle = {
-  height: 48,
-  maxWidth: 48,
-  minWidth: 48,
-  position: 'relative',
-}
+const styles = Styles.styleSheetCreate(() => ({
+  avatarBox: {
+    ...Styles.globalStyles.flexBoxRow,
+    alignItems: 'center',
+    flexShrink: 0,
+    height: 48,
+    justifyContent: 'flex-start',
+    marginLeft: Styles.globalMargins.tiny,
+    marginRight: Styles.globalMargins.tiny,
+    maxWidth: 48,
+    minWidth: 48,
+    position: 'relative',
+  },
+  avatarInnerBox: {
+    height: 48,
+    maxWidth: 48,
+    minWidth: 48,
+    position: 'relative',
+  },
+  mutedIcon: Styles.platformStyles({
+    common: {
+      position: 'absolute',
+    },
+    isElectron: {
+      bottom: -3,
+      right: -1,
+    },
+    isMobile: {
+      bottom: -1,
+      right: -1,
+    },
+  }),
+}))
 
 class TeamAvatar extends React.Component<{
   teamname: string
@@ -135,24 +203,17 @@ class TeamAvatar extends React.Component<{
 }> {
   render() {
     return (
-      <Box style={avatarBoxStyle}>
-        <Avatar teamname={this.props.teamname} size={48} />
+      <Kb.Box style={styles.avatarBox}>
+        <Kb.Avatar teamname={this.props.teamname} size={48} />
         <MutedIcon
           isSelected={this.props.isSelected}
           isMuted={this.props.isMuted}
           isHovered={this.props.isHovered}
           isLocked={false}
         />
-      </Box>
+      </Kb.Box>
     )
   }
 }
-
-const offset = isMobile ? -1 : 0
-const avatarIconStyle = {
-  bottom: offset,
-  position: 'absolute',
-  right: offset,
-} as const
 
 export {Avatars, TeamAvatar}

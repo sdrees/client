@@ -174,12 +174,21 @@ var whitelistedTeamLinkSigs = []keybase1.SigID{
 	// See https://github.com/keybase/client/issues/17573; a server bug allowed a rotate after a revoke, which
 	// has been fixed in CORE-10942.
 	"070e6d737607109ba17d1d43419d950cde6d206b66c555c837566913a31ca59122",
+
+	// See https://github.com/keybase/client/issues/20503; a server bug allowed a team leave to interleave
+	// with a downgrade lease acquisition for a key revoke on a slow connection. The acquisition should have
+	// been blocked until the merkle tree reflected the leave, but the acquistion actually happened before the
+	// team leave transation was committed to the DB. The fix on the server is to check for leases before and
+	// after the team change is commited (in the same transaction). We were previously only checking before.
+	// It has been fixed in Y2K-891.
+	"c641d1246493cf04ec2c6141acdb569a457c02d577b392d4eb1872118c563c2822",
 }
 
 func (l *TeamLoader) addProofsForKeyInUserSigchain(ctx context.Context, teamID keybase1.TeamID, link *ChainLinkUnpacked, uid keybase1.UID, key *keybase1.PublicKeyV2NaCl, userLinkMap linkMapT, proofSet *proofSetT) {
 	for _, okSigID := range whitelistedTeamLinkSigs {
-		if link.SigID().Equal(okSigID) {
+		if link.SigID().EqualIgnoreLastByte(okSigID) {
 			// This proof is whitelisted, so don't check it.
+			l.G().Log.CDebugf(ctx, "addProofsForKeyInUserSigchain: skipping exceptional link: %v", link.SigID())
 			return
 		}
 	}
@@ -594,6 +603,8 @@ func (l *TeamLoader) checkParentChildOperations(ctx context.Context,
 		forceFullReload:                       false,
 		forceRepoll:                           false,
 		staleOK:                               true, // stale is fine, as long as get those seqnos.
+		skipSeedCheck:                         true,
+		auditMode:                             keybase1.AuditMode_SKIP,
 
 		needSeqnos:    needParentSeqnos,
 		readSubteamID: &readSubteamID,
@@ -678,7 +689,7 @@ func (l *TeamLoader) unboxKBFSCryptKeys(ctx context.Context, key keybase1.TeamAp
 		return nil, libkb.DecryptBadNonceError{}
 	}
 	copy(nonce[:], keysetRecord.N)
-	plain, ok := secretbox.Open(nil, keysetRecord.E, &nonce, (*[32]byte)(&encKey))
+	plain, ok := secretbox.Open(nil, keysetRecord.E, &nonce, &encKey)
 	if !ok {
 		return nil, libkb.DecryptOpenError{}
 	}
@@ -697,7 +708,7 @@ func (l *TeamLoader) unboxKBFSCryptKeys(ctx context.Context, key keybase1.TeamAp
 func (l *TeamLoader) addKBFSCryptKeys(mctx libkb.MetaContext, team Teamer, upgrades []keybase1.TeamGetLegacyTLFUpgrade) error {
 	m := make(map[keybase1.TeamApplication][]keybase1.CryptKey)
 	for _, upgrade := range upgrades {
-		key, err := ApplicationKeyAtGeneration(mctx, team, upgrade.AppType, keybase1.PerTeamKeyGeneration(upgrade.TeamGeneration))
+		key, err := ApplicationKeyAtGeneration(mctx, team, upgrade.AppType, upgrade.TeamGeneration)
 		if err != nil {
 			return err
 		}
@@ -839,7 +850,8 @@ func (l *TeamLoader) checkReaderKeyMaskCoverage(mctx libkb.MetaContext,
 	state *keybase1.TeamData, gen keybase1.PerTeamKeyGeneration) error {
 
 	for _, app := range keybase1.TeamApplicationMap {
-		if app == keybase1.TeamApplication_STELLAR_RELAY {
+		switch app {
+		case keybase1.TeamApplication_STELLAR_RELAY, keybase1.TeamApplication_KVSTORE:
 			// TODO CORE-7718 Allow clients to be missing these RKMs for now.
 			//                Will need a team cache bust to repair.
 			continue
@@ -921,10 +933,6 @@ func unboxPerTeamSecrets(m libkb.MetaContext, world LoaderContext, box *TeamBox,
 	return box.Generation, secrets, nil
 }
 
-func (l *TeamLoader) perUserEncryptionKey(ctx context.Context, userSeqno keybase1.Seqno) (*libkb.NaclDHKeyPair, error) {
-	return l.world.perUserEncryptionKey(ctx, userSeqno)
-}
-
 // Whether the snapshot has fully loaded, non-stubbed, all of the links.
 func (l *TeamLoader) checkNeededSeqnos(ctx context.Context,
 	state *keybase1.TeamData, needSeqnos []keybase1.Seqno) error {
@@ -997,7 +1005,7 @@ func (l *TeamLoader) computeSeedChecks(ctx context.Context, state *keybase1.Team
 	defer mctx.Trace(fmt.Sprintf("TeamLoader#computeSeedChecks(%s)", state.ID()), func() error { return err })()
 
 	latestChainGen := keybase1.PerTeamKeyGeneration(len(state.PerTeamKeySeedsUnverified))
-	return computeSeedChecks(
+	err = computeSeedChecks(
 		ctx,
 		state.ID(),
 		latestChainGen,
@@ -1014,6 +1022,7 @@ func (l *TeamLoader) computeSeedChecks(ctx context.Context, state *keybase1.Team
 			state.PerTeamKeySeedsUnverified[g] = ptksu
 		},
 	)
+	return err
 }
 
 // consumeRatchets finds the hidden chain ratchets in the given link (if it's not stubbed), and adds them

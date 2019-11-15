@@ -19,6 +19,8 @@ func ephemeralKeyTestSetup(t *testing.T) (libkb.TestContext, libkb.MetaContext, 
 
 	user, err := kbtest.CreateAndSignupFakeUser("t", tc.G)
 	require.NoError(t, err)
+	err = mctx.G().GetEKLib().KeygenIfNeeded(mctx)
+	require.NoError(t, err)
 
 	return tc, mctx, user
 }
@@ -117,4 +119,20 @@ func TestEphemeralDeviceProvisionedAfterContent(t *testing.T) {
 	require.IsType(t, EphemeralKeyError{}, err)
 	ekErr = err.(EphemeralKeyError)
 	require.Equal(t, DefaultHumanErrMsg, ekErr.HumanError())
+}
+
+func TestEphemeralPluralization(t *testing.T) {
+	humanMsg := humanMsgWithPrefix(DeviceProvisionedAfterContentCreationErrMsg)
+
+	pluralized := PluralizeErrorMessage(humanMsg, 0)
+	require.Equal(t, humanMsg, pluralized)
+
+	pluralized = PluralizeErrorMessage(humanMsg, 1)
+	require.Equal(t, humanMsg, pluralized)
+
+	pluralized = PluralizeErrorMessage(humanMsg, 2)
+	require.Equal(t, "2 exploding messages are not available to you, this device was created after the messages were sent", pluralized)
+
+	pluralized = PluralizeErrorMessage(DefaultHumanErrMsg, 2)
+	require.Equal(t, "2 exploding messages are not available to you", pluralized)
 }

@@ -189,33 +189,39 @@ class GitPush extends React.PureComponent<Props> {
   }
 }
 
-const styles = Styles.styleSheetCreate(() => ({
-  commitHash: Styles.platformStyles({
-    common: {
-      color: Styles.globalColors.blueDark,
-      fontSize: 12,
-      lineHeight: 16,
-    },
-  }),
-  dot: {
-    backgroundColor: Styles.globalColors.blueLighter_20,
-    borderRadius: 3,
-    height: 18,
-    marginBottom: 1,
-    marginRight: Styles.globalMargins.xtiny,
-    padding: 2,
-  },
-  grow: {
-    flexGrow: 1,
-  },
-  hashAndMessage: {
-    flexGrow: 1,
-    paddingBottom: Styles.globalMargins.xtiny,
-    paddingTop: Styles.globalMargins.xtiny,
-  },
-  marker: {marginRight: Styles.globalMargins.xtiny, ...(Styles.isMobile ? {marginTop: -3} : null)},
-  repoText: {color: Styles.globalColors.black_50},
-  textLeft: {textAlign: 'left'},
-}))
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      commitHash: Styles.platformStyles({
+        common: {
+          color: Styles.globalColors.blueDark,
+          fontSize: 12,
+          lineHeight: 16,
+        },
+      }),
+      dot: {
+        backgroundColor: Styles.globalColors.blueLighter_20,
+        borderRadius: 3,
+        height: 18,
+        marginBottom: 1,
+        marginRight: Styles.globalMargins.xtiny,
+        padding: 2,
+      },
+      grow: {
+        flex: 1,
+      },
+      hashAndMessage: {
+        paddingBottom: Styles.globalMargins.xtiny,
+        paddingTop: Styles.globalMargins.xtiny,
+      },
+      marker: {
+        marginRight: Styles.globalMargins.xtiny,
+        ...(Styles.isMobile ? {marginTop: -3} : null),
+        minWidth: 0,
+      },
+      repoText: {color: Styles.globalColors.black_50},
+      textLeft: {textAlign: 'left'},
+    } as const)
+)
 
 export default GitPush

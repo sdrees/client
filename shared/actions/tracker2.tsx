@@ -6,7 +6,6 @@ import * as Container from '../util/container'
 import * as Constants from '../constants/tracker2'
 import * as RPCTypes from '../constants/types/rpc-gen'
 import logger from '../logger'
-import {formatPhoneNumberInternational} from '../util/phone-numbers'
 
 const identify3Result = (
   _: Container.TypedState,
@@ -14,7 +13,6 @@ const identify3Result = (
 ) =>
   Tracker2Gen.createUpdateResult({
     guiID: action.payload.params.guiID,
-    reason: null,
     result: Constants.rpcResultToStatus(action.payload.params.result),
   })
 
@@ -146,22 +144,18 @@ function* load(state: Container.TypedState, action: Tracker2Gen.LoadPayload) {
     throw new Error('No guid on profile 2 load? ' + action.payload.assertion || '')
   }
   try {
-    yield* Saga.callRPCs(
-      RPCTypes.identify3Identify3RpcSaga({
-        incomingCallMap: {},
-        params: {
-          assertion: action.payload.assertion,
-          guiID: action.payload.guiID,
-          ignoreCache: !!action.payload.ignoreCache,
-        },
-        waitingKey: Constants.profileLoadWaitingKey,
-      })
-    )
+    yield RPCTypes.identify3Identify3RpcSaga({
+      incomingCallMap: {},
+      params: {
+        assertion: action.payload.assertion,
+        guiID: action.payload.guiID,
+        ignoreCache: !!action.payload.ignoreCache,
+      },
+      waitingKey: Constants.profileLoadWaitingKey,
+    })
   } catch (err) {
     if (err.code === RPCTypes.StatusCode.scresolutionfailed) {
-      yield Saga.put(
-        Tracker2Gen.createUpdateResult({guiID: action.payload.guiID, reason: null, result: 'notAUserYet'})
-      )
+      yield Saga.put(Tracker2Gen.createUpdateResult({guiID: action.payload.guiID, result: 'notAUserYet'}))
     }
     // hooked into reloadable
     logger.error(`Error loading profile: ${err.message}`)
@@ -262,6 +256,7 @@ const loadNonUserProfile = async (_: Container.TypedState, action: Tracker2Gen.L
         description: res.description,
         siteIcon: res.siteIcon || [],
         siteIconFull: res.siteIconFull || [],
+        siteIconWhite: res.siteIconWhite || [],
       }
       if (res.service) {
         return Tracker2Gen.createLoadedNonUserProfile({
@@ -269,6 +264,7 @@ const loadNonUserProfile = async (_: Container.TypedState, action: Tracker2Gen.L
           ...res.service,
         })
       } else {
+        const {formatPhoneNumberInternational} = require('../util/phone-numbers')
         const formattedName =
           res.assertionKey === 'phone' ? formatPhoneNumberInternational('+' + res.assertionValue) : undefined
         const fullName = res.contact ? res.contact.contactName : ''
@@ -286,7 +282,7 @@ const loadNonUserProfile = async (_: Container.TypedState, action: Tracker2Gen.L
   }
 }
 
-function* tracker2Saga(): Saga.SagaGenerator<any, any> {
+function* tracker2Saga() {
   yield* Saga.chainAction2(EngineGen.keybase1Identify3UiIdentify3UpdateUserCard, updateUserCard)
   yield* Saga.chainAction2(Tracker2Gen.changeFollow, changeFollow)
   yield* Saga.chainAction2(Tracker2Gen.ignore, ignore)

@@ -4,6 +4,7 @@ import Box from '../../box'
 import Divider from '../../divider'
 import Text from '../../text'
 import Meta from '../../meta'
+import ProgressIndicator from '../../progress-indicator'
 import * as Styles from '../../../styles'
 
 class MenuLayout extends Component<MenuLayoutProps> {
@@ -63,6 +64,7 @@ class MenuLayout extends Component<MenuLayoutProps> {
             {item.subTitle}
           </Text>
         )}
+        {!!item.progressIndicator && <ProgressIndicator type="Large" style={styles.progressIndicator} />}
       </Box>
     )
   }
@@ -111,43 +113,53 @@ class MenuLayout extends Component<MenuLayoutProps> {
   }
 }
 
-const styles = Styles.styleSheetCreate(() => ({
-  badge: {
-    alignSelf: 'center',
-    marginLeft: 'auto',
-  },
-  divider: {
-    marginBottom: 8,
-    marginTop: 8,
-  },
-  horizBox: {...Styles.globalStyles.flexBoxRow},
-  itemBodyText: {color: undefined},
-  itemContainer: {
-    ...Styles.globalStyles.flexBoxColumn,
-    paddingBottom: Styles.globalMargins.xtiny,
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-    paddingTop: Styles.globalMargins.xtiny,
-  },
-  menuContainer: Styles.platformStyles({
-    isElectron: {
-      ...Styles.desktopStyles.boxShadow,
-      ...Styles.globalStyles.flexBoxColumn,
-      alignItems: 'stretch',
-      backgroundColor: Styles.globalColors.white,
-      borderRadius: 3,
-      justifyContent: 'flex-start',
-      minWidth: 200,
-      overflowX: 'hidden',
-      overflowY: 'auto',
-    },
-  }),
-  menuItemList: {
-    ...Styles.globalStyles.flexBoxColumn,
-    flexShrink: 0,
-    paddingBottom: Styles.globalMargins.tiny,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-}))
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      badge: {
+        alignSelf: 'center',
+        marginLeft: 'auto',
+      },
+      divider: {
+        marginBottom: 8,
+        marginTop: 8,
+      },
+      horizBox: {...Styles.globalStyles.flexBoxRow},
+      itemBodyText: {color: undefined},
+      itemContainer: {
+        ...Styles.globalStyles.flexBoxColumn,
+        paddingBottom: Styles.globalMargins.xtiny,
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+        paddingTop: Styles.globalMargins.xtiny,
+        position: 'relative',
+      },
+      menuContainer: Styles.platformStyles({
+        isElectron: {
+          ...Styles.desktopStyles.boxShadow,
+          ...Styles.globalStyles.flexBoxColumn,
+          alignItems: 'stretch',
+          backgroundColor: Styles.globalColors.white,
+          borderRadius: 3,
+          justifyContent: 'flex-start',
+          minWidth: 200,
+          overflowX: 'hidden',
+          overflowY: 'auto',
+        },
+      }),
+      menuItemList: {
+        ...Styles.globalStyles.flexBoxColumn,
+        flexShrink: 0,
+        paddingBottom: Styles.globalMargins.tiny,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      progressIndicator: {
+        left: 0,
+        position: 'absolute',
+        right: 0,
+        top: Styles.globalMargins.xtiny,
+      },
+    } as const)
+)
 
 export default MenuLayout

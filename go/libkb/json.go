@@ -175,8 +175,8 @@ func (f *JSONFile) SetWrapperAtPath(p string, w *jsonw.Wrapper) error {
 }
 
 func (f *JSONFile) DeleteAtPath(p string) {
-	f.jw.DeleteValueAtPath(p)
-	f.Save()
+	_ = f.jw.DeleteValueAtPath(p)
+	_ = f.Save()
 }
 
 func (f *JSONFile) Save() error {
@@ -189,7 +189,7 @@ func (f *JSONFile) Save() error {
 		// still exists on exit
 		defer func() {
 			if tx != nil {
-				tx.Abort()
+				_ = tx.Abort()
 			}
 		}()
 	}
@@ -336,7 +336,10 @@ func (f *JSONFile) save() (err error) {
 func (f *jsonFileTransaction) Abort() error {
 	f.f.G().Log.Debug("+ Aborting %s rewrite %s", f.f.which, f.tmpname)
 	err := os.Remove(f.tmpname)
-	f.f.setTx(nil)
+	setErr := f.f.setTx(nil)
+	if err == nil {
+		err = setErr
+	}
 	f.f.G().Log.Debug("- Abort -> %s\n", ErrToOk(err))
 	return err
 }
@@ -371,9 +374,7 @@ func (f *jsonFileTransaction) Commit() (err error) {
 	if err != nil {
 		f.f.G().Log.Debug("| Commit: rename %q => %q error: %s", f.tmpname, f.f.filename, err)
 	}
-	f.f.setTx(nil)
-
-	return err
+	return f.f.setTx(nil)
 }
 
 type valueGetter func(*jsonw.Wrapper) (interface{}, error)
@@ -397,6 +398,10 @@ func getBool(w *jsonw.Wrapper) (interface{}, error) {
 
 func getInt(w *jsonw.Wrapper) (interface{}, error) {
 	return w.GetInt()
+}
+
+func getFloat(w *jsonw.Wrapper) (interface{}, error) {
+	return w.GetFloat()
 }
 
 func (f *JSONFile) GetFilename() string {
@@ -439,6 +444,16 @@ func (f *JSONFile) GetIntAtPath(p string) (ret int, isSet bool) {
 	return ret, isSet
 }
 
+func (f *JSONFile) GetFloatAtPath(p string) (ret float64, isSet bool) {
+	f.setMutex.RLock()
+	defer f.setMutex.RUnlock()
+	v, isSet := f.getValueAtPath(p, getFloat)
+	if isSet {
+		ret = v.(float64)
+	}
+	return ret, isSet
+}
+
 func (f *JSONFile) GetNullAtPath(p string) (isSet bool) {
 	f.setMutex.RLock()
 	defer f.setMutex.RUnlock()
@@ -475,6 +490,12 @@ func (f *JSONFile) SetIntAtPath(p string, v int) error {
 	f.setMutex.Lock()
 	defer f.setMutex.Unlock()
 	return f.setValueAtPath(p, getInt, v)
+}
+
+func (f *JSONFile) SetFloatAtPath(p string, v float64) error {
+	f.setMutex.Lock()
+	defer f.setMutex.Unlock()
+	return f.setValueAtPath(p, getFloat, v)
 }
 
 func (f *JSONFile) SetInt64AtPath(p string, v int64) error {

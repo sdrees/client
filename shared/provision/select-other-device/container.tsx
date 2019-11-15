@@ -1,23 +1,22 @@
 import * as ProvisionGen from '../../actions/provision-gen'
 import * as RouteTreeGen from '../../actions/route-tree-gen'
-import * as LoginGen from '../../actions/login-gen'
 import SelectOtherDevice from '.'
 import * as Container from '../../util/container'
-import HiddenString from '../../util/hidden-string'
+import * as AutoresetGen from '../../actions/autoreset-gen'
 
 type OwnProps = {}
 
 const mapStateToProps = (state: Container.TypedState) => ({
-  configuredAccounts: state.config.configuredAccounts,
   devices: state.provision.devices,
+  username: state.provision.username,
 })
 
 const mapDispatchToProps = (dispatch: Container.TypedDispatch) => ({
-  onLogIn: (username: string) => dispatch(LoginGen.createLogin({password: new HiddenString(''), username})),
-  onResetAccount: () => {
-    dispatch(LoginGen.createLaunchAccountResetWebPage())
+  onBack: () => {
     dispatch(RouteTreeGen.createNavigateUp())
   },
+  onResetAccount: (username: string) =>
+    dispatch(AutoresetGen.createStartAccountReset({skipPassword: false, username})),
   onSelect: (name: string) => {
     dispatch(ProvisionGen.createSubmitDeviceSelect({name}))
   },
@@ -26,16 +25,10 @@ const mapDispatchToProps = (dispatch: Container.TypedDispatch) => ({
 export default Container.connect(
   mapStateToProps,
   mapDispatchToProps,
-  (stateProps, dispatchProps, _: OwnProps) => {
-    const loggedInAccounts = stateProps.configuredAccounts
-      .filter(account => account.hasStoredSecret)
-      .map(account => account.username)
-    return {
-      devices: stateProps.devices.toArray(),
-      onBack:
-        loggedInAccounts.size > 0 ? () => dispatchProps.onLogIn(loggedInAccounts.get(0) || '') : undefined,
-      onResetAccount: dispatchProps.onResetAccount,
-      onSelect: dispatchProps.onSelect,
-    }
-  }
+  (stateProps, dispatchProps, _: OwnProps) => ({
+    devices: stateProps.devices.toArray(),
+    onBack: dispatchProps.onBack,
+    onResetAccount: () => dispatchProps.onResetAccount(stateProps.username),
+    onSelect: dispatchProps.onSelect,
+  })
 )(Container.safeSubmitPerMount(['onSelect', 'onBack'])(SelectOtherDevice))

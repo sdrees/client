@@ -182,7 +182,7 @@ const RightActions = ({
 const RightActionsOverflow = ({floatingMenuVisible, hideFloatingMenu, rightActions, showFloatingMenu}) =>
   rightActions && rightActions.length > MAX_RIGHT_ACTIONS ? (
     <>
-      <Icon fontSize={22} onClick={showFloatingMenu} style={styles.action} type="iconfont-ellipsis" />
+      <Icon onClick={showFloatingMenu} style={styles.action} type="iconfont-ellipsis" />
       <FloatingMenu
         visible={floatingMenuVisible}
         items={rightActions.slice(MAX_RIGHT_ACTIONS - 1).map(action => ({
@@ -205,7 +205,6 @@ const renderAction = (action: Action, index: number): React.ReactNode =>
     <Icon
       color={action.iconColor || undefined}
       key={action.label || index}
-      fontSize={22}
       onClick={action.onPress}
       style={styles.action}
       type={action.icon}
@@ -228,7 +227,7 @@ function HeaderHoc<P extends {}>(WrappedComponent: React.ComponentType<P>) {
       <HeaderHocHeader {...props} />
       <Box style={styles.grow}>
         <Box style={styles.innerWrapper}>
-          <WrappedComponent {...props as P} />
+          <WrappedComponent {...(props as P)} />
         </Box>
       </Box>
       {!!props.customSafeAreaBottomStyle && <SafeAreaView style={props.customSafeAreaBottomStyle} />}
@@ -242,7 +241,7 @@ function HeaderHoc<P extends {}>(WrappedComponent: React.ComponentType<P>) {
 // If layout is changed here, please make sure the Files header is updated as
 // well to match this. fs/nav-header/mobile-header.js
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   action: Styles.platformStyles({
     common: {
       opacity: 1,
@@ -277,6 +276,7 @@ const styles = Styles.styleSheetCreate({
       alignItems: 'center',
       borderBottomColor: Styles.globalColors.black_10,
       borderBottomWidth: 1,
+      borderStyle: 'solid',
       justifyContent: 'flex-start',
       width: '100%',
     },
@@ -348,6 +348,6 @@ const styles = Styles.styleSheetCreate({
   titleTextContainer: {
     ...Styles.globalStyles.fillAbsolute,
   },
-})
+}))
 
 export default HeaderHoc

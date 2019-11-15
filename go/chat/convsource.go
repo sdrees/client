@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/keybase/client/go/chat/attachments"
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/chat/storage"
 	"github.com/keybase/client/go/chat/types"
 	"github.com/keybase/client/go/chat/utils"
+	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/chat1"
 	"github.com/keybase/client/go/protocol/gregor1"
 	context "golang.org/x/net/context"
@@ -58,13 +60,17 @@ func (s *baseConversationSource) DeleteAssets(ctx context.Context, uid gregor1.U
 	}
 
 	// Fire off a background load of the thread with a post hook to delete the bodies cache
-	s.G().ConvLoader.Queue(ctx, types.NewConvLoaderJob(convID, nil /*query*/, nil /*pagination*/, types.ConvLoaderPriorityHigh,
+	err := s.G().ConvLoader.Queue(ctx, types.NewConvLoaderJob(convID, &chat1.Pagination{Num: 0},
+		types.ConvLoaderPriorityHigh, types.ConvLoaderUnique,
 		func(ctx context.Context, tv chat1.ThreadView, job types.ConvLoaderJob) {
 			fetcher := s.G().AttachmentURLSrv.GetAttachmentFetcher()
 			if err := fetcher.DeleteAssets(ctx, convID, assets, s.ri, s); err != nil {
 				s.Debug(ctx, "Error purging ephemeral attachments %v", err)
 			}
 		}))
+	if err != nil {
+		s.Debug(ctx, "Error queuing conv job: %+v", err)
+	}
 }
 
 func (s *baseConversationSource) addPendingPreviews(ctx context.Context, thread *chat1.ThreadView) {
@@ -82,9 +88,38 @@ func (s *baseConversationSource) addPendingPreviews(ctx context.Context, thread 
 	}
 }
 
+func (s *baseConversationSource) addConversationCards(ctx context.Context, uid gregor1.UID,
+	convID chat1.ConversationID, convOptional *chat1.ConversationLocal, thread *chat1.ThreadView) {
+	ctxShort, ctxShortCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer ctxShortCancel()
+	card, err := s.G().JourneyCardManager.PickCard(ctxShort, uid, convID, convOptional, thread)
+	ctxShortCancel()
+	if err != nil {
+		s.Debug(ctx, "addConversationCards: error getting next conversation card: %s", err)
+		return
+	}
+	if card == nil {
+		return
+	}
+	// Slot it in to the left of its prev.
+	addLeftOf := 0
+	for i := len(thread.Messages) - 1; i >= 0; i-- {
+		msgID := thread.Messages[i].GetMessageID()
+		if msgID != 0 && msgID >= card.PrevID {
+			addLeftOf = i
+			break
+		}
+	}
+	// Insert at index: https://github.com/golang/go/wiki/SliceTricks#insert
+	thread.Messages = append(thread.Messages, chat1.MessageUnboxed{})
+	copy(thread.Messages[addLeftOf+1:], thread.Messages[addLeftOf:])
+	thread.Messages[addLeftOf] = chat1.NewMessageUnboxedWithJourneycard(*card)
+}
+
 func (s *baseConversationSource) postProcessThread(ctx context.Context, uid gregor1.UID,
 	conv types.UnboxConversationInfo, thread *chat1.ThreadView, q *chat1.GetThreadQuery,
-	superXform types.SupersedesTransform, replyFiller types.ReplyFiller, checkPrev bool, patchPagination bool) (err error) {
+	superXform types.SupersedesTransform, replyFiller types.ReplyFiller, checkPrev bool,
+	patchPagination bool, verifiedConv *chat1.ConversationLocal) (err error) {
 	if q != nil && q.DisablePostProcessThread {
 		return nil
 	}
@@ -126,15 +161,19 @@ func (s *baseConversationSource) postProcessThread(ctx context.Context, uid greg
 	thread.Messages = utils.FilterExploded(conv, thread.Messages, s.boxer.clock.Now())
 	s.Debug(ctx, "postProcessThread: thread messages after explode filter: %d", len(thread.Messages))
 
+	// Add any conversation cards
+	s.addConversationCards(ctx, uid, conv.GetConvID(), verifiedConv, thread)
+
 	// Fetch outbox and tack onto the result
 	outbox := storage.NewOutbox(s.G(), uid)
-	if err = outbox.SprinkleIntoThread(ctx, conv.GetConvID(), thread); err != nil {
+	if err = outbox.AppendToThread(ctx, conv.GetConvID(), thread); err != nil {
 		if _, ok := err.(storage.MissError); !ok {
 			return err
 		}
 	}
 	// Add attachment previews to pending messages
 	s.addPendingPreviews(ctx, thread)
+
 	return nil
 }
 
@@ -188,6 +227,7 @@ func (s *baseConversationSource) patchPaginationLast(ctx context.Context, conv t
 
 func (s *baseConversationSource) PullFull(ctx context.Context, convID chat1.ConversationID, uid gregor1.UID, reason chat1.GetThreadReason,
 	query *chat1.GetThreadQuery, maxPages *int) (res chat1.ThreadView, err error) {
+	ctx = libkb.WithLogTag(ctx, "PUL")
 	pagination := &chat1.Pagination{
 		Num: 300,
 	}
@@ -258,13 +298,14 @@ func (s *RemoteConversationSource) PushUnboxed(ctx context.Context, convID chat1
 
 func (s *RemoteConversationSource) Pull(ctx context.Context, convID chat1.ConversationID,
 	uid gregor1.UID, reason chat1.GetThreadReason, query *chat1.GetThreadQuery, pagination *chat1.Pagination) (chat1.ThreadView, error) {
+	ctx = libkb.WithLogTag(ctx, "PUL")
 
 	if convID.IsNil() {
 		return chat1.ThreadView{}, errors.New("RemoteConversationSource.Pull called with empty convID")
 	}
 
 	// Get conversation metadata
-	conv, err := utils.GetUnverifiedConv(ctx, s.G(), uid, convID, types.InboxSourceDataSourceAll)
+	conv, err := utils.GetVerifiedConv(ctx, s.G(), uid, convID, types.InboxSourceDataSourceAll)
 	if err != nil {
 		return chat1.ThreadView{}, err
 	}
@@ -281,13 +322,13 @@ func (s *RemoteConversationSource) Pull(ctx context.Context, convID chat1.Conver
 		return chat1.ThreadView{}, err
 	}
 
-	thread, err := s.boxer.UnboxThread(ctx, boxed.Thread, conv.Conv)
+	thread, err := s.boxer.UnboxThread(ctx, boxed.Thread, conv)
 	if err != nil {
 		return chat1.ThreadView{}, err
 	}
 
 	// Post process thread before returning
-	if err = s.postProcessThread(ctx, uid, conv.Conv, &thread, query, nil, nil, true, false); err != nil {
+	if err = s.postProcessThread(ctx, uid, conv, &thread, query, nil, nil, true, false, &conv); err != nil {
 		return chat1.ThreadView{}, err
 	}
 
@@ -454,6 +495,9 @@ func (s *HybridConversationSource) Push(ctx context.Context, convID chat1.Conver
 	if err = s.mergeMaybeNotify(ctx, convID, uid, []chat1.MessageUnboxed{decmsg}); err != nil {
 		return decmsg, continuousUpdate, err
 	}
+	if msg.ClientHeader.Sender.Eq(uid) {
+		go s.G().JourneyCardManager.SentMessage(globals.BackgroundChatCtx(ctx, s.G()), uid, convID)
+	}
 	// Remove any pending previews from storage
 	s.completeAttachmentUpload(ctx, decmsg)
 	// complete any active unfurl
@@ -476,36 +520,45 @@ func (s *HybridConversationSource) PushUnboxed(ctx context.Context, convID chat1
 }
 
 func (s *HybridConversationSource) resolveHoles(ctx context.Context, uid gregor1.UID,
-	thread *chat1.ThreadView, conv chat1.Conversation, reason chat1.GetThreadReason) (holesFilled int, err error) {
+	thread *chat1.ThreadView, conv chat1.Conversation, reason chat1.GetThreadReason) (err error) {
 	defer s.Trace(ctx, func() error { return err }, "resolveHoles")()
 	var msgIDs []chat1.MessageID
 	// Gather all placeholder messages so we can go fetch them
 	for index, msg := range thread.Messages {
-		state, err := msg.State()
-		if err != nil {
-			continue
-		}
-		if state == chat1.MessageUnboxedState_PLACEHOLDER {
+		if msg.IsPlaceholder() {
 			if index == len(thread.Messages)-1 {
 				// If the last message is a hole, we might not have fetched everything,
 				// so fail this case like a normal miss
-				return 0, storage.MissError{}
+				return storage.MissError{}
 			}
 			msgIDs = append(msgIDs, msg.GetMessageID())
 		}
 	}
 	if len(msgIDs) == 0 {
 		// Nothing to do
-		return 0, nil
+		return nil
 	}
 	// Fetch all missing messages from server, and sub in the real ones into the placeholder slots
 	msgs, err := s.GetMessages(ctx, conv, uid, msgIDs, &reason)
 	if err != nil {
 		s.Debug(ctx, "resolveHoles: failed to get missing messages: %s", err.Error())
-		return 0, err
+		return err
 	}
 	s.Debug(ctx, "resolveHoles: success: filled %d holes", len(msgs))
-	return len(msgs), nil
+	msgMap := make(map[chat1.MessageID]chat1.MessageUnboxed)
+	for _, msg := range msgs {
+		msgMap[msg.GetMessageID()] = msg
+	}
+	for index, msg := range thread.Messages {
+		if msg.IsPlaceholder() {
+			newMsg, ok := msgMap[msg.GetMessageID()]
+			if !ok {
+				return fmt.Errorf("failed to find hole resolution: %v", msg.GetMessageID())
+			}
+			thread.Messages[index] = newMsg
+		}
+	}
+	return nil
 }
 
 // maxHolesForPull is the number of misses in the body storage cache we will tolerate missing. A good
@@ -515,6 +568,7 @@ var maxHolesForPull = 50
 
 func (s *HybridConversationSource) Pull(ctx context.Context, convID chat1.ConversationID,
 	uid gregor1.UID, reason chat1.GetThreadReason, query *chat1.GetThreadQuery, pagination *chat1.Pagination) (thread chat1.ThreadView, err error) {
+	ctx = libkb.WithLogTag(ctx, "PUL")
 	defer s.Trace(ctx, func() error { return err }, "Pull(%s)", convID)()
 	if convID.IsNil() {
 		return chat1.ThreadView{}, errors.New("HybridConversationSource.Pull called with empty convID")
@@ -531,7 +585,6 @@ func (s *HybridConversationSource) Pull(ctx context.Context, convID chat1.Conver
 		conv := rconv.Conv
 		unboxConv = conv
 		// Try locally first
-		var holesFilled int
 		rc := storage.NewHoleyResultCollector(maxHolesForPull,
 			s.storage.ResultCollectorFromQuery(ctx, query, pagination))
 		thread, err = s.fetchMaybeNotify(ctx, conv.GetConvID(), uid, rc, conv.ReaderInfo.MaxMsgid,
@@ -541,20 +594,14 @@ func (s *HybridConversationSource) Pull(ctx context.Context, convID chat1.Conver
 			// messages that may have been fetched.
 			s.Debug(ctx, "Pull: (holey) cache hit: convID: %s uid: %s holes: %d msgs: %d",
 				unboxConv.GetConvID(), uid, rc.Holes(), len(thread.Messages))
-			holesFilled, err = s.resolveHoles(ctx, uid, &thread, conv, reason)
-		}
-		if err == nil && holesFilled > 0 {
-			s.Debug(ctx, "Pull: %d holes filled, refetching from storage")
-			rc := s.storage.ResultCollectorFromQuery(ctx, query, pagination)
-			thread, err = s.fetchMaybeNotify(ctx, conv.GetConvID(), uid, rc, conv.ReaderInfo.MaxMsgid,
-				query, pagination)
+			err = s.resolveHoles(ctx, uid, &thread, conv, reason)
 		}
 		if err == nil {
 			// Before returning the stuff, send remote request to mark as read if
 			// requested.
 			if query != nil && query.MarkAsRead && len(thread.Messages) > 0 {
 				readMsgID := thread.Messages[0].GetMessageID()
-				if err = s.G().InboxSource.MarkAsRead(ctx, convID, uid, readMsgID); err != nil {
+				if err = s.G().InboxSource.MarkAsRead(ctx, convID, uid, &readMsgID); err != nil {
 					return chat1.ThreadView{}, err
 				}
 				if _, err = s.G().InboxSource.ReadMessage(ctx, uid, 0, convID, readMsgID); err != nil {
@@ -564,8 +611,11 @@ func (s *HybridConversationSource) Pull(ctx context.Context, convID chat1.Conver
 				s.Debug(ctx, "Pull: skipping mark as read call")
 			}
 			// Run post process stuff
-			if err = s.postProcessThread(ctx, uid, conv, &thread, query, nil, nil, true, true); err != nil {
-				return thread, err
+			vconv, err := utils.GetVerifiedConv(ctx, s.G(), uid, convID, types.InboxSourceDataSourceAll)
+			if err == nil {
+				if err = s.postProcessThread(ctx, uid, conv, &thread, query, nil, nil, true, true, &vconv); err != nil {
+					return thread, err
+				}
 			}
 			return thread, nil
 		}
@@ -604,7 +654,7 @@ func (s *HybridConversationSource) Pull(ctx context.Context, convID chat1.Conver
 	}
 
 	// Run post process stuff
-	if err = s.postProcessThread(ctx, uid, unboxConv, &thread, query, nil, nil, true, true); err != nil {
+	if err = s.postProcessThread(ctx, uid, unboxConv, &thread, query, nil, nil, true, true, nil); err != nil {
 		return thread, err
 	}
 	return thread, nil
@@ -655,6 +705,7 @@ func newPullLocalResultCollector(baseRC storage.ResultCollector) *pullLocalResul
 
 func (s *HybridConversationSource) PullLocalOnly(ctx context.Context, convID chat1.ConversationID,
 	uid gregor1.UID, query *chat1.GetThreadQuery, pagination *chat1.Pagination, maxPlaceholders int) (tv chat1.ThreadView, err error) {
+	ctx = libkb.WithLogTag(ctx, "PUL")
 	defer s.Trace(ctx, func() error { return err }, "PullLocalOnly")()
 	if _, err = s.lockTab.Acquire(ctx, uid, convID); err != nil {
 		return tv, err
@@ -683,7 +734,7 @@ func (s *HybridConversationSource) PullLocalOnly(ctx context.Context, convID cha
 			// Form a fake version of a conversation so we don't need to hit the network ever here
 			var conv chat1.Conversation
 			conv.Metadata.ConversationID = convID
-			err = s.postProcessThread(ctx, uid, conv, &tv, query, superXform, replyFiller, false, true)
+			err = s.postProcessThread(ctx, uid, conv, &tv, query, superXform, replyFiller, false, true, nil)
 		}
 	}()
 
@@ -713,8 +764,12 @@ func (s *HybridConversationSource) PullLocalOnly(ctx context.Context, convID cha
 	rc := storage.NewHoleyResultCollector(maxPlaceholders, newPullLocalResultCollector(baseRC))
 	tv, err = s.fetchMaybeNotify(ctx, convID, uid, rc, iboxMaxMsgID, query, pagination)
 	if err != nil {
-		s.Debug(ctx, "PullLocalOnly: failed to fetch local messages: %s", err.Error())
-		return chat1.ThreadView{}, err
+		s.Debug(ctx, "PullLocalOnly: failed to fetch local messages with iboxMaxMsgID: %v: err %s, trying again with local max", iboxMaxMsgID, err)
+		tv, err = s.fetchMaybeNotify(ctx, convID, uid, rc, 0, query, pagination)
+		if err != nil {
+			s.Debug(ctx, "PullLocalOnly: failed to fetch local messages with local max: %s", err)
+			return chat1.ThreadView{}, err
+		}
 	}
 	return tv, nil
 }
@@ -866,21 +921,19 @@ func (s *HybridConversationSource) GetUnreadline(ctx context.Context,
 func (s *HybridConversationSource) notifyExpunge(ctx context.Context, uid gregor1.UID,
 	convID chat1.ConversationID, mergeRes storage.MergeResult) {
 	if mergeRes.Expunged != nil {
-		var inboxItem *chat1.InboxUIItem
 		topicType := chat1.TopicType_NONE
 		conv, err := utils.GetVerifiedConv(ctx, s.G(), uid, convID, types.InboxSourceDataSourceAll)
 		if err != nil {
 			s.Debug(ctx, "notifyExpunge: failed to get conversations: %s", err)
 		} else {
-			inboxItem = PresentConversationLocalWithFetchRetry(ctx, s.G(), uid, conv)
 			topicType = conv.GetTopicType()
 		}
 		act := chat1.NewChatActivityWithExpunge(chat1.ExpungeInfo{
 			ConvID:  convID,
 			Expunge: *mergeRes.Expunged,
-			Conv:    inboxItem,
 		})
 		s.G().ActivityNotifier.Activity(ctx, uid, topicType, &act, chat1.ChatActivitySource_LOCAL)
+		s.G().InboxSource.NotifyUpdate(ctx, uid, convID)
 	}
 }
 
@@ -891,18 +944,18 @@ func (s *HybridConversationSource) notifyUpdated(ctx context.Context, uid gregor
 		return
 	}
 	s.Debug(ctx, "notifyUpdated: notifying %d messages", len(msgs))
-	conv, err := utils.GetUnverifiedConv(ctx, s.G(), uid, convID, types.InboxSourceDataSourceAll)
+	conv, err := utils.GetVerifiedConv(ctx, s.G(), uid, convID, types.InboxSourceDataSourceAll)
 	if err != nil {
 		s.Debug(ctx, "notifyUpdated: failed to get conv: %s", err)
 		return
 	}
-	updatedMsgs, err := s.TransformSupersedes(ctx, conv.Conv, uid, msgs, nil, nil, nil)
+	updatedMsgs, err := s.TransformSupersedes(ctx, conv, uid, msgs, nil, nil, nil)
 	if err != nil {
 		s.Debug(ctx, "notifyUpdated: failed to transform supersedes: %s", err)
 		return
 	}
 	s.Debug(ctx, "notifyUpdated: %d messages after transform", len(updatedMsgs))
-	if updatedMsgs, err = NewReplyFiller(s.G()).Fill(ctx, uid, conv.Conv, updatedMsgs); err != nil {
+	if updatedMsgs, err = NewReplyFiller(s.G()).Fill(ctx, uid, conv, updatedMsgs); err != nil {
 		s.Debug(ctx, "notifyUpdated: failed to fill replies %s", err)
 		return
 	}
@@ -913,7 +966,7 @@ func (s *HybridConversationSource) notifyUpdated(ctx context.Context, uid gregor
 		notif.Updates = append(notif.Updates, utils.PresentMessageUnboxed(ctx, s.G(), msg, uid, convID))
 	}
 	act := chat1.NewChatActivityWithMessagesUpdated(notif)
-	s.G().ActivityNotifier.Activity(ctx, uid, chat1.TopicType_CHAT,
+	s.G().ActivityNotifier.Activity(ctx, uid, conv.GetTopicType(),
 		&act, chat1.ChatActivitySource_LOCAL)
 }
 
@@ -972,15 +1025,7 @@ func (s *HybridConversationSource) notifyEphemeralPurge(ctx context.Context, uid
 
 		// Send an additional notification to refresh the thread after we bump
 		// the local inbox version
-		if err := storage.NewInbox(s.G()).IncrementLocalConvVersion(ctx, uid, convID); err != nil {
-			s.Debug(ctx, "notifyEphemeralPurge: unable to IncrementLocalConvVersion, err", err)
-		}
-		s.G().ActivityNotifier.ThreadsStale(ctx, uid, []chat1.ConversationStaleUpdate{
-			chat1.ConversationStaleUpdate{
-				ConvID:     convID,
-				UpdateType: chat1.StaleUpdateType_CONVUPDATE,
-			},
-		})
+		s.G().InboxSource.NotifyUpdate(ctx, uid, convID)
 		s.notifyUpdated(ctx, uid, convID, s.storage.GetExplodedReplies(ctx, convID, uid, explodedMsgs))
 	}
 }
@@ -995,7 +1040,10 @@ func (s *HybridConversationSource) Expunge(ctx context.Context,
 		return nil
 	}
 
-	s.lockTab.Acquire(ctx, uid, convID)
+	_, err = s.lockTab.Acquire(ctx, uid, convID)
+	if err != nil {
+		return err
+	}
 	defer s.lockTab.Release(ctx, uid, convID)
 	mergeRes, err := s.storage.Expunge(ctx, convID, uid, expunge)
 	if err != nil {
@@ -1022,10 +1070,18 @@ func (s *HybridConversationSource) mergeMaybeNotify(ctx context.Context,
 	if err != nil {
 		return err
 	}
+	var unfurlTargets []chat1.MessageUnboxed
+	for _, r := range mergeRes.UnfurlTargets {
+		if r.IsMapDelete {
+			// we don't tell the UI about map deletes so they don't jump in and out
+			continue
+		}
+		unfurlTargets = append(unfurlTargets, r.Msg)
+	}
 	s.notifyExpunge(ctx, uid, convID, mergeRes)
 	s.notifyEphemeralPurge(ctx, uid, convID, mergeRes.Exploded)
 	s.notifyReactionUpdates(ctx, uid, convID, mergeRes.ReactionTargets)
-	s.notifyUpdated(ctx, uid, convID, mergeRes.UnfurlTargets)
+	s.notifyUpdated(ctx, uid, convID, unfurlTargets)
 	s.notifyUpdated(ctx, uid, convID, mergeRes.RepliesAffected)
 	return nil
 }
@@ -1060,16 +1116,20 @@ func (s *HybridConversationSource) ClearFromDelete(ctx context.Context, uid greg
 	// Fire off a background load of the thread with a post hook to delete the bodies cache
 	s.Debug(ctx, "ClearFromDelete: delete not found, clearing")
 	p := &chat1.Pagination{Num: s.numExpungeReload}
-	s.G().ConvLoader.Queue(ctx, types.NewConvLoaderJob(convID, nil /*query */, p, types.ConvLoaderPriorityHighest,
-		func(ctx context.Context, tv chat1.ThreadView, job types.ConvLoaderJob) {
-			if len(tv.Messages) == 0 {
-				return
-			}
-			bound := tv.Messages[0].GetMessageID().Min(tv.Messages[len(tv.Messages)-1].GetMessageID())
-			if err := s.storage.ClearBefore(ctx, convID, uid, bound); err != nil {
-				s.Debug(ctx, "ClearFromDelete: failed to clear messages: %s", err)
-			}
-		}))
+	qErr := s.G().ConvLoader.Queue(ctx,
+		types.NewConvLoaderJob(convID, p, types.ConvLoaderPriorityHighest, types.ConvLoaderUnique,
+			func(ctx context.Context, tv chat1.ThreadView, job types.ConvLoaderJob) {
+				if len(tv.Messages) == 0 {
+					return
+				}
+				bound := tv.Messages[0].GetMessageID().Min(tv.Messages[len(tv.Messages)-1].GetMessageID())
+				if err := s.storage.ClearBefore(ctx, convID, uid, bound); err != nil {
+					s.Debug(ctx, "ClearFromDelete: failed to clear messages: %s", err)
+				}
+			}))
+	if qErr != nil {
+		s.Debug(ctx, "ClearFromDelete: failed error queuing conv job: %+v", err)
+	}
 	return true
 }
 

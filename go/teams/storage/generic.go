@@ -38,7 +38,7 @@ func (s *storageGeneric) put(mctx libkb.MetaContext, state teamDataGeneric) {
 
 	err := s.disk.put(mctx, state)
 	if err != nil {
-		mctx.Warning("teams.Storage#Put err: %v", err)
+		mctx.Warning("teams/storage.Generic#Put err: %v", err)
 	}
 }
 
@@ -49,7 +49,7 @@ func (s *storageGeneric) get(mctx libkb.MetaContext, teamID keybase1.TeamID, pub
 
 	item := s.mem.get(mctx, teamID, public)
 	if item != nil {
-		mctx.VLogf(libkb.VLog0, "teams.Storage#Get(%v) hit mem (%s)", teamID, s.description)
+		mctx.VLogf(libkb.VLog0, "teams/storage.Generic#Get(%v) hit mem (%s)", teamID, s.description)
 		// Mem hit
 		return item
 	}
@@ -57,14 +57,14 @@ func (s *storageGeneric) get(mctx libkb.MetaContext, teamID keybase1.TeamID, pub
 	res, found, err := s.disk.get(mctx, teamID, public)
 	if found && err == nil {
 		// Disk hit
-		mctx.VLogf(libkb.VLog0, "teams.Storage#Get(%v) hit disk (%s)", teamID, s.description)
+		mctx.VLogf(libkb.VLog0, "teams/storage.Generic#Get(%v) hit disk (%s)", teamID, s.description)
 		s.mem.put(mctx, res)
 		return res
 	}
 	if err != nil {
-		mctx.Debug("teams.Storage#Get(%v) disk err: %v", teamID, err)
+		mctx.Debug("teams/storage.Generic#Get(%v) disk err: %v", teamID, err)
 	}
-	mctx.VLogf(libkb.VLog0, "teams.Storage#Get(%v) missed (%s)", teamID, s.description)
+	mctx.VLogf(libkb.VLog0, "teams/storage.Generic#Get(%v) missed (%s)", teamID, s.description)
 	return nil
 }
 
@@ -102,8 +102,7 @@ type diskStorageGeneric struct {
 
 func newDiskStorageGeneric(g *libkb.GlobalContext, version int, dbObjTyp libkb.ObjType, reason libkb.EncryptionReason, gdi func() diskItemGeneric) *diskStorageGeneric {
 	keyFn := func(ctx context.Context) ([32]byte, error) {
-		return encrypteddb.GetSecretBoxKey(ctx, g, encrypteddb.DefaultSecretUI,
-			reason, "encrypt teams storage")
+		return encrypteddb.GetSecretBoxKey(ctx, g, reason, "encrypt teams storage")
 	}
 	dbFn := func(g *libkb.GlobalContext) *libkb.JSONLocalDb {
 		return g.LocalDb
@@ -173,14 +172,6 @@ func (s *diskStorageGeneric) get(mctx libkb.MetaContext, teamID keybase1.TeamID,
 	return item.value(), true, nil
 }
 
-func (s *diskStorageGeneric) delete(mctx libkb.MetaContext, teamID keybase1.TeamID, public bool) error {
-	s.Lock()
-	defer s.Unlock()
-
-	key := s.dbKey(mctx, teamID, public)
-	return s.encryptedDB.Delete(mctx.Ctx(), key)
-}
-
 func (s *diskStorageGeneric) dbKey(mctx libkb.MetaContext, teamID keybase1.TeamID, public bool) libkb.DbKey {
 	key := fmt.Sprintf("tid:%s", teamID)
 	if public {
@@ -228,15 +219,15 @@ func (s *memoryStorageGeneric) get(mctx libkb.MetaContext, teamID keybase1.TeamI
 	return state
 }
 
-func (s *memoryStorageGeneric) delete(m libkb.MetaContext, teamID keybase1.TeamID, public bool) {
-	s.lru.Remove(s.key(teamID, public))
-}
-
 func (s *memoryStorageGeneric) clear() {
 	s.lru.Purge()
 }
 
 func (s *memoryStorageGeneric) key(teamID keybase1.TeamID, public bool) (key string) {
+	return genericStringKey(teamID, public)
+}
+
+func genericStringKey(teamID keybase1.TeamID, public bool) (key string) {
 	key = fmt.Sprintf("tid:%s", teamID)
 	if public {
 		key = fmt.Sprintf("tid:%s|pub", teamID)

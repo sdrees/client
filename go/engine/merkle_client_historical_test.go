@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"testing"
 
 	"github.com/keybase/client/go/libkb"
@@ -70,7 +69,7 @@ func TestFindNextMerkleRootAfterRevoke(t *testing.T) {
 	var paperDevice *libkb.Device
 	for _, device := range devices {
 		if device.Type == libkb.DeviceTypePaper {
-			paperDevice = device
+			paperDevice = device.Device
 		}
 	}
 
@@ -115,7 +114,7 @@ func TestFindNextMerkleRootAfterRevoke(t *testing.T) {
 	// Make sure we can find this after fu is deleted
 	err = libkb.DeleteAccount(m, fu.NormalizedUsername(), &fu.Passphrase)
 	require.NoError(t, err)
-	err = tc.G.Logout(context.TODO())
+	err = m.LogoutKillSecrets()
 	require.NoError(t, err)
 
 	arg = keybase1.FindNextMerkleRootAfterRevokeArg{

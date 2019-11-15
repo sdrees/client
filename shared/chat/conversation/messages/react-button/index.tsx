@@ -42,23 +42,24 @@ if (!Styles.isMobile) {
   })
 }
 
-// @ts-ignore
-const ButtonBox = Styles.styled(ClickableBox)((props: ClickableBoxProps & {border: 1 | 0}) =>
-  Styles.isMobile
-    ? {borderColor: Styles.globalColors.black_10}
-    : {
-        ...(props.border
-          ? {
-              ':hover': {
-                backgroundColor: Styles.globalColors.blueLighter2,
-                borderColor: Styles.globalColors.blue,
-              },
-            }
-          : {}),
-        '& .centered': {animation: `${bounceIn} 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`},
-        '& .offscreen': {animation: `${bounceOut} 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`},
-        borderColor: Styles.globalColors.black_10,
-      }
+const ButtonBox = Styles.styled(ClickableBox, {shouldForwardProp: prop => prop !== 'noEffect'})(
+  // @ts-ignore
+  (props: ClickableBoxProps & {border: 1 | 0; noEffect: boolean}) =>
+    Styles.isMobile || props.noEffect
+      ? {borderColor: Styles.globalColors.black_10}
+      : {
+          ...(props.border
+            ? {
+                ':hover': {
+                  backgroundColor: Styles.globalColors.blueLighter2,
+                  borderColor: Styles.globalColors.blue,
+                },
+              }
+            : {}),
+          '& .centered': {animation: `${bounceIn} 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`},
+          '& .offscreen': {animation: `${bounceOut} 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`},
+          borderColor: Styles.globalColors.black_10,
+        }
 )
 
 const ReactButton = (props: Props) => (
@@ -124,8 +125,7 @@ export class NewReactionButton extends React.Component<NewReactionButtonProps, N
     this.props.onShowPicker && this.props.onShowPicker(showingPicker)
   }
 
-  _onAddReaction = ({colons}: {colons: string}, evt: Event) => {
-    evt.stopPropagation()
+  _onAddReaction = ({colons}: {colons: string}) => {
     this.props.onAddReaction(colons)
     this._setShowingPicker(false)
     this._stopCycle()
@@ -235,64 +235,67 @@ export class NewReactionButton extends React.Component<NewReactionButtonProps, N
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  active: {
-    backgroundColor: Styles.globalColors.blueLighter2,
-    borderColor: Styles.globalColors.blue,
-  },
-  borderBase: {
-    borderRadius: Styles.borderRadius,
-    borderStyle: 'solid',
-  },
-  buttonBox: {
-    backgroundColor: Styles.globalColors.white,
-    borderWidth: 1,
-    height: Styles.isMobile ? 30 : 24,
-    ...Styles.transition('border-color', 'background-color', 'box-shadow'),
-  },
-  container: Styles.platformStyles({
-    common: {
-      paddingLeft: 6,
-      paddingRight: 6,
-    },
-    isElectron: {
-      paddingBottom: Styles.globalMargins.tiny,
-      paddingTop: Styles.globalMargins.tiny,
-    },
-  }),
-  count: {
-    color: Styles.globalColors.black_50,
-    position: 'relative',
-    top: 1,
-  },
-  countActive: {
-    color: Styles.globalColors.blueDark,
-  },
-  emojiContainer: Styles.platformStyles({
-    isElectron: {
-      ...Styles.desktopStyles.boxShadow,
-      borderRadius: 4,
-      marginRight: Styles.globalMargins.small,
-    },
-  }),
-  emojiIconWrapper: Styles.platformStyles({
-    isElectron: {
-      position: 'absolute',
-    },
-    isMobile: {marginTop: 2},
-  }),
-  emojiWrapper: Styles.platformStyles({
-    isMobile: {marginTop: -2},
-  }),
-  newReactionButtonBox: Styles.platformStyles({
-    common: {
-      width: 37,
-    },
-    isElectron: {
-      minHeight: 18,
-      overflow: 'hidden',
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      active: {
+        backgroundColor: Styles.globalColors.blueLighter2,
+        borderColor: Styles.globalColors.blue,
+      },
+      borderBase: {
+        borderRadius: Styles.borderRadius,
+        borderStyle: 'solid',
+      },
+      buttonBox: {
+        backgroundColor: Styles.globalColors.white,
+        borderWidth: 1,
+        height: Styles.isMobile ? 30 : 24,
+        ...Styles.transition('border-color', 'background-color', 'box-shadow'),
+      },
+      container: Styles.platformStyles({
+        common: {
+          paddingLeft: 6,
+          paddingRight: 6,
+        },
+        isElectron: {
+          paddingBottom: Styles.globalMargins.tiny,
+          paddingTop: Styles.globalMargins.tiny,
+        },
+      }),
+      count: {
+        color: Styles.globalColors.black_50,
+        position: 'relative',
+        top: 1,
+      },
+      countActive: {
+        color: Styles.globalColors.blueDark,
+      },
+      emojiContainer: Styles.platformStyles({
+        isElectron: {
+          ...Styles.desktopStyles.boxShadow,
+          borderRadius: 4,
+          marginRight: Styles.globalMargins.small,
+        },
+      }),
+      emojiIconWrapper: Styles.platformStyles({
+        isElectron: {
+          position: 'absolute',
+        },
+        isMobile: {marginTop: 2},
+      }),
+      emojiWrapper: Styles.platformStyles({
+        isMobile: {marginTop: -2},
+      }),
+      newReactionButtonBox: Styles.platformStyles({
+        common: {
+          width: 37,
+        },
+        isElectron: {
+          minHeight: 18,
+          overflow: 'hidden',
+        },
+      }),
+    } as const)
+)
 
 export default ReactButton

@@ -1,52 +1,67 @@
 import logger from '../../logger'
 import * as FsGen from '../fs-gen'
 import * as Types from '../../constants/types/fs'
+import * as Constants from '../../constants/fs'
 import * as Saga from '../../util/saga'
-import * as Flow from '../../util/flow'
 import {TypedState} from '../../constants/reducer'
 import {parseUri, launchImageLibraryAsync} from '../../util/expo-image-picker'
 import {makeRetriableErrorHandler} from './shared'
-import {saveAttachmentDialog, showShareActionSheetFromURL} from '../platform-specific'
+import {saveAttachmentToCameraRoll, showShareActionSheet} from '../platform-specific'
 
-const pickAndUploadToPromise = (_: TypedState, action: FsGen.PickAndUploadPayload): Promise<any> =>
-  launchImageLibraryAsync(action.payload.type)
-    .then(result =>
-      result.cancelled === true
-        ? null
-        : FsGen.createUpload({
-            localPath: parseUri(result),
-            parentPath: action.payload.parentPath,
-          })
-    )
-    .catch(makeRetriableErrorHandler(action))
-
-const downloadSuccess = (state: TypedState, action: FsGen.DownloadSuccessPayload) => {
-  const {key, mimeType} = action.payload
-  const download = state.fs.downloads.get(key)
-  if (!download) {
-    logger.warn('missing download key', key)
-    return
-  }
-  const {intent, localPath} = download.meta as Types.DownloadMeta
-  switch (intent) {
-    case Types.DownloadIntent.CameraRoll:
-      return saveAttachmentDialog(localPath)
-        .then(() => FsGen.createDismissDownload({key}))
-        .catch(makeRetriableErrorHandler(action))
-    case Types.DownloadIntent.Share:
-      // @ts-ignore codemod-issue probably a real issue
-      return showShareActionSheetFromURL({mimeType, url: localPath})
-        .then(() => FsGen.createDismissDownload({key}))
-        .catch(makeRetriableErrorHandler(action))
-    case Types.DownloadIntent.None:
-      return
-    default:
-      Flow.ifFlowComplainsAboutThisFunctionYouHaventHandledAllCasesInASwitch(intent)
-      return undefined
+const pickAndUploadToPromise = async (_: TypedState, action: FsGen.PickAndUploadPayload) => {
+  try {
+    const result = await launchImageLibraryAsync(action.payload.type)
+    return result.cancelled === true
+      ? null
+      : FsGen.createUpload({
+          localPath: parseUri(result),
+          parentPath: action.payload.parentPath,
+        })
+  } catch (e) {
+    return makeRetriableErrorHandler(action)(e)
   }
 }
 
-export default function* nativeSaga(): Saga.SagaGenerator<any, any> {
+const finishedDownloadWithIntent = async (
+  state: TypedState,
+  action: FsGen.FinishedDownloadWithIntentPayload
+) => {
+  const {downloadID, downloadIntent, mimeType} = action.payload
+  const downloadState = state.fs.downloads.state.get(downloadID) || Constants.emptyDownloadState
+  if (downloadState === Constants.emptyDownloadState) {
+    logger.warn('missing download', downloadID)
+    return
+  }
+  if (downloadState.error) {
+    return [
+      FsGen.createDismissDownload({downloadID}),
+      FsGen.createFsError({
+        error: Constants.makeError({error: downloadState.error, erroredAction: action}),
+        expectedIfOffline: false,
+      }),
+    ]
+  }
+  const {localPath} = downloadState
+  try {
+    switch (downloadIntent) {
+      case Types.DownloadIntent.CameraRoll:
+        await saveAttachmentToCameraRoll(localPath, mimeType)
+        return FsGen.createDismissDownload({downloadID})
+      case Types.DownloadIntent.Share:
+        // @ts-ignore codemod-issue probably a real issue
+        await showShareActionSheet({filePath: localPath, mimeType})
+        return FsGen.createDismissDownload({downloadID})
+      case Types.DownloadIntent.None:
+        return null
+      default:
+        return null
+    }
+  } catch (err) {
+    return makeRetriableErrorHandler(action)(err)
+  }
+}
+
+export default function* nativeSaga() {
   yield* Saga.chainAction2(FsGen.pickAndUpload, pickAndUploadToPromise)
-  yield* Saga.chainAction2(FsGen.downloadSuccess, downloadSuccess)
+  yield* Saga.chainAction2(FsGen.finishedDownloadWithIntent, finishedDownloadWithIntent)
 }

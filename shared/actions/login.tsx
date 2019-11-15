@@ -7,7 +7,6 @@ import * as Saga from '../util/saga'
 import * as RPCTypes from '../constants/types/rpc-gen'
 import * as Container from '../util/container'
 import logger from '../logger'
-import openURL from '../util/open-url'
 import {isMobile} from '../constants/platform'
 import {RPCError, niceError} from '../util/errors'
 import flags from '../util/feature-flags'
@@ -48,35 +47,33 @@ const moveToProvisioning = (username: string) => (_: any, response: any) => {
 // Actually do a user/pass login. Don't get sucked into a provisioning flow
 function* login(_: Container.TypedState, action: LoginGen.LoginPayload) {
   try {
-    yield* Saga.callRPCs(
-      RPCTypes.loginLoginRpcSaga({
-        customResponseIncomingCallMap: {
-          'keybase.1.gpgUi.selectKey': cancelOnCallback,
-          'keybase.1.loginUi.getEmailOrUsername': cancelOnCallback,
-          'keybase.1.provisionUi.DisplayAndPromptSecret': cancelOnCallback,
-          'keybase.1.provisionUi.PromptNewDeviceName': moveToProvisioning(action.payload.username),
-          'keybase.1.provisionUi.chooseDevice': cancelOnCallback,
-          'keybase.1.provisionUi.chooseGPGMethod': cancelOnCallback,
-          'keybase.1.secretUi.getPassphrase': getPasswordHandler(action.payload.password.stringValue()),
-        },
-        // cancel if we get any of these callbacks, we're logging in, not provisioning
-        incomingCallMap: {
-          'keybase.1.loginUi.displayPrimaryPaperKey': ignoreCallback,
-          'keybase.1.provisionUi.DisplaySecretExchanged': ignoreCallback,
-          'keybase.1.provisionUi.ProvisioneeSuccess': ignoreCallback,
-          'keybase.1.provisionUi.ProvisionerSuccess': ignoreCallback,
-        },
-        params: {
-          clientType: RPCTypes.ClientType.guiMain,
-          deviceName: '',
-          deviceType: isMobile ? 'mobile' : 'desktop',
-          doUserSwitch: flags.fastAccountSwitch,
-          paperKey: '',
-          username: action.payload.username,
-        },
-        waitingKey: Constants.waitingKey,
-      })
-    )
+    yield RPCTypes.loginLoginRpcSaga({
+      customResponseIncomingCallMap: {
+        'keybase.1.gpgUi.selectKey': cancelOnCallback,
+        'keybase.1.loginUi.getEmailOrUsername': cancelOnCallback,
+        'keybase.1.provisionUi.DisplayAndPromptSecret': cancelOnCallback,
+        'keybase.1.provisionUi.PromptNewDeviceName': moveToProvisioning(action.payload.username),
+        'keybase.1.provisionUi.chooseDevice': cancelOnCallback,
+        'keybase.1.provisionUi.chooseGPGMethod': cancelOnCallback,
+        'keybase.1.secretUi.getPassphrase': getPasswordHandler(action.payload.password.stringValue()),
+      },
+      // cancel if we get any of these callbacks, we're logging in, not provisioning
+      incomingCallMap: {
+        'keybase.1.loginUi.displayPrimaryPaperKey': ignoreCallback,
+        'keybase.1.provisionUi.DisplaySecretExchanged': ignoreCallback,
+        'keybase.1.provisionUi.ProvisioneeSuccess': ignoreCallback,
+        'keybase.1.provisionUi.ProvisionerSuccess': ignoreCallback,
+      },
+      params: {
+        clientType: RPCTypes.ClientType.guiMain,
+        deviceName: '',
+        deviceType: isMobile ? 'mobile' : 'desktop',
+        doUserSwitch: flags.fastAccountSwitch,
+        paperKey: '',
+        username: action.payload.username,
+      },
+      waitingKey: Constants.waitingKey,
+    })
     logger.info('login call succeeded')
     yield Saga.put(ConfigGen.createLoggedIn({causedBySignup: false, causedByStartup: false}))
   } catch (e) {
@@ -90,29 +87,25 @@ function* login(_: Container.TypedState, action: LoginGen.LoginPayload) {
   }
 }
 
-const launchForgotPasswordWebPage = () => {
-  openURL('https://keybase.io/#password-reset')
-}
-const launchAccountResetWebPage = () => {
-  openURL('https://keybase.io/#account-reset')
-}
-
 const loadIsOnline = async () => {
   try {
-    const result = await RPCTypes.loginIsOnlineRpcPromise(undefined)
-    return LoginGen.createLoadedIsOnline({result: result})
+    const isOnline = await RPCTypes.loginIsOnlineRpcPromise(undefined)
+    return LoginGen.createLoadedIsOnline({isOnline})
   } catch (err) {
     logger.warn('Error in checking whether we are online', err)
     return false
   }
 }
 
-function* loginSaga(): Saga.SagaGenerator<any, any> {
+// On login error, turn off the user switching flag, so that the login screen is not
+// hidden and the user can see and respond to the error.
+const loginError = () => ConfigGen.createSetUserSwitching({userSwitching: false})
+
+function* loginSaga() {
   // Actually log in
   yield* Saga.chainGenerator<LoginGen.LoginPayload>(LoginGen.login, login)
-  yield* Saga.chainAction2(LoginGen.launchForgotPasswordWebPage, launchForgotPasswordWebPage)
-  yield* Saga.chainAction2(LoginGen.launchAccountResetWebPage, launchAccountResetWebPage)
   yield* Saga.chainAction2(LoginGen.loadIsOnline, loadIsOnline)
+  yield* Saga.chainAction2(LoginGen.loginError, loginError)
 }
 
 export default loginSaga

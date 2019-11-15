@@ -1,10 +1,11 @@
 import logger from '../logger'
+import * as TeamBuildingGen from '../actions/team-building-gen'
 import * as I from 'immutable'
 import * as Constants from '../constants/wallets'
 import * as Types from '../constants/types/wallets'
 import * as WalletsGen from '../actions/wallets-gen'
-import {actionHasError} from '../util/container'
 import HiddenString from '../util/hidden-string'
+import teamBuildingReducer from './team-building'
 
 const initialState: Types.State = Constants.makeState()
 
@@ -20,7 +21,10 @@ const reduceAssetMap = (
     )
   )
 
-export default function(state: Types.State = initialState, action: WalletsGen.Actions): Types.State {
+export default function(
+  state: Types.State = initialState,
+  action: WalletsGen.Actions | TeamBuildingGen.Actions
+): Types.State {
   switch (action.type) {
     case WalletsGen.resetStore:
       return initialState.merge({
@@ -34,16 +38,16 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
       return state.merge({accountMap: accountMap})
     }
     case WalletsGen.changedAccountName:
-    case WalletsGen.accountUpdateReceived:
+    case WalletsGen.accountUpdateReceived: {
+      const {account} = action.payload
       // accept the updated account if we've loaded it already
       // this is because we get the sort order from the full accounts load,
       // and can't figure it out from these notifications alone.
-      if (state.accountMap.get(action.payload.account.accountID)) {
-        return state.update('accountMap', am =>
-          am.update(action.payload.account.accountID, acc => acc.merge(action.payload.account))
-        )
+      if (account && state.accountMap.get(account.accountID)) {
+        return state.update('accountMap', am => am.update(account.accountID, acc => acc.merge(account)))
       }
       return state
+    }
     case WalletsGen.assetsReceived:
       return state.setIn(['assetsMap', action.payload.accountID], I.List(action.payload.assets))
     case WalletsGen.buildPayment:
@@ -320,7 +324,6 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
       const {sendAssetChoices} = action.payload
       return state.merge({
         building: state.get('building').merge({sendAssetChoices}),
-        builtPayment: Constants.makeBuiltPayment(),
       })
     }
     case WalletsGen.buildingPaymentIDReceived: {
@@ -348,8 +351,8 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
       }
       return state.merge({
         accountName: '',
-        accountNameError: actionHasError(action) ? action.payload.error : '',
-        accountNameValidationState: actionHasError(action) ? 'error' : 'valid',
+        accountNameError: action.payload.error ? action.payload.error : '',
+        accountNameValidationState: action.payload.error ? 'error' : 'valid',
       })
     case WalletsGen.validateSecretKey:
       return state.merge({
@@ -363,13 +366,11 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
       }
       return state.merge({
         secretKey: new HiddenString(''),
-        secretKeyError: actionHasError(action) ? action.payload.error : '',
-        secretKeyValidationState: actionHasError(action) ? 'error' : 'valid',
+        secretKeyError: action.payload.error ? action.payload.error : '',
+        secretKeyValidationState: action.payload.error ? 'error' : 'valid',
       })
     case WalletsGen.changedTrustline:
-      return actionHasError(action)
-        ? state.merge({changeTrustlineError: action.payload.error})
-        : state.merge({changeTrustlineError: ''})
+      return state.merge({changeTrustlineError: action.payload.error || ''})
     case WalletsGen.clearErrors:
       return state.merge({
         accountName: '',
@@ -385,7 +386,7 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
         sentPaymentError: '',
       })
     case WalletsGen.createdNewAccount:
-      return actionHasError(action)
+      return action.payload.error
         ? state.merge({createNewAccountError: action.payload.error})
         : state.merge({
             accountName: '',
@@ -400,7 +401,7 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
             selectedAccount: action.payload.accountID,
           })
     case WalletsGen.linkedExistingAccount:
-      return actionHasError(action)
+      return action.payload.error
         ? state.merge({linkExistingAccountError: action.payload.error})
         : state.merge({
             accountName: '',
@@ -437,20 +438,6 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
       })
     case WalletsGen.loadedMobileOnlyMode:
       return state.setIn(['mobileOnlyMap', action.payload.accountID], action.payload.enabled)
-    case WalletsGen.inflationDestinationReceived:
-      return actionHasError(action)
-        ? state.merge({inflationDestinationError: action.payload.error})
-        : state.merge({
-            inflationDestinationError: '',
-            inflationDestinationMap: state.inflationDestinationMap.merge(
-              I.Map([[action.payload.accountID, action.payload.selected]])
-            ),
-            inflationDestinations: action.payload.options
-              ? I.List(action.payload.options)
-              : state.inflationDestinations,
-          })
-    case WalletsGen.setInflationDestination:
-      return state.merge({inflationDestinationError: ''})
     case WalletsGen.updatedAirdropState:
       return state.merge({
         airdropQualifications: I.List(action.payload.airdropQualifications),
@@ -463,7 +450,10 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
         sep7ConfirmInfo: null,
         sep7ConfirmPath: Constants.emptyBuiltPaymentAdvanced,
         sep7ConfirmURI: '',
+        sep7SendError: '',
       })
+    case WalletsGen.setSEP7SendError:
+      return state.merge({sep7SendError: action.payload.error})
     case WalletsGen.validateSEP7LinkError:
       return state.merge({sep7ConfirmError: action.payload.error})
     case WalletsGen.setSEP7Tx:
@@ -554,6 +544,21 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
         sep6Error: action.payload.error,
         sep6Message: action.payload.message,
       })
+    case TeamBuildingGen.resetStore:
+    case TeamBuildingGen.cancelTeamBuilding:
+    case TeamBuildingGen.addUsersToTeamSoFar:
+    case TeamBuildingGen.removeUsersFromTeamSoFar:
+    case TeamBuildingGen.searchResultsLoaded:
+    case TeamBuildingGen.finishedTeamBuilding:
+    case TeamBuildingGen.fetchedUserRecs:
+    case TeamBuildingGen.fetchUserRecs:
+    case TeamBuildingGen.search:
+    case TeamBuildingGen.selectRole:
+    case TeamBuildingGen.labelsSeen:
+    case TeamBuildingGen.changeSendNotification:
+      return state.merge({
+        teamBuilding: teamBuildingReducer('wallets', state.teamBuilding, action),
+      })
     // Saga only actions
     case WalletsGen.updateAirdropDetails:
     case WalletsGen.changeAirdrop:
@@ -587,7 +592,6 @@ export default function(state: Types.State = initialState, action: WalletsGen.Ac
     case WalletsGen.loadMobileOnlyMode:
     case WalletsGen.changeMobileOnlyMode:
     case WalletsGen.exitFailedPayment:
-    case WalletsGen.loadInflationDestination:
     case WalletsGen.loadExternalPartners:
     case WalletsGen.acceptSEP7Pay:
     case WalletsGen.acceptSEP7Path:

@@ -40,7 +40,7 @@ You can set environment variables for debugging:
 | NO_DASHBOARD | Don't show dashboard |
 
 You can also edit `~/Library/Logs/Keybase.app.debug` on macOS,
-`$HOME/.cache/keybase.app.debug` on Linux, or
+`$HOME/.cache/keybase/keybase.app.debug` on Linux, or
 `%localappdata%\Keybase\keybase.app.debug` on Windows (see
 `platform.desktop.js`) to add debug flags. In particular, you probably want
 ```json
@@ -166,3 +166,27 @@ In order to update the list of countries supported by Amazon SNS, run
 the [update-data.sh](https://github.com/keybase/client/blob/master/shared/util/phone-numbers/sms-support/update-data.sh)
 script. It will first fetch the JSON from Amazon's public S3 bucket and
 transform it for use in our internal country filtering code.
+
+### ESLint in VSCode
+
+VSCode's ESLint extension needs to know where to look for .eslintrc. Add this to `REPO/.vscode/settings.json`.
+
+```
+{ "eslint.workingDirectories": ["shared"] }
+```
+
+### React Devtools standalone
+
+If you want to use react devtools to examine the DOM of a running RN app in the simulator, you'll need:
+
+```
+yarn global add react-devtools@3
+```
+
+### Watchman
+
+You'll need to have watchman installed if you're running out of file descriptors:
+
+```
+brew install watchman
+```

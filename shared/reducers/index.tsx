@@ -1,11 +1,10 @@
+import autoreset from './autoreset'
 import chat2 from './chat2'
 import config from './config'
 import deeplinks from './deeplinks'
 import devices from './devices'
-import entities from './entities'
 import fs from './fs'
 import git from './git'
-import gregor from './gregor'
 import login from './login'
 import notifications from './notifications'
 import people from './people'
@@ -13,6 +12,7 @@ import pinentry from './pinentry'
 import profile from './profile'
 import provision from './provision'
 import push from './push'
+import recoverPassword from './recover-password'
 import settings from './settings'
 import signup from './signup'
 import teams from './teams'
@@ -24,14 +24,13 @@ import wallets from './wallets'
 import {combineReducers} from 'redux'
 
 const reducers = {
+  autoreset,
   chat2,
   config,
   deeplinks,
   devices,
-  entities,
   fs,
   git,
-  gregor,
   login,
   notifications,
   people,
@@ -39,6 +38,7 @@ const reducers = {
   profile,
   provision,
   push,
+  recoverPassword,
   settings,
   signup,
   teams,

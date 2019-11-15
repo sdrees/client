@@ -1,14 +1,15 @@
 import * as React from 'react'
-import {capitalize} from 'lodash-es'
+import capitalize from 'lodash/capitalize'
 import * as Kb from '../../../common-adapters'
 import * as Styles from '../../../styles'
 import AddPeopleHow from '../header/add-people-how/container'
 import TeamMenu from '../menu-container'
+import {TeamID} from '../../../constants/types/teams'
 import {pluralize} from '../../../util/string'
 
 const _AddPeopleButton = (
   props: {
-    teamname: string
+    teamID: TeamID
   } & Kb.OverlayParentProps
 ) => (
   <>
@@ -23,7 +24,7 @@ const _AddPeopleButton = (
     <AddPeopleHow
       attachTo={props.getAttachmentRef}
       onHidden={props.toggleShowingMenu}
-      teamname={props.teamname}
+      teamID={props.teamID}
       visible={props.showingMenu}
     />
   </>
@@ -35,13 +36,14 @@ type Props = {
   canAddPeople: boolean
   canChat: boolean
   loading: boolean
+  teamID: TeamID
   teamname: string
 } & Kb.OverlayParentProps
 
 const _HeaderRightActions = (props: Props) => (
   <Kb.Box2 direction="horizontal" gap="tiny" alignItems="center" style={styles.rightActionsContainer}>
     {props.canChat && <Kb.Button label="Chat" onClick={props.onChat} small={true} />}
-    {props.canAddPeople && <AddPeopleButton teamname={props.teamname} />}
+    {props.canAddPeople && <AddPeopleButton teamID={props.teamID} />}
     <Kb.Button mode="Secondary" small={true} ref={props.setAttachmentRef} onClick={props.toggleShowingMenu}>
       <Kb.Icon type="iconfont-ellipsis" color={Styles.globalColors.blue} />
     </Kb.Button>
@@ -123,26 +125,29 @@ export const SubHeader = (props: SubHeaderProps) =>
     </Kb.Box2>
   ) : null
 
-const styles = Styles.styleSheetCreate({
-  alignSelfFlexStart: {
-    alignSelf: 'flex-start',
-  },
-  banner: {
-    ...Styles.padding(Styles.globalMargins.xsmall, Styles.globalMargins.xsmall, 0),
-  },
-  clickable: Styles.platformStyles({
-    isElectron: {
-      ...Styles.desktopStyles.windowDraggingClickable,
-    },
-  }),
-  marginRightTiny: {
-    marginRight: Styles.globalMargins.tiny,
-  },
-  rightActionsContainer: Styles.platformStyles({
-    isElectron: {
-      ...Styles.desktopStyles.windowDraggingClickable,
-      alignSelf: 'flex-end',
-      paddingRight: Styles.globalMargins.tiny,
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      alignSelfFlexStart: {
+        alignSelf: 'flex-start',
+      },
+      banner: {
+        ...Styles.padding(Styles.globalMargins.xsmall, Styles.globalMargins.xsmall, 0),
+      },
+      clickable: Styles.platformStyles({
+        isElectron: {
+          ...Styles.desktopStyles.windowDraggingClickable,
+        },
+      }),
+      marginRightTiny: {
+        marginRight: Styles.globalMargins.tiny,
+      },
+      rightActionsContainer: Styles.platformStyles({
+        isElectron: {
+          ...Styles.desktopStyles.windowDraggingClickable,
+          alignSelf: 'flex-end',
+          paddingRight: Styles.globalMargins.tiny,
+        },
+      }),
+    } as const)
+)

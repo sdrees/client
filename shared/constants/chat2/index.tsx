@@ -1,9 +1,8 @@
-import * as I from 'immutable'
 import * as Types from '../types/chat2'
 import * as RPCChatTypes from '../types/rpc-chat-gen'
-import * as RPCTypes from '../../constants/types/rpc-gen'
-import * as TeamBuildingConstants from '../../constants/team-building'
-import {clamp} from 'lodash-es'
+import * as RPCTypes from '../types/rpc-gen'
+import * as TeamBuildingConstants from '../team-building'
+import clamp from 'lodash/clamp'
 import {chatTab} from '../tabs'
 import {TypedState} from '../reducer'
 import {isMobile} from '../platform'
@@ -22,77 +21,69 @@ import HiddenString from '../../util/hidden-string'
 export const defaultTopReacjis = [':+1:', ':-1:', ':tada:', ':joy:', ':sunglasses:']
 const defaultSkinTone = 1
 export const defaultUserReacjis = {skinTone: defaultSkinTone, topReacjis: defaultTopReacjis}
+const emptyArray: Array<unknown> = []
+const emptySet = new Set()
 
-export const makeState = I.Record<Types._State>({
-  accountsInfoMap: I.Map(),
-  attachmentFullscreenSelection: null,
-  attachmentViewMap: I.Map(),
-  badgeMap: I.Map(),
-  botCommandsUpdateStatusMap: I.Map(),
-  commandMarkdownMap: I.Map(),
-  commandStatusMap: I.Map(),
-  containsLatestMessageMap: I.Map(),
+export const makeState = (): Types.State => ({
+  accountsInfoMap: new Map(),
+  attachmentFullscreenSelection: undefined,
+  attachmentViewMap: new Map(),
+  audioRecording: new Map(),
+  badgeMap: new Map(), // id to the badge count
+  botCommandsUpdateStatusMap: new Map(),
+  channelSearchText: '',
+  commandMarkdownMap: new Map(),
+  commandStatusMap: new Map(),
+  containsLatestMessageMap: new Map(),
   createConversationError: null,
-  editingMap: I.Map(),
-  explodingModeLocks: I.Map(),
-  explodingModes: I.Map(),
-  flipStatusMap: I.Map(),
+  dismissedInviteBannersMap: new Map(),
+  draftMap: new Map(),
+  editingMap: new Map(),
+  explodingModeLocks: new Map(), // locks set on exploding mode while user is inputting text,
+  explodingModes: new Map(), // seconds to exploding message expiration,
+  flipStatusMap: new Map(),
   focus: null,
-  giphyResultMap: I.Map(),
-  giphyWindowMap: I.Map(),
+  giphyResultMap: new Map(),
+  giphyWindowMap: new Map(),
   inboxHasLoaded: false,
-  inboxSearch: null,
+  inboxLayout: null,
+  inboxNumSmallRows: 5,
+  inboxSearch: undefined,
   inboxShowNew: false,
   isWalletsNew: true,
-  maybeMentionMap: I.Map(),
-  messageCenterOrdinals: I.Map(),
-  messageMap: I.Map(),
-  messageOrdinals: I.Map(),
-  metaMap: I.Map(),
-  moreToLoadMap: I.Map(),
-  orangeLineMap: I.Map(),
-  paymentConfirmInfo: null,
-  paymentStatusMap: I.Map(),
-  pendingOutboxToOrdinal: I.Map(),
-  prependTextMap: I.Map(),
+  lastCoord: undefined,
+  maybeMentionMap: new Map(),
+  messageCenterOrdinals: new Map(), // ordinals to center threads on,
+  messageMap: new Map(), // messages in a thread,
+  messageOrdinals: new Map(), // ordered ordinals in a thread,
+  metaMap: new Map(), // metadata about a thread, There is a special node for the pending conversation,
+  moreToLoadMap: new Map(), // if we have more data to load,
+  mutedMap: new Map(),
+  orangeLineMap: new Map(), // last message we've seen,
+  paymentConfirmInfo: undefined,
+  paymentStatusMap: new Map(),
+  pendingOutboxToOrdinal: new Map(), // messages waiting to be sent,
+  prependTextMap: new Map(),
   previousSelectedConversation: noConversationIDKey,
-  quote: null,
-  replyToMap: I.Map(),
+  quote: undefined,
+  replyToMap: new Map(),
   selectedConversation: noConversationIDKey,
   smallTeamsExpanded: false,
-  staticConfig: null,
+  staticConfig: undefined,
   teamBuilding: TeamBuildingConstants.makeSubState(),
-  threadLoadStatus: I.Map(),
-  threadSearchInfoMap: I.Map(),
-  threadSearchQueryMap: I.Map(),
+  threadLoadStatus: new Map(),
+  threadSearchInfoMap: new Map(),
+  threadSearchQueryMap: new Map(),
   trustedInboxHasLoaded: false,
-  typingMap: I.Map(),
-  unfurlPromptMap: I.Map(),
-  unreadMap: I.Map(),
-  unsentTextMap: I.Map(),
+  typingMap: new Map(), // who's typing currently,
+  unfurlPromptMap: new Map(),
+  unreadMap: new Map(),
+  unsentTextMap: new Map(),
   userReacjis: defaultUserReacjis,
 })
 
-export const makeQuoteInfo = I.Record<Types._QuoteInfo>({
-  counter: 0,
-  ordinal: Types.numberToOrdinal(0),
-  sourceConversationIDKey: noConversationIDKey,
-  targetConversationIDKey: noConversationIDKey,
-})
-
-export const makeStaticConfig = I.Record<Types._StaticConfig>({
-  builtinCommands: {
-    [RPCChatTypes.ConversationBuiltinCommandTyp.adhoc]: [],
-    [RPCChatTypes.ConversationBuiltinCommandTyp.bigteam]: [],
-    [RPCChatTypes.ConversationBuiltinCommandTyp.bigteamgeneral]: [],
-    [RPCChatTypes.ConversationBuiltinCommandTyp.none]: [],
-    [RPCChatTypes.ConversationBuiltinCommandTyp.smallteam]: [],
-  },
-  deletableByDeleteHistory: I.Set(),
-})
-
-export const makeThreadSearchInfo = I.Record<Types._ThreadSearchInfo>({
-  hits: I.List(),
+export const makeThreadSearchInfo = (): Types.ThreadSearchInfo => ({
+  hits: emptyArray as Types.ThreadSearchInfo['hits'],
   status: 'initial',
   visible: false,
 })
@@ -102,41 +93,60 @@ export const inboxSearchMaxTextResults = 50
 export const inboxSearchMaxNameResults = 7
 export const inboxSearchMaxUnreadNameResults = isMobile ? 5 : 10
 
-export const makeInboxSearchInfo = I.Record<Types._InboxSearchInfo>({
+export const makeInboxSearchInfo = (): Types.InboxSearchInfo => ({
   indexPercent: 0,
-  nameResults: I.List(),
+  nameResults: [],
   nameResultsUnread: false,
   nameStatus: 'initial',
   query: new HiddenString(''),
   selectedIndex: 0,
-  textResults: I.List(),
+  textResults: [],
   textStatus: 'initial',
 })
 
-export const makeInboxSearchConvHit = I.Record<Types._InboxSearchConvHit>({
-  conversationIDKey: noConversationIDKey,
-  teamType: 'small',
-})
-
-export const makeInboxSearchTextHit = I.Record<Types._InboxSearchTextHit>({
-  conversationIDKey: noConversationIDKey,
-  numHits: 0,
-  query: '',
-  teamType: 'small',
-  time: 0,
-})
-
-export const makeAttachmentViewInfo = I.Record<Types._AttachmentViewInfo>({
+export const makeAttachmentViewInfo = (): Types.AttachmentViewInfo => ({
   last: false,
-  messages: I.List(),
+  messages: [],
   status: 'loading',
 })
 
-export const initialAttachmentViewInfo = makeAttachmentViewInfo()
+export const makeAudioRecordingInfo = (): Types.AudioRecordingInfo => ({
+  isLocked: false,
+  outboxID: new Buffer('hex'),
+  path: '',
+  recordStart: Date.now(),
+  status: Types.AudioRecordingStatus.INITIAL,
+})
+
+export const showAudioRecording = (audioRecording: Types.AudioRecordingInfo | undefined) => {
+  return !(
+    !audioRecording ||
+    audioRecording.status === Types.AudioRecordingStatus.INITIAL ||
+    audioRecording.status === Types.AudioRecordingStatus.STOPPED ||
+    audioRecording.status === Types.AudioRecordingStatus.STAGED ||
+    audioRecording.status === Types.AudioRecordingStatus.CANCELLED
+  )
+}
+
+export const isStoppedAudioRecordingStatus = (status: Types.AudioRecordingStatus) => {
+  return (
+    status === Types.AudioRecordingStatus.STOPPED ||
+    status === Types.AudioRecordingStatus.STAGED ||
+    status === Types.AudioRecordingStatus.CANCELLED
+  )
+}
+
+export const audioRecordingDuration = (audioRecording: Types.AudioRecordingInfo) => {
+  return (audioRecording.recordEnd || audioRecording.recordStart) - audioRecording.recordStart
+}
+
+export const isCancelledAudioRecording = (audioRecording: Types.AudioRecordingInfo | undefined) => {
+  return audioRecording && audioRecording.status === Types.AudioRecordingStatus.CANCELLED
+}
 
 export const getInboxSearchSelected = (inboxSearch: Types.InboxSearchInfo) => {
-  if (inboxSearch.selectedIndex < inboxSearch.nameResults.size) {
-    const maybeNameResults = inboxSearch.nameResults.get(inboxSearch.selectedIndex)
+  if (inboxSearch.selectedIndex < inboxSearch.nameResults.length) {
+    const maybeNameResults = inboxSearch.nameResults[inboxSearch.selectedIndex]
     const conversationIDKey =
       maybeNameResults === null || maybeNameResults === undefined
         ? undefined
@@ -147,8 +157,8 @@ export const getInboxSearchSelected = (inboxSearch: Types.InboxSearchInfo) => {
         query: undefined,
       }
     }
-  } else if (inboxSearch.selectedIndex < inboxSearch.nameResults.size + inboxSearch.textResults.size) {
-    const result = inboxSearch.textResults.get(inboxSearch.selectedIndex - inboxSearch.nameResults.size)
+  } else if (inboxSearch.selectedIndex < inboxSearch.nameResults.length + inboxSearch.textResults.length) {
+    const result = inboxSearch.textResults[inboxSearch.selectedIndex - inboxSearch.nameResults.length]
     if (result) {
       return {
         conversationIDKey: result.conversationIDKey,
@@ -160,17 +170,20 @@ export const getInboxSearchSelected = (inboxSearch: Types.InboxSearchInfo) => {
 }
 
 export const getThreadSearchInfo = (state: TypedState, conversationIDKey: Types.ConversationIDKey) =>
-  state.chat2.threadSearchInfoMap.get(conversationIDKey, makeThreadSearchInfo())
+  state.chat2.threadSearchInfoMap.get(conversationIDKey) || makeThreadSearchInfo()
 
 export const getMessageOrdinals = (state: TypedState, id: Types.ConversationIDKey) =>
-  state.chat2.messageOrdinals.get(id, I.OrderedSet<Types.Ordinal>())
+  state.chat2.messageOrdinals.get(id) || new Set<Types.Ordinal>()
 export const getMessageCenterOrdinal = (state: TypedState, id: Types.ConversationIDKey) =>
   state.chat2.messageCenterOrdinals.get(id)
 export const getMessage = (
   state: TypedState,
   id: Types.ConversationIDKey,
   ordinal: Types.Ordinal
-): Types.Message | null => state.chat2.messageMap.getIn([id, ordinal])
+): Types.Message | null => {
+  const map = state.chat2.messageMap.get(id)
+  return (map && map.get(ordinal)) || null
+}
 export const isDecoratedMessage = (message: Types.Message): message is Types.DecoratedMessage => {
   return !(
     message.type === 'placeholder' ||
@@ -182,12 +195,12 @@ export const isDecoratedMessage = (message: Types.Message): message is Types.Dec
 export const getMessageKey = (message: Types.Message) =>
   `${message.conversationIDKey}:${Types.ordinalToNumber(message.ordinal)}`
 export const getHasBadge = (state: TypedState, id: Types.ConversationIDKey) =>
-  state.chat2.badgeMap.get(id, 0) > 0
+  (state.chat2.badgeMap.get(id) || 0) > 0
 export const getHasUnread = (state: TypedState, id: Types.ConversationIDKey) =>
-  state.chat2.unreadMap.get(id, 0) > 0
+  (state.chat2.unreadMap.get(id) || 0) > 0
 export const getSelectedConversation = (state: TypedState) => state.chat2.selectedConversation
 export const getReplyToOrdinal = (state: TypedState, conversationIDKey: Types.ConversationIDKey) => {
-  return state.chat2.replyToMap.get(conversationIDKey, null)
+  return state.chat2.replyToMap.get(conversationIDKey) || null
 }
 export const getReplyToMessageID = (state: TypedState, conversationIDKey: Types.ConversationIDKey) => {
   const ordinal = getReplyToOrdinal(state, conversationIDKey)
@@ -226,7 +239,7 @@ export const getQuoteInfo = (state: TypedState, id: Types.ConversationIDKey) => 
 }
 
 export const getTyping = (state: TypedState, id: Types.ConversationIDKey) =>
-  state.chat2.typingMap.get(id, I.Set())
+  state.chat2.typingMap.get(id) || (emptySet as Set<string>)
 export const generateOutboxID = () => Buffer.from([...Array(8)].map(() => Math.floor(Math.random() * 256)))
 export const isUserActivelyLookingAtThisThread = (
   state: TypedState,
@@ -280,14 +293,14 @@ export const waitingKeyPushLoad = (conversationIDKey: Types.ConversationIDKey) =
   `chat:pushLoad:${conversationIDKeyToString(conversationIDKey)}`
 export const waitingKeyThreadLoad = (conversationIDKey: Types.ConversationIDKey) =>
   `chat:loadingThread:${conversationIDKeyToString(conversationIDKey)}`
-export const waitingKeyUnboxing = (conversationIDKey: Types.ConversationIDKey) =>
-  `chat:unboxing:${conversationIDKeyToString(conversationIDKey)}`
 export const waitingKeyAddUsersToChannel = 'chat:addUsersToConversation'
 export const waitingKeyConvStatusChange = (conversationIDKey: Types.ConversationIDKey) =>
   `chat:convStatusChange:${conversationIDKeyToString(conversationIDKey)}`
+export const waitingKeyUnpin = (conversationIDKey: Types.ConversationIDKey) =>
+  `chat:unpin:${conversationIDKeyToString(conversationIDKey)}`
 
 export const anyChatWaitingKeys = (state: TypedState) =>
-  state.waiting.counts.keySeq().some(k => k.startsWith('chat:'))
+  [...state.waiting.counts.keys()].some(k => k.startsWith('chat:'))
 
 /**
  * Gregor key for exploding conversations
@@ -299,9 +312,9 @@ export const explodingModeGregorKeyPrefix = 'exploding:'
 export const explodingModeGregorKey = (c: Types.ConversationIDKey): string =>
   `${explodingModeGregorKeyPrefix}${c}`
 export const getConversationExplodingMode = (state: TypedState, c: Types.ConversationIDKey): number => {
-  let mode = state.chat2.explodingModeLocks.get(c, null)
+  let mode = state.chat2.explodingModeLocks.get(c) || null
   if (mode === null) {
-    mode = state.chat2.explodingModes.get(c, 0)
+    mode = state.chat2.explodingModes.get(c) || 0
   }
   const meta = getMeta(state, c)
   const convRetention = getEffectiveRetentionPolicy(meta)
@@ -309,11 +322,17 @@ export const getConversationExplodingMode = (state: TypedState, c: Types.Convers
   return mode || 0
 }
 export const isExplodingModeLocked = (state: TypedState, c: Types.ConversationIDKey) =>
-  state.chat2.explodingModeLocks.get(c, null) !== null
+  (state.chat2.explodingModeLocks.get(c) || null) !== null
 
 export const getTeamMentionName = (name: string, channel: string) => {
   return name + (channel ? `#${channel}` : '')
 }
+
+export const isMuted = (state: TypedState, convID: Types.ConversationIDKey) =>
+  state.chat2.mutedMap.get(convID) || false
+
+export const getDraft = (state: TypedState, convID: Types.ConversationIDKey) =>
+  state.chat2.draftMap.get(convID) || ''
 
 // When user clicks wallets icon in chat input, set seenWalletsGregorKey with
 // body of 'true'
@@ -325,6 +344,12 @@ export const makeInboxQuery = (
   return {
     computeActiveList: true,
     convIDs: convIDKeys.map(Types.keyToConversationID),
+    memberStatus: (Object.keys(RPCChatTypes.ConversationMemberStatus)
+      .filter(k => typeof RPCChatTypes.ConversationMemberStatus[k as any] === 'number')
+      .filter(k => !['neverJoined', 'left', 'removed'].includes(k as any))
+      .map(k => RPCChatTypes.ConversationMemberStatus[k as any]) as unknown) as Array<
+      RPCChatTypes.ConversationMemberStatus
+    >,
     readOnly: false,
     status: (Object.keys(RPCChatTypes.ConversationStatus)
       .filter(k => typeof RPCChatTypes.ConversationStatus[k as any] === 'number')
@@ -335,22 +360,6 @@ export const makeInboxQuery = (
     tlfVisibility: RPCTypes.TLFVisibility.private,
     topicType: RPCChatTypes.TopicType.chat,
     unreadOnly: false,
-  }
-}
-
-export const anyToConversationMembersType = (a: any): RPCChatTypes.ConversationMembersType | null => {
-  const membersTypeNumber: number = typeof a === 'string' ? parseInt(a, 10) : a || -1
-  switch (membersTypeNumber) {
-    case RPCChatTypes.ConversationMembersType.kbfs:
-      return RPCChatTypes.ConversationMembersType.kbfs
-    case RPCChatTypes.ConversationMembersType.team:
-      return RPCChatTypes.ConversationMembersType.team
-    case RPCChatTypes.ConversationMembersType.impteamnative:
-      return RPCChatTypes.ConversationMembersType.impteamnative
-    case RPCChatTypes.ConversationMembersType.impteamupgrade:
-      return RPCChatTypes.ConversationMembersType.impteamupgrade
-    default:
-      return null
   }
 }
 
@@ -430,6 +439,7 @@ export {
   enoughTimeBetweenMessages,
   getClientPrev,
   getDeletableByDeleteHistory,
+  getMapUnfurl,
   getMessageID,
   getRequestMessageInfo,
   getPaymentMessageInfo,
@@ -437,6 +447,7 @@ export {
   isPendingPaymentMessage,
   isSpecialMention,
   isVideoAttachment,
+  journeyCardTypeToType,
   makeChatRequestInfo,
   makeMessageAttachment,
   makeMessageDeleted,
@@ -445,6 +456,8 @@ export {
   makePendingTextMessage,
   makeReaction,
   messageExplodeDescriptions,
+  messageAttachmentHasProgress,
+  messageAttachmentTransferStateToProgressLabel,
   nextFractionalOrdinal,
   pathToAttachmentType,
   previewSpecs,

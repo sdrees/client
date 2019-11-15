@@ -107,10 +107,10 @@ export const TeamMember = (props: Props) => {
             style={{
               marginRight: 8,
             }}
-            color={Styles.globalColors.white}
+            color={Styles.globalColors.whiteOrWhite}
           />
         </Kb.Button>
-        {props.admin && (
+        {props.admin && user.type !== 'bot' && user.type !== 'restrictedbot' && (
           <FloatingRolePicker
             selectedRole={props.selectedRole}
             presetRole={props.user.type}
@@ -118,7 +118,7 @@ export const TeamMember = (props: Props) => {
             floatingContainerStyle={styles.floatingRolePicker}
             onConfirm={props.onConfirmRolePicker}
             onCancel={props.onCancelRolePicker}
-            position={'top center'}
+            position="top center"
             open={props.isRolePickerOpen}
             disabledRoles={props.disabledReasonsForRolePicker}
           >
@@ -137,11 +137,11 @@ export const TeamMember = (props: Props) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   floatingRolePicker: Styles.platformStyles({
     isElectron: {
       bottom: -32,
       position: 'relative',
     },
   }),
-})
+}))

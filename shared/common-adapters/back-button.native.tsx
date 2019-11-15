@@ -21,7 +21,6 @@ export default class BackButton extends Component<Props> {
         <Box style={Styles.collapseStyles([styles.container, this.props.style])}>
           <Icon
             type="iconfont-arrow-left"
-            fontSize={iconFontSize}
             color={this.props.iconColor}
             style={iconCastPlatformStyles(styles.arrow)}
           />
@@ -32,16 +31,14 @@ export default class BackButton extends Component<Props> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   arrow: {marginRight: -3, marginTop: 2},
   container: {
     ...Styles.globalStyles.flexBoxRow,
     alignItems: 'center',
     marginRight: 8,
     padding: Styles.globalMargins.tiny,
-    paddingLeft: Styles.globalMargins.small - 4,
+    paddingLeft: Styles.globalMargins.xsmall,
     paddingRight: Styles.globalMargins.small,
   },
-})
-
-const iconFontSize = 24
+}))

@@ -45,8 +45,9 @@ type TestCase struct {
 	KeyOwners        map[keybase1.KID] /*kid*/ string/*username*/ `json:"key_owners"`
 	KeyPubKeyV2NaCls map[keybase1.KID]json.RawMessage `json:"key_pubkeyv2nacls"`
 	TeamMerkle       map[string] /*TeamID AND TeamID-seqno:Seqno*/ struct {
-		Seqno  keybase1.Seqno  `json:"seqno"`
-		LinkID keybase1.LinkID `json:"link_id"`
+		Seqno         keybase1.Seqno  `json:"seqno"`
+		LinkID        keybase1.LinkID `json:"link_id"`
+		HiddenIsFresh bool            `json:"hidden_is_fresh"`
 	} `json:"team_merkle"`
 	MerkleTriples map[string] /*LeafID-HashMeta*/ libkb.MerkleTriple `json:"merkle_triples"`
 
@@ -225,8 +226,9 @@ func runUnit(t *testing.T, unit TestCase) (lastLoadRet *Team, didRun bool) {
 		// Install a loader with a mock interface to the outside world.
 		t.Logf("install mock loader")
 		mock := NewMockLoaderContext(t, tc.G, unit)
+		merkleStorage := storage.NewMerkle()
 		storage := storage.NewStorage(tc.G)
-		loader := NewTeamLoader(tc.G, mock, storage)
+		loader := NewTeamLoader(tc.G, mock, storage, merkleStorage)
 		tc.G.SetTeamLoader(loader)
 
 		for iLoad, loadSpec := range session.Loads {

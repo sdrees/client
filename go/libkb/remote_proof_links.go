@@ -85,7 +85,7 @@ func (r *RemoteProofLinks) TrackingStatement() *jsonw.Wrapper {
 
 	res := jsonw.NewArray(len(proofs))
 	for i, proof := range proofs {
-		res.SetIndex(i, proof)
+		_ = res.SetIndex(i, proof)
 	}
 	return res
 }
@@ -181,3 +181,16 @@ func (p ProofLinkWithState) ToKeyValuePair() (string, string) {
 }
 
 func (p ProofLinkWithState) GetProofType() keybase1.ProofType { return p.link.GetProofType() }
+
+func (r *RemoteProofLinks) toServiceSummary() (ret UserServiceSummary) {
+	ret = make(UserServiceSummary, len(r.links))
+	for _, list := range r.links {
+		if len(list) == 0 {
+			continue
+		}
+		// Get most recent proof for the type
+		key, val := list[len(list)-1].ToKeyValuePair()
+		ret[key] = val
+	}
+	return ret
+}

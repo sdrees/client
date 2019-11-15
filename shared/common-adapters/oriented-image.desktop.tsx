@@ -1,7 +1,8 @@
 import * as React from 'react'
 import fs from 'fs'
 import EXIF from 'exif-js'
-import {noop, isNumber} from 'lodash-es'
+import noop from 'lodash/noop'
+import isNumber from 'lodash/isNumber'
 import logger from '../logger'
 import {Props} from './oriented-image.types'
 
@@ -139,7 +140,7 @@ class OrientedImage extends React.Component<Props, State> {
       if (p.srcTransformed === imageData) return undefined
       return {srcTransformed: imageData}
     })
-      return undefined
+    return undefined
   }
 
   _canvasImageTransform = (orientation: number) => {
@@ -261,11 +262,12 @@ class OrientedImage extends React.Component<Props, State> {
    */
   render() {
     return (
-      <React.Fragment>
+      <>
         {this.state.srcTransformed && (
           // @ts-ignore codemod issue
           <ImageRef
             ref={this.props.forwardedRef}
+            // @ts-ignore TODO type
             src={this.state.srcTransformed}
             style={this.props.style}
             onDragStart={this.props.onDragStart}
@@ -273,7 +275,7 @@ class OrientedImage extends React.Component<Props, State> {
           />
         )}
         <canvas ref={el => (this._canvasRef = el)} style={styleCanvas} />
-      </React.Fragment>
+      </>
     )
   }
 }

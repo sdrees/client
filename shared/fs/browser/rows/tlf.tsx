@@ -5,10 +5,9 @@ import * as Constants from '../../../constants/fs'
 import * as Types from '../../../constants/types/fs'
 import {rowStyles, StillCommon, StillCommonProps} from './common'
 import * as Kb from '../../../common-adapters'
-import {useFsPathMetadata, TlfInfo, Filename} from '../../common'
+import {useFsPathMetadata, TlfInfoLine, Filename} from '../../common'
 
 type TlfProps = StillCommonProps & {
-  isNew: boolean
   loadPathMetadata?: boolean
   // We don't use this at the moment. In the future this will be used for
   // showing ignored folders when we allow user to show ignored folders in GUI.
@@ -27,7 +26,7 @@ const Content = (props: TlfProps) => (
           path={props.path}
         />
       </Kb.Box2>
-      <TlfInfo path={props.path} mode="row" mixedMode={props.mixedMode} />
+      <TlfInfoLine path={props.path} mode="row" mixedMode={props.mixedMode} />
     </Kb.Box2>
   </Kb.BoxGrow>
 )
@@ -48,13 +47,11 @@ const FsPathMetadataLoader = ({path}: {path: Types.Path}) => {
 
 const Tlf = (props: TlfProps) => (
   <StillCommon
-    name={props.name}
     path={props.path}
     onOpen={props.onOpen}
     inDestinationPicker={props.inDestinationPicker}
-    badge={props.isNew ? Types.PathItemBadgeType.New : null}
-    showActionsWithGrow={true}
-    showTlfTypeIcon={!!props.mixedMode}
+    mixedMode={props.mixedMode}
+    writingToJournal={false}
   >
     {!!props.loadPathMetadata && <FsPathMetadataLoader path={props.path} />}
     <Kb.Box style={rowStyles.itemBox}>
@@ -70,11 +67,14 @@ const Tlf = (props: TlfProps) => (
   </StillCommon>
 )
 
-const styles = Styles.styleSheetCreate({
-  avatarBox: {marginRight: Styles.globalMargins.xsmall},
-  kerning: {letterSpacing: 0.2},
-  leftBox: {flex: 1, justifyContent: 'center', minWidth: 0},
-  minWidth: {minWidth: 0},
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      avatarBox: {marginRight: Styles.globalMargins.xsmall},
+      kerning: {letterSpacing: 0.2},
+      leftBox: {flex: 1, justifyContent: 'center', minWidth: 0},
+      minWidth: {minWidth: 0},
+    } as const)
+)
 
 export default Tlf

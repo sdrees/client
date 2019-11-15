@@ -1,9 +1,10 @@
 // TODO remove Container
 import Container from '../../login/forms/container'
 import * as React from 'react'
+import * as Styles from '../../styles'
 import {RPCError} from '../../util/errors'
 import {StatusCode} from '../../constants/types/rpc-gen'
-import {Box2, Text, Markdown} from '../../common-adapters'
+import {Box2, Button, Icon, Text, Markdown} from '../../common-adapters'
 import {styleSheetCreate, globalStyles, globalMargins, isMobile} from '../../styles'
 
 type Props = {
@@ -22,12 +23,14 @@ const List = p => (
 
 const Wrapper = (p: {onBack: () => void; children: React.ReactNode}) => (
   <Container onBack={p.onBack}>
+    <Icon type="icon-illustration-zen-240-180" style={styles.icon} />
     <Text type="Header" style={styles.header}>
-      There was an error provisioning
+      Oops, something went wrong.
     </Text>
     <Box2 direction="vertical" gap="small" gapStart={true} gapEnd={true} style={styles.container}>
       {p.children}
     </Box2>
+    {Styles.isMobile && <Button label="Close" onClick={p.onBack} />}
   </Container>
 )
 
@@ -41,7 +44,7 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
   if (!error) {
     return (
       <Wrapper onBack={onBack}>
-        <Text type="Body">Unknown error: Please report this to us</Text>
+        <Text type="Body">Unknown error: Please report this to us.</Text>
       </Wrapper>
     )
   }
@@ -55,7 +58,7 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
     case StatusCode.scapinetworkerror:
       return (
         <Wrapper onBack={onBack}>
-          <Text type="Body">Device provisioning failed because this device went offline.</Text>
+          <Text type="Body">Device authorization failed because this device went offline.</Text>
           <Text type="Body">Please check your network connection and try again.</Text>
         </Wrapper>
       )
@@ -77,7 +80,7 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
     case StatusCode.scdeviceprevprovisioned:
       return (
         <Wrapper onBack={onBack}>
-          <Text type="Body">You have already provisioned this device. </Text>
+          <Text type="Body">You have already authorized this device. </Text>
           <Text type="Body">Please use 'keybase login [username]' to log in. </Text>
         </Wrapper>
       )
@@ -86,7 +89,7 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
         return (
           <Wrapper onBack={onBack}>
             <Text type="Body">
-              You can't provision using solely a password, since you have active device keys.
+              You can't authorize using solely a password, since you have active device keys.
             </Text>
             <Text type="BodySemibold">You have options:</Text>
             <List>
@@ -110,7 +113,7 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
       } else {
         return (
           <Wrapper onBack={onBack}>
-            <Text type="Body">You can't provision using a password, since you've established a PGP key.</Text>
+            <Text type="Body">You can't authorize using a password, since you've established a PGP key.</Text>
             <Text type="BodySemibold" style={{textAlign: 'left'}}>
               You have options:
             </Text>
@@ -150,11 +153,11 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
       ) : (
         <Wrapper onBack={onBack}>
           <Text center={true} type="Body">
-            Your PGP keychain has multiple keys installed, and we're not sure which one to use to provision
-            your account. continue.
+            Your PGP keychain has multiple keys installed, and we're not sure which one to use to authorize
+            your account.
           </Text>
           <Text center={true} type="Body">
-            Please run <Text type="TerminalInline">keybase login</Text> on the command line to
+            Please run <Text type="TerminalInline">keybase login</Text> on the command line to continue.
           </Text>
         </Wrapper>
       )
@@ -188,7 +191,7 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
             {!isMobile && (
               <Text type="Body"> - Install GPG, put your PGP private key on this machine and try again</Text>
             )}
-            <Text type="Body"> - Go back and provision with another device or paper key</Text>
+            <Text type="Body"> - Go back and authorize with another device or paper key</Text>
             <Text type="Body">
               {' '}
               - Or, if none of the above are possible,{' '}
@@ -243,21 +246,29 @@ const Render = ({error, onBack, onAccountReset, onPasswordReset, onKBHome}: Prop
   }
 }
 
-const styles = styleSheetCreate({
-  container: {
-    maxWidth: 550,
-  },
-  header: {
-    alignSelf: 'center',
-    marginBottom: 20,
-    marginTop: 46,
-  },
-  list: {
-    marginBottom: 10,
-    marginLeft: globalMargins.tiny,
-    ...globalStyles.flexBoxColumn,
-    maxWidth: 460,
-  },
-})
+const styles = styleSheetCreate(
+  () =>
+    ({
+      container: {
+        maxWidth: 550,
+      },
+      header: {
+        alignSelf: 'center',
+        marginBottom: 20,
+        marginTop: 46,
+      },
+      icon: {
+        alignSelf: 'center',
+        height: 180,
+        width: 240,
+      },
+      list: {
+        marginBottom: 10,
+        marginLeft: globalMargins.tiny,
+        ...globalStyles.flexBoxColumn,
+        maxWidth: 460,
+      },
+    } as const)
+)
 
 export default Render

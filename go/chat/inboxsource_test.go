@@ -5,7 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keybase/client/go/badges"
+	"github.com/keybase/client/go/libkb"
+	"github.com/keybase/client/go/teams"
 
 	"github.com/keybase/client/go/protocol/keybase1"
 
@@ -227,6 +228,7 @@ func TestInboxSourceFlushLoop(t *testing.T) {
 		require.Fail(t, "no flush")
 	}
 	_, rc, err = inbox.ReadAll(ctx, uid, false)
+	require.NoError(t, err)
 	require.Equal(t, 2, len(rc))
 }
 
@@ -239,6 +241,7 @@ func TestInboxSourceLocalOnly(t *testing.T) {
 
 	listener := newServerChatListener()
 	ctc.as(t, users[0]).h.G().NotifyRouter.AddListener(listener)
+	ctc.world.Tcs[users[0].Username].ChatG.UIInboxLoader = types.DummyUIInboxLoader{}
 	ctc.world.Tcs[users[0].Username].ChatG.Syncer.(*Syncer).isConnected = true
 
 	ctx := ctc.as(t, users[0]).startCtx
@@ -290,10 +293,9 @@ func TestInboxSourceMarkAsRead(t *testing.T) {
 	tc1 := ctc.world.Tcs[users[1].Username]
 	inboxSource := tc1.Context().InboxSource.(*HybridInboxSource)
 	syncer := ctc.world.Tcs[users[1].Username].ChatG.Syncer.(*Syncer)
-	badger := badges.NewBadger(tc1.G)
+	badger := tc1.ChatG.Badger
 	badger.SetLocalChatState(inboxSource)
 	pusher := tc1.Context().PushHandler.(*PushHandler)
-	pusher.SetBadger(badger)
 	ctx1 := ctc.as(t, users[1]).startCtx
 	uid1 := users[1].User.GetUID().ToBytes()
 	syncer.RegisterOfflinable(inboxSource)
@@ -315,7 +317,8 @@ func TestInboxSourceMarkAsRead(t *testing.T) {
 	inboxSource.SetRemoteInterface(func() chat1.RemoteInterface {
 		return chat1.RemoteClient{Cli: OfflineClient{}}
 	})
-	require.NoError(t, inboxSource.MarkAsRead(ctx1, conv.Id, uid1, msg.GetMessageID()))
+	msgID := msg.GetMessageID()
+	require.NoError(t, inboxSource.MarkAsRead(ctx1, conv.Id, uid1, &msgID))
 	syncer.Disconnected(context.TODO())
 	pusher.testingIgnoreBroadcasts = true
 
@@ -341,7 +344,8 @@ func TestInboxSourceMarkAsRead(t *testing.T) {
 
 	pusher.testingIgnoreBroadcasts = false
 	inboxSource.getChatInterface = ri
-	syncer.Connected(context.TODO(), ri(), uid1, nil)
+	err = syncer.Connected(context.TODO(), ri(), uid1, nil)
+	require.NoError(t, err)
 	select {
 	case info := <-listener1.readMessage:
 		require.Equal(t, conv.Id, info.ConvID)
@@ -353,4 +357,71 @@ func TestInboxSourceMarkAsRead(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(badgeState.Conversations))
 	require.Equal(t, 1, badgeState.Conversations[0].UnreadMessages)
+}
+
+func TestInboxChatBlockingAlsoUserBlocks(t *testing.T) {
+	ctc := makeChatTestContext(t, "TestInboxBlocking", 3)
+	defer ctc.cleanup()
+	users := ctc.users()
+	useRemoteMock = false
+	var err error
+	defer func() { useRemoteMock = true }()
+
+	userIsBlockedBy := func(maybeBlockedUserChat *kbtest.ChatTestContext, blocker *kbtest.FakeUser) bool {
+		// verify this behaviorally by having the maybe-blocked-user attempt to add the blocker
+		// to a team. if this errors with the expected code, then the maybe-blocked-user was definitely
+		// blocked.
+		name := createTeam(maybeBlockedUserChat.TestContext)
+		err = teams.SetRoleWriter(context.TODO(), maybeBlockedUserChat.G, name, blocker.Username)
+		if err == nil {
+			return false
+		}
+		require.Error(t, err)
+		require.IsType(t, err, libkb.AppStatusError{})
+		aerr, _ := err.(libkb.AppStatusError)
+		if aerr.Code != libkb.SCDeviceBadStatus {
+			panic("unexpected error adding user to team")
+		}
+		return true
+	}
+
+	// three users: alice, bob, spammer
+	alice := users[0]
+	spammer := users[1]
+	bob := users[2]
+	tcAlice := ctc.world.Tcs[alice.Username]
+	tcSpammer := ctc.world.Tcs[spammer.Username]
+	ctxAlice := ctc.as(t, alice).startCtx
+	uidAlice := alice.User.GetUID().ToBytes()
+
+	listener := newServerChatListener()
+	ctc.as(t, alice).h.G().NotifyRouter.AddListener(listener)
+	ctc.world.Tcs[alice.Username].ChatG.Syncer.(*Syncer).isConnected = true
+
+	// alice blocks a team channel conversation with only spammer in it
+	conv := mustCreateConversationForTest(t, ctc, alice, chat1.TopicType_CHAT,
+		chat1.ConversationMembersType_TEAM, spammer)
+	err = tcAlice.ChatG.InboxSource.RemoteSetConversationStatus(ctxAlice, uidAlice, conv.Id,
+		chat1.ConversationStatus_BLOCKED)
+	require.NoError(t, err)
+	// this DOES NOT user-block spammer
+	require.False(t, userIsBlockedBy(tcSpammer, alice))
+
+	// alice blocks a group implicit conversation with spammer and bob
+	conv = mustCreateConversationForTest(t, ctc, alice, chat1.TopicType_CHAT,
+		chat1.ConversationMembersType_IMPTEAMNATIVE, spammer, bob)
+	err = tcAlice.ChatG.InboxSource.RemoteSetConversationStatus(ctxAlice, uidAlice, conv.Id,
+		chat1.ConversationStatus_BLOCKED)
+	require.NoError(t, err)
+	// this DOES NOT user-block spammer
+	require.False(t, userIsBlockedBy(tcSpammer, alice))
+
+	// alice blocks a 1-on-1 implicit conversation with just spammer
+	conv = mustCreateConversationForTest(t, ctc, alice, chat1.TopicType_CHAT,
+		chat1.ConversationMembersType_IMPTEAMNATIVE, spammer)
+	err = tcAlice.ChatG.InboxSource.RemoteSetConversationStatus(ctxAlice, uidAlice, conv.Id,
+		chat1.ConversationStatus_BLOCKED)
+	require.NoError(t, err)
+	// this DOES user-block spammer
+	require.True(t, userIsBlockedBy(tcSpammer, alice))
 }

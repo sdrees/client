@@ -27,12 +27,12 @@ export const getApp = () => {
   return app
 }
 
-export const getIpcMain = () => {
-  const ipcMain = Electron.ipcMain || getRemote().ipcMain
-  if (!ipcMain) {
-    throw new Error('Should be impossible')
-  }
-  return ipcMain
+// some kind of electron bug
+// https://github.com/electron/electron/issues/19125
+export const workingIsDarkMode = () => {
+  const platform = process.platform
+  const isDarwin = platform === 'darwin'
+  return isDarwin && getSystemPreferences().getUserDefault('AppleInterfaceStyle', 'string') == 'Dark'
 }
 
 export const getSystemPreferences = () => {

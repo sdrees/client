@@ -9,6 +9,8 @@ import (
 
 type DummyChatUI struct{}
 
+var _ chat1.ChatUiInterface = (*DummyChatUI)(nil)
+
 func (r DummyChatUI) ChatAttachmentDownloadStart(ctx context.Context, sessionID int) error {
 	return nil
 }
@@ -31,6 +33,10 @@ func (r DummyChatUI) ChatInboxFailed(ctx context.Context, arg chat1.ChatInboxFai
 }
 
 func (r DummyChatUI) ChatInboxUnverified(ctx context.Context, arg chat1.ChatInboxUnverifiedArg) error {
+	return nil
+}
+
+func (r DummyChatUI) ChatInboxLayout(ctx context.Context, arg chat1.ChatInboxLayoutArg) error {
 	return nil
 }
 
@@ -139,7 +145,13 @@ func (r DummyChatUI) ChatBotCommandsUpdateStatus(context.Context, chat1.ChatBotC
 	return nil
 }
 
+func (r DummyChatUI) TriggerContactSync(context.Context, int) error {
+	return nil
+}
+
 type DummyChatNotifications struct{}
+
+var _ chat1.NotifyChatInterface = (*DummyChatNotifications)(nil)
 
 func (d DummyChatNotifications) NewChatActivity(ctx context.Context, arg chat1.NewChatActivityArg) error {
 	return nil
@@ -204,5 +216,8 @@ func (d DummyChatNotifications) ChatRequestInfo(context.Context, chat1.ChatReque
 	return nil
 }
 func (d DummyChatNotifications) ChatPromptUnfurl(context.Context, chat1.ChatPromptUnfurlArg) error {
+	return nil
+}
+func (d DummyChatNotifications) ChatConvUpdate(context.Context, chat1.ChatConvUpdateArg) error {
 	return nil
 }

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
+import * as Platform from '../../constants/platform'
 import {maxUsernameLength} from '../../constants/signup'
 import {InfoIcon, SignupScreen, errorBanner} from '../common'
 
@@ -16,8 +17,15 @@ type Props = {
 
 const EnterUsername = (props: Props) => {
   const [username, onChangeUsername] = React.useState(props.initialUsername || '')
-  const disabled = !username || username === props.usernameTaken
-  const onContinue = () => (disabled ? {} : props.onContinue(username))
+  const usernameTrimmed = username.trim()
+  const disabled = !usernameTrimmed || usernameTrimmed === props.usernameTaken
+  const onContinue = () => {
+    if (disabled) {
+      return
+    }
+    onChangeUsername(usernameTrimmed) // maybe trim the input
+    props.onContinue(usernameTrimmed)
+  }
   return (
     <SignupScreen
       banners={[
@@ -59,9 +67,9 @@ const EnterUsername = (props: Props) => {
         style={styles.body}
         fullWidth={true}
       >
-        <Kb.Avatar size={96} />
+        <Kb.Avatar size={Platform.isLargeScreen ? 96 : 64} />
         <Kb.Box2 direction="vertical" gap="tiny" style={styles.inputBox}>
-          <Kb.NewInput
+          <Kb.LabeledInput
             autoFocus={true}
             containerStyle={styles.input}
             placeholder="Pick a username"
@@ -93,20 +101,13 @@ EnterUsername.navigationOptions = {
   ),
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   body: {
     flex: 1,
   },
   input: Styles.platformStyles({
-    common: {},
     isElectron: {
-      ...Styles.padding(0, Styles.globalMargins.xsmall),
-      height: 38,
       width: 368,
-    },
-    isMobile: {
-      ...Styles.padding(0, Styles.globalMargins.small),
-      height: 48,
     },
   }),
   inputBox: Styles.platformStyles({
@@ -114,10 +115,13 @@ const styles = Styles.styleSheetCreate({
       // need to set width so subtext will wrap
       width: 368,
     },
+    isMobile: {
+      width: '100%',
+    },
   }),
   inputSub: {
     marginLeft: 2,
   },
-})
+}))
 
 export default EnterUsername

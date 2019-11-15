@@ -4,20 +4,20 @@ import * as Styles from '../../styles'
 import flags from '../../util/feature-flags'
 
 export type Props = {
-  airdropIsLive: boolean | null
-  bio: string | null
-  followThem: boolean | null
-  followersCount: number | null
-  followingCount: number | null
-  followsYou: boolean | null
-  fullname: string | null
+  airdropIsLive?: boolean
+  bio?: string
+  followThem?: boolean
+  followersCount?: number
+  followingCount?: number
+  followsYou?: boolean
+  fullname?: string
   inTracker: boolean
-  location: string | null
+  location?: string
   onBack?: () => void
   onLearnMore?: () => void
-  registeredForAirdrop: boolean | null
-  youAreInAirdrop: boolean | null
-  sbsDescription: string | null
+  registeredForAirdrop?: boolean
+  youAreInAirdrop?: boolean
+  sbsDescription?: string
 }
 
 // Here we're using FloatingMenu, but we want to customize the button to match
@@ -114,7 +114,7 @@ const Bio = (p: Props) => (
         p.airdropIsLive &&
         p.registeredForAirdrop &&
         (p.youAreInAirdrop ? (
-          <Kb.WithTooltip text="Lucky airdropee">
+          <Kb.WithTooltip tooltip="Lucky airdropee">
             <Kb.Icon
               color={Styles.globalColors.yellowDark}
               type="iconfont-identity-stellar"
@@ -180,42 +180,45 @@ const Bio = (p: Props) => (
   </Kb.Box2>
 )
 
-const styles = Styles.styleSheetCreate({
-  airdropText: Styles.platformStyles({
-    common: {color: Styles.globalColors.white},
-    isElectron: {textAlign: 'center'},
-  }),
-  bold: {...Styles.globalStyles.fontBold},
-  container: {backgroundColor: Styles.globalColors.white, flexShrink: 0},
-  floatingContainer: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.purple,
-    },
-    isElectron: {
-      maxWidth: 200,
-    },
-  }),
-  fullName: Styles.platformStyles({
-    isElectron: {wordBreak: 'break-any'},
-  }),
-  fullNameContainer: {
-    paddingLeft: Styles.globalMargins.mediumLarge,
-    paddingRight: Styles.globalMargins.mediumLarge,
-  },
-  learnButton: {alignSelf: 'center', marginTop: Styles.globalMargins.tiny},
-  star: {alignSelf: 'center', marginBottom: Styles.globalMargins.tiny},
-  text: Styles.platformStyles({
-    common: {
-      paddingLeft: Styles.globalMargins.mediumLarge,
-      paddingRight: Styles.globalMargins.mediumLarge,
-    },
-    isElectron: {
-      wordBreak: 'break-word',
-    },
-    isMobile: {
-      lineHeight: 21,
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      airdropText: Styles.platformStyles({
+        common: {color: Styles.globalColors.white},
+        isElectron: {textAlign: 'center'},
+      }),
+      bold: {...Styles.globalStyles.fontBold},
+      container: {backgroundColor: Styles.globalColors.white, flexShrink: 0},
+      floatingContainer: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.purple,
+        },
+        isElectron: {
+          maxWidth: 200,
+        },
+      }),
+      fullName: Styles.platformStyles({
+        isElectron: {wordBreak: 'break-all'} as const,
+      }),
+      fullNameContainer: {
+        paddingLeft: Styles.globalMargins.mediumLarge,
+        paddingRight: Styles.globalMargins.mediumLarge,
+      },
+      learnButton: {alignSelf: 'center', marginTop: Styles.globalMargins.tiny},
+      star: {alignSelf: 'center', marginBottom: Styles.globalMargins.tiny},
+      text: Styles.platformStyles({
+        common: {
+          paddingLeft: Styles.globalMargins.mediumLarge,
+          paddingRight: Styles.globalMargins.mediumLarge,
+        },
+        isElectron: {
+          wordBreak: 'break-word',
+        } as const,
+        isMobile: {
+          lineHeight: 21,
+        },
+      }),
+    } as const)
+)
 
 export default Bio

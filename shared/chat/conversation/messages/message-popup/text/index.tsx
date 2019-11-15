@@ -1,6 +1,6 @@
 import * as React from 'react'
 import MessagePopupHeader from '../header'
-import {FloatingMenu, MenuItems} from '../../../../../common-adapters/'
+import {FloatingMenu, MenuItems} from '../../../../../common-adapters'
 import {DeviceType} from '../../../../../constants/types/devices'
 import {Position} from '../../../../../common-adapters/relative-popup-hoc.types'
 import {StylesCrossPlatform} from '../../../../../styles/css'
@@ -8,6 +8,7 @@ import {StylesCrossPlatform} from '../../../../../styles/css'
 type Props = {
   attachTo?: () => React.Component<any> | null
   author: string
+  botUsername?: string
   deviceName: string
   deviceRevokedAt?: number
   deviceType: DeviceType
@@ -17,9 +18,12 @@ type Props = {
   onDeleteMessageHistory?: () => void
   onEdit?: () => void
   onHidden: () => void
+  onPinMessage?: () => void
   onReply?: () => void
   onReplyPrivately?: () => void
   onViewProfile?: () => void
+  onViewMap?: () => void
+  isLocation?: boolean
   position: Position
   showDivider: boolean
   style?: StylesCrossPlatform
@@ -47,6 +51,7 @@ const TextPopupMenu = (props: Props) => {
     ...((props.yourMessage && props.isDeleteable) || props.onDeleteMessageHistory
       ? (['Divider'] as const)
       : []),
+    ...(props.onViewMap ? [{onClick: props.onViewMap, title: 'View on Google Maps'}] : []),
     ...(props.onEdit && props.isEditable
       ? [
           {
@@ -59,6 +64,7 @@ const TextPopupMenu = (props: Props) => {
     ...(props.onCopy ? [{onClick: props.onCopy, title: 'Copy text'}] : []),
     ...(props.onReply ? [{onClick: props.onReply, title: 'Reply'}] : []),
     ...(props.onReplyPrivately ? [{onClick: props.onReplyPrivately, title: 'Reply privately'}] : []),
+    ...(props.onPinMessage ? [{onClick: props.onPinMessage, title: 'Pin message'}] : []),
     ...(props.onViewProfile ? [{onClick: props.onViewProfile, title: 'View profile'}] : []),
   ]
 
@@ -67,10 +73,12 @@ const TextPopupMenu = (props: Props) => {
     view: (
       <MessagePopupHeader
         author={props.author}
+        botUsername={props.botUsername}
         deviceName={props.deviceName}
         deviceRevokedAt={props.deviceRevokedAt}
         deviceType={props.deviceType}
         isLast={!items.length}
+        isLocation={!!props.isLocation}
         timestamp={props.timestamp}
         yourMessage={props.yourMessage}
       />

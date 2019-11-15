@@ -1,8 +1,8 @@
 import * as React from 'react'
 import * as Constants from '../../constants/teams'
 import * as Kb from '../../common-adapters'
-import {globalMargins} from '../../styles'
-import {Props} from './index.types'
+import * as Styles from '../../styles'
+import {Props} from './index'
 
 const CreateChannel = (props: Props) => (
   <Kb.Box>
@@ -11,8 +11,8 @@ const CreateChannel = (props: Props) => (
         <Kb.BannerParagraph bannerColor="red" content={props.errorText} />
       </Kb.Banner>
     )}
-    <Kb.Box style={_boxStyle}>
-      <Kb.Box style={_inputStyle}>
+    <Kb.Box style={styles.box}>
+      <Kb.Box style={styles.input}>
         <Kb.Input
           autoFocus={true}
           hintText="Channel name"
@@ -20,14 +20,14 @@ const CreateChannel = (props: Props) => (
           onChangeText={channelname => props.onChannelnameChange(channelname)}
         />
       </Kb.Box>
-      <Kb.Box style={_inputStyle}>
+      <Kb.Box style={styles.input}>
         <Kb.Input
           autoCorrect={true}
           autoFocus={false}
           autoCapitalize="sentences"
           multiline={true}
           rowsMin={1}
-          rowsMax={4}
+          rowsMax={2}
           // From go/chat/msgchecker/constants.go#HeadlineMaxLength
           maxLength={280}
           hintText="Description or topic (optional)"
@@ -46,13 +46,17 @@ const CreateChannel = (props: Props) => (
   </Kb.Box>
 )
 
-const _boxStyle = {
-  padding: 16,
-}
-
-const _inputStyle = {
-  marginTop: globalMargins.large,
-}
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      box: {
+        padding: 16,
+      },
+      input: {
+        marginTop: Styles.globalMargins.large,
+      },
+    } as const)
+)
 
 const Wrapper = (props: Props) => <CreateChannel {...props} onBack={undefined} />
 

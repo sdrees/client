@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -87,6 +88,10 @@ func (b BinaryKID) ToKID() KID {
 
 func (k KID) ToBinaryKID() BinaryKID {
 	return BinaryKID(k.ToBytes())
+}
+
+func (b BinaryKID) Equal(c BinaryKID) bool {
+	return bytes.Equal([]byte(b), []byte(c))
 }
 
 func KIDFromStringChecked(s string) (KID, error) {
@@ -637,6 +642,13 @@ func (s SigID) String() string { return string(s) }
 
 func (s SigID) Equal(t SigID) bool {
 	return s == t
+}
+
+func (s SigID) EqualIgnoreLastByte(t SigID) bool {
+	if len(s) != len(t) || len(s) < 2 {
+		return false
+	}
+	return s[:len(s)-2] == t[:len(t)-2]
 }
 
 func (s SigID) Match(q string, exact bool) bool {
@@ -1266,7 +1278,6 @@ func (b TLFIdentifyBehavior) AlwaysRunIdentify() bool {
 	switch b {
 	case TLFIdentifyBehavior_CHAT_CLI,
 		TLFIdentifyBehavior_CHAT_GUI,
-		TLFIdentifyBehavior_FS_GUI,
 		TLFIdentifyBehavior_SALTPACK,
 		TLFIdentifyBehavior_KBFS_CHAT,
 		TLFIdentifyBehavior_GUI_PROFILE:
@@ -1633,6 +1644,9 @@ func (u UserPlusKeysV2AllIncarnations) IsOlderThan(v UserPlusKeysV2AllIncarnatio
 		return true
 	}
 	if u.Uvv.Id < v.Uvv.Id {
+		return true
+	}
+	if u.Uvv.CachedAt < v.Uvv.CachedAt {
 		return true
 	}
 	return false
@@ -2087,6 +2101,7 @@ func validatePart(s string) (err error) {
 func TeamNameFromString(s string) (TeamName, error) {
 	ret := TeamName{}
 
+	s = strings.ToLower(s)
 	parts := strings.Split(s, ".")
 	if len(parts) == 0 {
 		return ret, errors.New("team names cannot be empty")
@@ -2387,6 +2402,13 @@ func (r TeamRole) teamRoleForOrderingOnly() int {
 
 func (r TeamRole) IsOrAbove(min TeamRole) bool {
 	return r.teamRoleForOrderingOnly() >= min.teamRoleForOrderingOnly()
+}
+
+func (r TeamRole) HumanString() string {
+	if r.IsRestrictedBot() {
+		return "restricted bot"
+	}
+	return strings.ToLower(r.String())
 }
 
 type idSchema struct {
@@ -2854,10 +2876,6 @@ func (a BoxAuditAttempt) String() string {
 	return ret
 }
 
-func (r RegionCode) IsNil() bool {
-	return len(r) == 0
-}
-
 func (c ContactComponent) ValueString() string {
 	switch {
 	case c.Email != nil:
@@ -3062,6 +3080,32 @@ func (r MerkleRootV2) Eq(s MerkleRootV2) bool {
 	return r.Seqno == s.Seqno && r.HashMeta.Eq(s.HashMeta)
 }
 
+func (d *HiddenTeamChain) PopulateLastFull() {
+	if d == nil {
+		return
+	}
+	if d.LastFull != Seqno(0) {
+		return
+	}
+	for i := Seqno(1); i <= d.Last; i++ {
+		_, found := d.Inner[i]
+		if !found {
+			break
+		}
+		d.LastFull = i
+	}
+}
+
+func (d *HiddenTeamChain) LastFullPopulateIfUnset() Seqno {
+	if d == nil {
+		return Seqno(0)
+	}
+	if d.LastFull == Seqno(0) {
+		d.PopulateLastFull()
+	}
+	return d.LastFull
+}
+
 func (d *HiddenTeamChain) Merge(newData HiddenTeamChain) (updated bool, err error) {
 
 	for seqno, link := range newData.Outer {
@@ -3087,6 +3131,12 @@ func (d *HiddenTeamChain) Merge(newData HiddenTeamChain) (updated bool, err erro
 		d.Inner[q] = i
 		if ptk, ok := i.Ptk[PTKType_READER]; ok {
 			d.ReaderPerTeamKeys[ptk.Ptk.Gen] = q
+		}
+
+		// If we previously loaded full links up to d.LastFull, but this is d.LastFull+1,
+		// then we can safely bump the pointer one foward.
+		if q == d.LastFull+Seqno(1) {
+			d.LastFull = q
 		}
 		updated = true
 	}
@@ -3128,6 +3178,7 @@ func (h HiddenTeamChain) HasSeqno(s Seqno) bool {
 func NewHiddenTeamChain(id TeamID) *HiddenTeamChain {
 	return &HiddenTeamChain{
 		Id:                id,
+		Subversion:        1, // We are now on Version 1.1
 		LastPerTeamKeys:   make(map[PTKType]Seqno),
 		ReaderPerTeamKeys: make(map[PerTeamKeyGeneration]Seqno),
 		Outer:             make(map[Seqno]LinkID),
@@ -3227,6 +3278,14 @@ func (h *HiddenTeamChain) KeySummary() string {
 		return "Ø"
 	}
 	return fmt.Sprintf("{last:%d, lastPerTeamKeys:%+v, readerPerTeamKeys: %+v}", h.Last, h.LastPerTeamKeys, h.ReaderPerTeamKeys)
+}
+
+func (h *HiddenTeamChain) LinkAndKeySummary() string {
+	if h == nil {
+		return "empty"
+	}
+	ks := h.KeySummary()
+	return fmt.Sprintf("{nOuterlinks: %d, nInnerLinks:%d, keys:%s}", len(h.Outer), len(h.Inner), ks)
 }
 
 func (h *TeamData) KeySummary() string {
@@ -3398,4 +3457,39 @@ func (r APIUserSearchResult) GetStringIDForCompare() string {
 
 func NewPathWithKbfsPath(path string) Path {
 	return NewPathWithKbfs(KBFSPath{Path: path})
+}
+
+func (p PerTeamKey) Equal(q PerTeamKey) bool {
+	return p.EncKID.Equal(q.EncKID) && p.SigKID.Equal(q.SigKID)
+}
+
+func (b BotToken) IsNil() bool {
+	return len(b) == 0
+}
+
+func (b BotToken) Exists() bool {
+	return !b.IsNil()
+}
+
+func (b BotToken) String() string {
+	return string(b)
+}
+
+var botTokenRxx = regexp.MustCompile(`^[a-zA-Z0-9_-]{32}$`)
+
+func NewBotToken(s string) (BotToken, error) {
+	if !botTokenRxx.MatchString(s) {
+		return BotToken(""), errors.New("bad bot token")
+	}
+	return BotToken(s), nil
+}
+
+func (b BadgeConversationInfo) IsEmpty() bool {
+	return (b.UnreadMessages == 0 &&
+		b.BadgeCounts[DeviceType_DESKTOP] == 0 &&
+		b.BadgeCounts[DeviceType_MOBILE] == 0)
+}
+
+func (s *TeamBotSettings) Eq(o *TeamBotSettings) bool {
+	return reflect.DeepEqual(s, o)
 }

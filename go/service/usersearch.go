@@ -4,7 +4,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -169,6 +168,18 @@ func matchAndScoreContact(query compiledQuery, contact keybase1.ProcessedContact
 	return found, currentScore * multiplier, plumbMatchedVal
 }
 
+func compareUserSearch(i, j keybase1.APIUserSearchResult) bool {
+	// Float comparasion - we expect exact floats here when multiple
+	// results match in same way and yield identical score thorugh
+	// same scoring operations.
+	if i.RawScore == j.RawScore {
+		idI := i.GetStringIDForCompare()
+		idJ := j.GetStringIDForCompare()
+		return idI > idJ
+	}
+	return i.RawScore > j.RawScore
+}
+
 func contactSearch(mctx libkb.MetaContext, arg keybase1.UserSearchArg) (res []keybase1.APIUserSearchResult, err error) {
 	contactsRes, err := mctx.G().SyncedContactList.RetrieveContacts(mctx)
 	if err != nil {
@@ -218,6 +229,15 @@ func contactSearch(mctx libkb.MetaContext, arg keybase1.UserSearchArg) (res []ke
 					// all non-resolved components.
 					continue
 				}
+				if contact.Component.PhoneNumber != nil {
+					// Phone numbers are better, "mobile" phone numbers are best.
+					// This is for sorting matches within one contact (for which we expect
+					// the scores to be equal), so only increase by a small amount.
+					score *= 1.01
+					if contact.Component.Label == "mobile" {
+						score *= 1.01
+					}
+				}
 			}
 
 			key := displayNameAndLabel{contact.DisplayName, contact.DisplayLabel}
@@ -249,7 +269,7 @@ func contactSearch(mctx libkb.MetaContext, arg keybase1.UserSearchArg) (res []ke
 
 	// Return best matches first.
 	sort.Slice(res, func(i, j int) bool {
-		return res[i].RawScore > res[j].RawScore
+		return compareUserSearch(res[i], res[j])
 	})
 
 	// Trim to maxResults to reduce complexity on the call site.
@@ -261,40 +281,36 @@ func contactSearch(mctx libkb.MetaContext, arg keybase1.UserSearchArg) (res []ke
 	return res, nil
 }
 
-func imptofuQueryToAssertion(typ keybase1.ImpTofuSearchType, val string) (string, error) {
-	switch typ {
-	case keybase1.ImpTofuSearchType_PHONE:
-		return fmt.Sprintf("%s@phone", keybase1.PhoneNumberToAssertionValue(val)), nil
-	case keybase1.ImpTofuSearchType_EMAIL:
-		return fmt.Sprintf("[%s]@email", strings.TrimSpace(strings.ToLower(val))), nil
-	default:
-		return "", errors.New("invalid keybase1.ImpTofuSearchType enum value")
+func imptofuQueryToAssertion(ctx context.Context, typ, val string) (ret libkb.AssertionURL, err error) {
+	parsef := func(key, val string) (libkb.AssertionURL, error) {
+		return libkb.ParseAssertionURLKeyValue(
+			externals.MakeStaticAssertionContext(ctx), key, val, true)
 	}
+	switch typ {
+	case "phone":
+		ret, err = parsef("phone", keybase1.PhoneNumberToAssertionValue(val))
+	case "email":
+		ret, err = parsef("email", strings.ToLower(strings.TrimSpace(val)))
+	default:
+		err = fmt.Errorf("invalid assertion type for imptofuQueryToAssertion, got %q", typ)
+	}
+	return ret, err
 }
 
-func imptofuSearch(mctx libkb.MetaContext, provider contacts.ContactsProvider, imptofuQuery keybase1.ImpTofuQuery) (res *keybase1.APIUserSearchResult, err error) {
+func (h *UserSearchHandler) imptofuSearch(mctx libkb.MetaContext, arg keybase1.UserSearchArg) (res []keybase1.APIUserSearchResult, err error) {
 	var emails []keybase1.EmailAddress
 	var phones []keybase1.RawPhoneNumber
 
-	imptofuType, err := imptofuQuery.T()
-	if err != nil {
-		return nil, err
+	switch arg.Service {
+	case "email":
+		emails = append(emails, keybase1.EmailAddress(arg.Query))
+	case "phone":
+		phones = append(phones, keybase1.RawPhoneNumber(arg.Query))
+	default:
+		return nil, fmt.Errorf("unexpected service=%q in imptofuSearch", arg.Service)
 	}
 
-	var queryString string
-
-	switch imptofuType {
-	case keybase1.ImpTofuSearchType_EMAIL:
-		email := imptofuQuery.Email()
-		queryString = string(email)
-		emails = append(emails, email)
-	case keybase1.ImpTofuSearchType_PHONE:
-		phone := keybase1.RawPhoneNumber(imptofuQuery.Phone())
-		queryString = string(phone)
-		phones = append(phones, phone)
-	}
-
-	lookupRes, err := provider.LookupAll(mctx, emails, phones, keybase1.RegionCode(""))
+	lookupRes, err := h.contactsProvider.LookupAll(mctx, emails, phones)
 	if err != nil {
 		return nil, err
 	}
@@ -307,9 +323,16 @@ func imptofuSearch(mctx libkb.MetaContext, provider contacts.ContactsProvider, i
 			}
 		}
 
-		usernames, err := provider.FindUsernames(mctx, uids)
+		usernames, err := h.contactsProvider.FindUsernames(mctx, uids)
 		if err != nil {
 			mctx.Warning("Cannot find usernames for search results: %s", err)
+		}
+		var serviceMaps map[keybase1.UID]libkb.UserServiceSummary
+		if arg.IncludeServicesSummary {
+			serviceMaps, err = h.contactsProvider.FindServiceMaps(mctx, uids)
+			if err != nil {
+				mctx.Warning("Cannot get service maps for search results: %s", err)
+			}
 		}
 
 		for _, v := range lookupRes.Results {
@@ -318,48 +341,62 @@ func imptofuSearch(mctx libkb.MetaContext, provider contacts.ContactsProvider, i
 				continue
 			}
 
-			assertionValue := queryString
+			assertionValueArg := arg.Query
 			if v.Coerced != "" {
 				// Server corrected our assertion - take this instead.
-				assertionValue = v.Coerced
+				assertionValueArg = v.Coerced
 			}
-			assertion, err := imptofuQueryToAssertion(imptofuType, assertionValue)
+			assertion, err := imptofuQueryToAssertion(mctx.Ctx(), arg.Service, assertionValueArg)
 			if err != nil {
 				return nil, err
 			}
 			imptofu := &keybase1.ImpTofuSearchResult{
-				Assertion:  assertion,
-				PrettyName: queryString,
+				Assertion:      assertion.String(),
+				AssertionKey:   assertion.GetKey(),
+				AssertionValue: assertion.GetValue(),
 			}
 			if usernames != nil {
 				if uname, found := usernames[v.UID]; found {
 					imptofu.KeybaseUsername = uname.Username
-					// Ignore full-name here, force queryString as `prettyName`
-					// part in order for it to be displayed in the list.
-					imptofu.PrettyName = queryString
+					imptofu.PrettyName = uname.Fullname
 				}
 			}
-			res = &keybase1.APIUserSearchResult{
-				Score:   1.0,
-				Imptofu: imptofu,
+			var servicesSummary map[keybase1.APIUserServiceID]keybase1.APIUserServiceSummary
+			if serviceMaps != nil {
+				if smap, found := serviceMaps[v.UID]; found && len(smap) > 0 {
+					servicesSummary = make(map[keybase1.APIUserServiceID]keybase1.APIUserServiceSummary, len(smap))
+					for serviceID, username := range smap {
+						serviceName := keybase1.APIUserServiceID(serviceID)
+						servicesSummary[serviceName] = keybase1.APIUserServiceSummary{
+							ServiceName: serviceName,
+							Username:    username,
+						}
+					}
+				}
 			}
+			res = []keybase1.APIUserSearchResult{{
+				Score:           1.0,
+				Imptofu:         imptofu,
+				ServicesSummary: servicesSummary,
+			}}
 			return res, nil // return here - we only want one result
 		}
 	}
 
 	// Not resolved - add SBS result.
-	assertion, err := imptofuQueryToAssertion(imptofuType, queryString)
+	assertion, err := imptofuQueryToAssertion(mctx.Ctx(), arg.Service, arg.Query)
 	if err != nil {
 		return nil, err
 	}
 	imptofu := &keybase1.ImpTofuSearchResult{
-		Assertion:  assertion,
-		PrettyName: queryString,
+		Assertion:      assertion.String(),
+		AssertionKey:   assertion.GetKey(),
+		AssertionValue: assertion.GetValue(),
 	}
-	res = &keybase1.APIUserSearchResult{
+	res = []keybase1.APIUserSearchResult{{
 		Score:   1.0,
 		Imptofu: imptofu,
-	}
+	}}
 	return res, nil
 }
 
@@ -383,20 +420,7 @@ func (h *UserSearchHandler) makeSearchRequest(mctx libkb.MetaContext, arg keybas
 	return res, nil
 }
 
-func (h *UserSearchHandler) UserSearch(ctx context.Context, arg keybase1.UserSearchArg) (res []keybase1.APIUserSearchResult, err error) {
-	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("USEARCH")
-	defer mctx.TraceTimed(fmt.Sprintf("UserSearch#UserSearch(s=%q, q=%q)", arg.Service, arg.Query),
-		func() error { return err })()
-
-	if arg.Query == "" {
-		return nil, nil
-	}
-
-	if arg.Service != "keybase" && arg.Service != "" {
-		// If this is a social search, we just return API results.
-		return h.makeSearchRequest(mctx, arg)
-	}
-
+func (h *UserSearchHandler) keybaseSearchWithContacts(mctx libkb.MetaContext, arg keybase1.UserSearchArg) (res []keybase1.APIUserSearchResult, err error) {
 	res, err = h.makeSearchRequest(mctx, arg)
 	if err != nil {
 		mctx.Warning("Failed to do an API search for %q: %s", arg.Service, err)
@@ -406,80 +430,76 @@ func (h *UserSearchHandler) UserSearch(ctx context.Context, arg keybase1.UserSea
 		contactsRes, err := contactSearch(mctx, arg)
 		if err != nil {
 			mctx.Warning("Failed to do contacts search: %s", err)
-		} else {
-			// Filter contacts - If we have a username match coming from the
-			// service, prefer it instead of contact result for the same user
-			// but with SBS assertion in it.
-			usernameSet := make(map[string]struct{}) // set of usernames
-			for _, result := range res {
-				if result.Keybase != nil {
-					// All current results should be Keybase but be safe in
-					// case code in this function changes.
-					usernameSet[result.Keybase.Username] = struct{}{}
-				}
-			}
+			return res, nil
+		}
 
-			for _, contact := range contactsRes {
-				if contact.Contact.Resolved {
-					// Do not add this contact result if there already is a
-					// keybase result with username that the contact resolved
-					// to.
-					username := contact.Contact.Username
-					if _, found := usernameSet[username]; found {
-						continue
-					}
-					usernameSet[username] = struct{}{}
-				}
-				res = append(res, contact)
-			}
-
-			sort.Slice(res, func(i, j int) bool {
-				// Float comparasion - we expect exact floats here when multiple
-				// results match in same way and yield identical score thorugh
-				// same scoring operations.
-				if res[i].RawScore == res[j].RawScore {
-					idI := res[i].GetStringIDForCompare()
-					idJ := res[j].GetStringIDForCompare()
-					return idI > idJ
-				}
-				return res[i].RawScore > res[j].RawScore
-			})
-
-			for i := range res {
-				res[i].Score = 1.0 / float64(1+i)
+		// Filter contacts - If we have a username match coming from the
+		// service, prefer it instead of contact result for the same user
+		// but with SBS assertion in it.
+		usernameSet := make(map[string]struct{}, len(res)) // set of usernames
+		for _, result := range res {
+			if result.Keybase != nil {
+				// All current results should be Keybase but be safe in
+				// case code in this function changes.
+				usernameSet[result.Keybase.Username] = struct{}{}
 			}
 		}
-	}
 
-	if arg.ImpTofuQuery != nil {
-		imptofuRes, err := imptofuSearch(mctx, h.contactsProvider, *arg.ImpTofuQuery)
-		if err != nil {
-			mctx.Error("Failed to do phone number / email search: %s", err)
-		} else if imptofuRes != nil {
-			// Check if we have found assertion of this result already in our
-			// contacts.
-			var found bool
-			for _, v := range res {
-				if v.Contact != nil && v.Contact.Assertion == imptofuRes.Imptofu.Assertion {
-					found = true
-					break
+		for _, contact := range contactsRes {
+			if contact.Contact.Resolved {
+				// Do not add this contact result if there already is a
+				// keybase result with username that the contact resolved
+				// to.
+				username := contact.Contact.Username
+				if _, found := usernameSet[username]; found {
+					continue
 				}
+				usernameSet[username] = struct{}{}
 			}
-
-			if !found {
-				// Prepend *imptofuRes
-				res = append([]keybase1.APIUserSearchResult{*imptofuRes}, res...)
-			}
+			res = append(res, contact)
 		}
-	}
 
-	// Trim the whole result to MaxResult.
-	maxRes := arg.MaxResults
-	if maxRes > 0 && len(res) > maxRes {
-		res = res[:maxRes]
+		sort.Slice(res, func(i, j int) bool {
+			return compareUserSearch(res[i], res[j])
+		})
+
+		for i := range res {
+			res[i].Score = 1.0 / float64(1+i)
+		}
+
+		// Trim the whole result to MaxResult.
+		maxRes := arg.MaxResults
+		if maxRes > 0 && len(res) > maxRes {
+			res = res[:maxRes]
+		}
 	}
 
 	return res, nil
+}
+
+func (h *UserSearchHandler) UserSearch(ctx context.Context, arg keybase1.UserSearchArg) (res []keybase1.APIUserSearchResult, err error) {
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("USEARCH")
+	defer mctx.TraceTimed(fmt.Sprintf("UserSearch#UserSearch(s=%q, q=%q)", arg.Service, arg.Query),
+		func() error { return err })()
+
+	if arg.Service == "" {
+		return nil, fmt.Errorf("unexpected empty `Service` argument")
+	} else if arg.IncludeContacts && arg.Service != "keybase" {
+		return nil, fmt.Errorf("`IncludeContacts` is only valid with service=\"keybase\" (got service=%q)", arg.Service)
+	}
+
+	if arg.Query == "" {
+		return nil, nil
+	}
+
+	switch arg.Service {
+	case "keybase":
+		return h.keybaseSearchWithContacts(mctx, arg)
+	case "phone", "email":
+		return h.imptofuSearch(mctx, arg)
+	default:
+		return h.makeSearchRequest(mctx, arg)
+	}
 }
 
 func (h *UserSearchHandler) GetNonUserDetails(ctx context.Context, arg keybase1.GetNonUserDetailsArg) (res keybase1.NonUserDetails, err error) {
@@ -527,6 +547,7 @@ func (h *UserSearchHandler) GetNonUserDetails(ctx context.Context, arg keybase1.
 		}
 
 		res.SiteIcon = externals.MakeIcons(mctx, service, "logo_black", 16)
+		res.SiteIconWhite = externals.MakeIcons(mctx, service, "logo_white", 16)
 		res.SiteIconFull = externals.MakeIcons(mctx, service, "logo_full", 64)
 	} else if service == "phone" || service == "email" {
 		contacts, err := mctx.G().SyncedContactList.RetrieveContacts(mctx)

@@ -1,13 +1,10 @@
-import * as I from 'immutable'
 import * as React from 'react'
 import * as Constants from '../constants/people'
 import * as Types from '../constants/types/people'
 import * as Kb from '../common-adapters'
-import People, {Header} from './index'
+import People, {Header} from '.'
 import * as PeopleGen from '../actions/people-gen'
 import * as Container from '../util/container'
-import {createClearJustSignedUpEmail} from '../actions/signup-gen'
-import {createSearchSuggestions} from '../actions/search-gen'
 import {createShowUserProfile} from '../actions/profile-gen'
 import * as WaitingConstants from '../constants/waiting'
 import * as RouteTreeGen from '../actions/route-tree-gen'
@@ -29,10 +26,9 @@ const ConnectedHeader = Container.connect(
 )(Header)
 
 type Props = {
-  clearJustSignedUpEmail: () => void
-  oldItems: I.List<Types.PeopleScreenItem>
-  newItems: I.List<Types.PeopleScreenItem>
-  followSuggestions: I.List<Types.FollowSuggestion>
+  oldItems: Array<Types.PeopleScreenItem>
+  newItems: Array<Types.PeopleScreenItem>
+  followSuggestions: Array<Types.FollowSuggestion>
   getData: (markViewed?: boolean) => void
   onClickUser: (username: string) => void
   signupEmail: string
@@ -62,16 +58,15 @@ class LoadOnMount extends React.PureComponent<Props> {
         reloadOnMount={true}
       >
         <People
-          newItems={this.props.newItems.toArray()}
-          oldItems={this.props.oldItems.toArray()}
-          followSuggestions={this.props.followSuggestions.toArray()}
+          newItems={this.props.newItems}
+          oldItems={this.props.oldItems}
+          followSuggestions={this.props.followSuggestions}
           myUsername={this.props.myUsername}
           waiting={this.props.waiting}
           getData={this._getData}
           onClickUser={this._onClickUser}
           showAirdrop={this.props.showAirdrop}
           signupEmail={this.props.signupEmail}
-          clearJustSignedUpEmail={this.props.clearJustSignedUpEmail}
         />
       </Kb.Reloadable>
     )
@@ -89,13 +84,9 @@ export default Container.connect(
     waiting: WaitingConstants.anyWaiting(state, Constants.getPeopleDataWaitingKey),
   }),
   dispatch => ({
-    clearJustSignedUpEmail: () => dispatch(createClearJustSignedUpEmail()),
     getData: (markViewed = true) =>
       dispatch(PeopleGen.createGetPeopleData({markViewed, numFollowSuggestionsWanted: 10})),
     onClickUser: (username: string) => dispatch(createShowUserProfile({username})),
-    onSearch: () => {
-      dispatch(createSearchSuggestions({searchKey: 'profileSearch'}))
-    },
   }),
   (stateProps, dispatchProps) => ({
     followSuggestions: stateProps.followSuggestions,

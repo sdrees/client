@@ -1,5 +1,5 @@
 import {jsonDebugFileName, serverConfigFileName} from './constants/platform.desktop'
-import {noop} from 'lodash-es'
+import noop from 'lodash/noop'
 
 // Set this to true if you want to turn off most console logging so you can profile easier
 let PERF = false
@@ -15,6 +15,7 @@ let config = {
   immediateStateLogging: false, // Don't wait for idle to log state
   isDevApplePushToken: false,
   isTesting: __STORYBOOK__, // Is running a unit test
+  partyMode: false,
   printOutstandingRPCs: false, // Periodically print rpcs we're waiting for
   printOutstandingTimerListeners: false, // Periodically print listeners to the second clock
   printRPC: false, // Print rpc traffic
@@ -121,6 +122,7 @@ export const {
   isDevApplePushToken,
   immediateStateLogging,
   isTesting,
+  partyMode,
   printOutstandingRPCs,
   printOutstandingTimerListeners,
   printRPC,

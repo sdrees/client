@@ -5,8 +5,6 @@ import * as Styles from '../../styles'
 export type Props = {
   code: string
   cannotAccept: boolean
-  depositButtonText: string
-  depositButtonWaitingKey?: string
   expanded: boolean
   firstItem: boolean
   infoUrlText: string
@@ -14,16 +12,12 @@ export type Props = {
   issuerVerifiedDomain: string
   thisDeviceIsLockedOut: boolean
   trusted: boolean // TODO add limit when we support it in GUI
-  withdrawButtonWaitingKey?: string
-  withdrawButtonText: string
 
   onAccept: () => void
   onCollapse: () => void
   onExpand: () => void
   onRemove: () => void
-  onDeposit?: () => void
   onOpenInfoUrl?: () => void
-  onWithdraw?: () => void
 
   waitingKeyAdd: string
   waitingKeyDelete: string
@@ -63,27 +57,6 @@ const bodyExpanded = (props: Props) => (
       {props.issuerAccountID}
     </Kb.Text>
     <Kb.ButtonBar direction="row" align="flex-start" small={true}>
-      {!!props.depositButtonText && (
-        <Kb.WaitingButton
-          mode="Secondary"
-          label={props.depositButtonText}
-          onClick={stopPropagation(props.onDeposit)}
-          small={true}
-          type="Wallet"
-          waitingKey={props.depositButtonWaitingKey || null}
-        />
-      )}
-
-      {!!props.withdrawButtonText && (
-        <Kb.WaitingButton
-          mode="Secondary"
-          label={props.withdrawButtonText}
-          onClick={stopPropagation(props.onWithdraw)}
-          small={true}
-          type="Wallet"
-          waitingKey={props.withdrawButtonWaitingKey || null}
-        />
-      )}
       <Kb.Button
         mode="Secondary"
         type="Wallet"
@@ -131,7 +104,7 @@ const Asset = (props: Props) => {
           {props.expanded ? bodyExpanded(props) : bodyCollapsed(props)}
           <Kb.Box2 direction="vertical" style={styles.actions} centerChildren={true}>
             {props.thisDeviceIsLockedOut ? (
-              <Kb.WithTooltip text="You can only send from a mobile device more than 7 days old.">
+              <Kb.WithTooltip tooltip="You can only send from a mobile device more than 7 days old.">
                 {button}
               </Kb.WithTooltip>
             ) : (
@@ -150,7 +123,7 @@ const expandedHeight = Styles.isMobile ? 160 : 140
 
 export const getHeight = (props: Props): number => (props.expanded ? expandedHeight : nonExpandedHeight)
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   actions: Styles.platformStyles({
     common: {
       position: 'absolute',
@@ -180,6 +153,6 @@ const styles = Styles.styleSheetCreate({
     },
   }),
   textUnknown: {color: Styles.globalColors.redDark},
-})
+}))
 
 export default Asset

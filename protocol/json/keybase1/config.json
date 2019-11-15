@@ -615,6 +615,13 @@
         {
           "type": [
             null,
+            "double"
+          ],
+          "name": "f"
+        },
+        {
+          "type": [
+            null,
             "string"
           ],
           "name": "s"
@@ -1082,6 +1089,19 @@
     "toggleRuntimeStats": {
       "request": [],
       "response": null
+    },
+    "appendGUILogs": {
+      "request": [
+        {
+          "name": "content",
+          "type": "string"
+        }
+      ],
+      "response": null
+    },
+    "generateWebAuthToken": {
+      "request": [],
+      "response": "string"
     }
   },
   "namespace": "keybase.1"

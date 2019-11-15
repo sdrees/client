@@ -8,6 +8,20 @@ import (
 	keybase1 "github.com/keybase/client/go/protocol/keybase1"
 )
 
+func retryOnEphemeralRace(mctx libkb.MetaContext, fn func(mctx libkb.MetaContext) error) (err error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		if err = fn(mctx); err == nil {
+			return nil
+		}
+		if !libkb.IsEphemeralRetryableError(err) {
+			return err
+		}
+		mctx.Debug("retryOnEphemeralRace found a retryable error on try %d: %v",
+			attempt, err)
+	}
+	return err
+}
+
 // ephemeralKeyReboxer will rebox the lastest userEK while provisioning
 // devices.  The provisionee generates a deviceEK seed so that the provisioner
 // can rebox the latest userEK for the new deviceKID.  The provisionee posts
@@ -112,12 +126,12 @@ func (e *ephemeralKeyReboxer) storeEKs(mctx libkb.MetaContext) (err error) {
 	return userEKBoxStorage.Put(mctx, e.userEKBox.Metadata.Generation, *e.userEKBox)
 }
 
-func makeUserEKBoxForProvisionee(mctx libkb.MetaContext, KID keybase1.KID) (*keybase1.UserEkBoxed, error) {
+func makeUserEKBoxForProvisionee(mctx libkb.MetaContext, kid keybase1.KID) (*keybase1.UserEkBoxed, error) {
 	ekLib := mctx.G().GetEKLib()
 	if ekLib == nil {
 		return nil, nil
 	}
-	ekPair, err := libkb.ImportKeypairFromKID(KID)
+	ekPair, err := libkb.ImportKeypairFromKID(kid)
 	if err != nil {
 		return nil, err
 	}

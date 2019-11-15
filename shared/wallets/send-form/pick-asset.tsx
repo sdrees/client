@@ -40,8 +40,8 @@ const AssetList = ({accountID, isSender, username}) => {
     [dispatch, isSender]
   )
   React.useEffect(() => {
-    username
-      ? dispatch(WalletsGen.createRefreshTrustlineAcceptedAssetsByUsername({username}))
+    username || Constants.isFederatedAddress(accountID)
+      ? dispatch(WalletsGen.createRefreshTrustlineAcceptedAssetsByUsername({username: username || accountID}))
       : dispatch(WalletsGen.createRefreshTrustlineAcceptedAssets({accountID}))
   }, [dispatch, username, accountID])
   return (
@@ -143,7 +143,7 @@ const PickAsset = (props: Props) => {
 
 export default PickAsset
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   backClickable: {
     bottom: Styles.globalMargins.tiny,
     left: Styles.globalMargins.tiny,
@@ -168,4 +168,4 @@ const styles = Styles.styleSheetCreate({
   textSelected: {
     color: Styles.globalColors.blueDark,
   },
-})
+}))

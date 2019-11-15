@@ -6,6 +6,7 @@ package libkb
 import (
 	"io/ioutil"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -31,6 +32,7 @@ type HomeFinder interface {
 	CacheDir() string
 	SharedCacheDir() string
 	ConfigDir() string
+	DownloadsDir() string
 	Home(emptyOk bool) string
 	MobileSharedHome(emptyOk bool) string
 	DataDir() string
@@ -73,6 +75,10 @@ type XdgPosix struct {
 }
 
 func (x XdgPosix) Normalize(s string) string { return s }
+
+func (x XdgPosix) DownloadsDir() string {
+	return filepath.Join(x.Home(false), "Downloads")
+}
 
 func (x XdgPosix) Home(emptyOk bool) string {
 	ret := x.getHome()
@@ -175,7 +181,7 @@ func (d Darwin) appDir(dirs ...string) string {
 	appName := toUpper(d.appName)
 	runMode := d.getRunMode()
 	if runMode != ProductionRunMode {
-		appName = appName + toUpper(string(runMode))
+		appName += toUpper(string(runMode))
 	}
 	dirs = append(dirs, appName)
 	return filepath.Join(dirs...)
@@ -241,9 +247,12 @@ func (d Darwin) InfoDir() string {
 	return d.appDir(os.TempDir())
 }
 
+func (d Darwin) DownloadsDir() string {
+	return filepath.Join(d.Home(false), "Downloads")
+}
+
 func (d Darwin) Home(emptyOk bool) string {
-	var ret string
-	ret = d.getHome()
+	ret := d.getHome()
 	if len(ret) == 0 && !emptyOk {
 		ret = d.getenv("HOME")
 	}
@@ -329,6 +338,16 @@ func (w Win32) deriveFromTemp() (ret string) {
 	return
 }
 
+func (w Win32) DownloadsDir() string {
+	// Prefer to use USERPROFILE instead of w.Home() because the latter goes
+	// into APPDATA.
+	user, err := user.Current()
+	if err != nil {
+		return filepath.Join(w.Home(false), "Downloads")
+	}
+	return filepath.Join(user.HomeDir, "Downloads")
+}
+
 func (w Win32) Home(emptyOk bool) string {
 	ret := w.getHome()
 	if len(ret) == 0 && !emptyOk {
@@ -350,7 +369,7 @@ func (w Win32) Home(emptyOk bool) string {
 			// Capitalize the first letter
 			r, n := utf8.DecodeRuneInString(runModeName)
 			runModeName = string(unicode.ToUpper(r)) + runModeName[n:]
-			packageName = packageName + runModeName
+			packageName += runModeName
 		}
 	}
 

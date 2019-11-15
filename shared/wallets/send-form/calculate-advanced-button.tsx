@@ -1,5 +1,5 @@
 import * as React from 'react'
-import {isEqual} from 'lodash-es'
+import isEqual from 'lodash/isEqual'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
 import * as Container from '../../util/container'
@@ -29,7 +29,7 @@ const CalculateAdvancedButton = (props: CalculateAdvancedButtonProps) => {
         <Kb.Icon type="iconfont-remove" sizeType="Big" color={Styles.globalColors.red} />
       ) : (
         <Kb.WithTooltip
-          text="Calculate the amount you will send"
+          tooltip="Calculate the amount you will send"
           position="bottom left"
           disabled={isDisabled}
         >
@@ -61,7 +61,7 @@ const CalculateAdvancedButton = (props: CalculateAdvancedButtonProps) => {
 
 export default CalculateAdvancedButton
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   calculating: Styles.platformStyles({
     isElectron: {
       height: Styles.globalMargins.medium,
@@ -75,4 +75,4 @@ const styles = Styles.styleSheetCreate({
   icon: {
     marginRight: Styles.globalMargins.tiny,
   },
-})
+}))

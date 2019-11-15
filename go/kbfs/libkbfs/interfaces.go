@@ -143,6 +143,10 @@ type settingsDBGetter interface {
 	GetSettingsDB() *SettingsDB
 }
 
+type subscriptionManagerPublisherGetter interface {
+	SubscriptionManagerPublisher() SubscriptionManagerPublisher
+}
+
 // NodeID is a unique but transient ID for a Node. That is, two Node
 // objects in memory at the same time represent the same file or
 // directory if and only if their NodeIDs are equal (by pointer).
@@ -244,6 +248,12 @@ type Node interface {
 	ChildName(name string) data.PathPartString
 }
 
+// SyncedTlfMD contains the node metadata and handle for a given synced TLF.
+type SyncedTlfMD struct {
+	MD     NodeMetadata
+	Handle *tlfhandle.Handle
+}
+
 // KBFSOps handles all file system operations.  Expands all indirect
 // pointers.  Operations that modify the server data change all the
 // block IDs along the path, and so must return a path with the new
@@ -287,10 +297,17 @@ type KBFSOps interface {
 	// top-level folders.  This is a remote-access operation when the cache
 	// is empty or expired.
 	GetFavorites(ctx context.Context) ([]favorites.Folder, error)
+	// GetFolderWithFavFlags returns a keybase1.FolderWithFavFlags for given
+	// handle.
+	GetFolderWithFavFlags(ctx context.Context,
+		handle *tlfhandle.Handle) (keybase1.FolderWithFavFlags, error)
 	// GetFavoritesAll returns the logged-in user's lists of favorite, ignored,
 	// and new top-level folders.  This is a remote-access operation when the
 	// cache is empty or expired.
 	GetFavoritesAll(ctx context.Context) (keybase1.FavoritesResult, error)
+	// GetBadge returns the overall KBFS badge state for this device.
+	// It's cheaper than the other favorites methods.
+	GetBadge(ctx context.Context) (keybase1.FilesTabBadge, error)
 	// RefreshCachedFavorites tells the instances to forget any cached
 	// favorites list and fetch a new list from the server.  The
 	// effects are asychronous; if there's an error refreshing the
@@ -491,9 +508,12 @@ type KBFSOps interface {
 	// suitable for encoding directly into JSON.  This is an expensive
 	// operation, and should only be used for ocassional debugging.
 	// Note that the history does not include any unmerged changes or
-	// outstanding writes from the local device.
-	GetUpdateHistory(ctx context.Context, folderBranch data.FolderBranch) (
-		history TLFUpdateHistory, err error)
+	// outstanding writes from the local device.  To get all the
+	// revisions after `start`, use `kbfsmd.RevisionUninitialized` for
+	// the `end` parameter.
+	GetUpdateHistory(
+		ctx context.Context, folderBranch data.FolderBranch,
+		start, end kbfsmd.Revision) (history TLFUpdateHistory, err error)
 	// GetEditHistory returns the edit history of the TLF, clustered
 	// by writer.
 	GetEditHistory(ctx context.Context, folderBranch data.FolderBranch) (
@@ -536,6 +556,9 @@ type KBFSOps interface {
 	// TeamAbandoned indicates that a team has been abandoned, and
 	// shouldn't be referred to by its previous name anymore.
 	TeamAbandoned(ctx context.Context, tid keybase1.TeamID)
+	// CheckMigrationPerms returns an error if this device cannot
+	// perform implicit team migration for the given TLF.
+	CheckMigrationPerms(ctx context.Context, id tlf.ID) (err error)
 	// MigrateToImplicitTeam migrates the given folder from a private-
 	// or public-keyed folder, to a team-keyed folder.  If it's
 	// already a private/public team-keyed folder, nil is returned.
@@ -561,8 +584,12 @@ type KBFSOps interface {
 	ForceStuckConflictForTesting(ctx context.Context, tlfID tlf.ID) error
 	// Reset completely resets the given folder.  Should only be
 	// called after explicit user confirmation.  After the call,
-	// `handle` has the new TLF ID.
-	Reset(ctx context.Context, handle *tlfhandle.Handle) error
+	// `handle` has the new TLF ID.  If `*newTlfID` is non-nil, that
+	// will be the new TLF ID of the reset TLF, if it already points
+	// to a MD object that matches the same handle as the original TLF
+	// (see HOTPOT-685 for an example of how this can happen -- it
+	// should be very rare).
+	Reset(ctx context.Context, handle *tlfhandle.Handle, newTlfID *tlf.ID) error
 
 	// GetSyncConfig returns the sync state configuration for the
 	// given TLF.
@@ -578,6 +605,10 @@ type KBFSOps interface {
 	SetSyncConfig(
 		ctx context.Context, tlfID tlf.ID, config keybase1.FolderSyncConfig) (
 		<-chan error, error)
+	// GetAllSyncedTlfMDs returns the synced TLF metadata (and
+	// handle), only for those synced TLFs to which the current
+	// logged-in user has access.
+	GetAllSyncedTlfMDs(ctx context.Context) map[tlf.ID]SyncedTlfMD
 
 	// AddRootNodeWrapper adds a new root node wrapper for every
 	// existing TLF.  Any Nodes that have already been returned by
@@ -816,6 +847,10 @@ type KBPKI interface {
 
 	// NotifyPathUpdated sends a path updated notification.
 	NotifyPathUpdated(ctx context.Context, path string) error
+
+	// InvalidateTeamCacheForID instructs KBPKI to discard any cached
+	// information about the given team ID.
+	InvalidateTeamCacheForID(tid keybase1.TeamID)
 }
 
 // KeyMetadataWithRootDirEntry is like KeyMetadata, but can also
@@ -1948,6 +1983,10 @@ type InitMode interface {
 	// DoLogObfuscation indicates whether senstive data like filenames
 	// should be obfuscated in log messages.
 	DoLogObfuscation() bool
+	// BlockTLFEditHistoryIntialization indicates where we should
+	// delay initializing the edit histories of the most recent TLFs
+	// until the first request that uses them is made.
+	BlockTLFEditHistoryIntialization() bool
 	// InitialDelayForBackgroundWork indicates how long non-critical
 	// work that happens in the background on startup should wait
 	// before it begins.
@@ -2029,8 +2068,7 @@ type SubscriptionManager interface {
 // SubscriptionManagerPublisher associates with one SubscriptionManager, and is
 // used to publish changes to subscribers mangaged by it.
 type SubscriptionManagerPublisher interface {
-	FavoritesChanged()
-	JournalStatusChanged()
+	PublishChange(topic keybase1.SubscriptionTopic)
 }
 
 // Config collects all the singleton instance instantiations needed to
@@ -2221,6 +2259,8 @@ type Config interface {
 	// SubscriptionManagerPublisher retursn a publisher that can be used to
 	// publish events to the subscription manager.
 	SubscriptionManagerPublisher() SubscriptionManagerPublisher
+	// KbEnv returns the *libkb.Env.
+	KbEnv() *libkb.Env
 }
 
 // NodeCache holds Nodes, and allows libkbfs to update them when

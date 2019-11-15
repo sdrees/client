@@ -10,8 +10,14 @@ import (
 	"github.com/keybase/client/go/protocol/keybase1"
 )
 
-func SendTeamChatWelcomeMessage(ctx context.Context, g *libkb.GlobalContext, team, user string) (err error) {
-	teamDetails, err := Details(ctx, g, team)
+func SendTeamChatWelcomeMessage(ctx context.Context, g *libkb.GlobalContext, teamID keybase1.TeamID, team, user string,
+	membersType chat1.ConversationMembersType, role keybase1.TeamRole) (err error) {
+	var teamDetails keybase1.TeamDetails
+	if teamID.IsNil() {
+		teamDetails, err = Details(ctx, g, team)
+	} else {
+		teamDetails, err = DetailsByID(ctx, g, teamID)
+	}
 	if err != nil {
 		return fmt.Errorf("getting team details: %v", err)
 	}
@@ -39,6 +45,7 @@ func SendTeamChatWelcomeMessage(ctx context.Context, g *libkb.GlobalContext, tea
 	subBody := chat1.NewMessageSystemWithAddedtoteam(chat1.MessageSystemAddedToTeam{
 		Adder:          username.String(),
 		Addee:          user,
+		Role:           role,
 		Team:           team,
 		Owners:         ownerNames,
 		Admins:         adminNames,
@@ -52,14 +59,19 @@ func SendTeamChatWelcomeMessage(ctx context.Context, g *libkb.GlobalContext, tea
 	// Ensure we have chat available, since TeamAddMember may also be
 	// coming from a standalone launch.
 	g.StartStandaloneChat()
+	var topicName *string
+	if membersType == chat1.ConversationMembersType_TEAM {
+		topicName = &globals.DefaultTeamTopic
+	}
 
-	return g.ChatHelper.SendMsgByName(ctx, team, &globals.DefaultTeamTopic,
-		chat1.ConversationMembersType_TEAM, keybase1.TLFIdentifyBehavior_CHAT_CLI, body,
-		chat1.MessageType_SYSTEM)
+	_, err = g.ChatHelper.SendMsgByNameNonblock(ctx, team,
+		topicName, membersType, keybase1.TLFIdentifyBehavior_CHAT_CLI, body,
+		chat1.MessageType_SYSTEM, nil)
+	return err
 }
 
 func SendChatInviteWelcomeMessage(ctx context.Context, g *libkb.GlobalContext, team string,
-	category keybase1.TeamInviteCategory, inviter, invitee keybase1.UID) (res bool) {
+	category keybase1.TeamInviteCategory, inviter, invitee keybase1.UID, role keybase1.TeamRole) (res bool) {
 
 	if !g.Env.SendSystemChatMessages() {
 		g.Log.CDebugf(ctx, "Skipping SentChatInviteWelcomeMessage via environment flag")
@@ -83,14 +95,51 @@ func SendChatInviteWelcomeMessage(ctx context.Context, g *libkb.GlobalContext, t
 		Inviter:    inviterName.String(),
 		Invitee:    inviteeName.String(),
 		Adder:      username.String(),
+		Role:       role,
 		InviteType: category,
 	})
 	body := chat1.NewMessageBodyWithSystem(subBody)
 
-	if err = g.ChatHelper.SendMsgByName(ctx, team, &globals.DefaultTeamTopic,
+	if _, err = g.ChatHelper.SendMsgByNameNonblock(ctx, team,
+		&globals.DefaultTeamTopic,
 		chat1.ConversationMembersType_TEAM, keybase1.TLFIdentifyBehavior_CHAT_CLI, body,
-		chat1.MessageType_SYSTEM); err != nil {
+		chat1.MessageType_SYSTEM, nil); err != nil {
 		g.Log.CDebugf(ctx, "sendChatInviteWelcomeMessage: failed to send message: %s", err)
+		return false
+	}
+	return true
+}
+
+func SendChatSBSResolutionMessage(ctx context.Context, g *libkb.GlobalContext,
+	team, assertionUser, assertionService string,
+	prover keybase1.UID) (res bool) {
+
+	if !g.Env.SendSystemChatMessages() {
+		g.Log.CDebugf(ctx, "Skipping SentChatInviteWelcomeMessage via environment flag")
+		return false
+	}
+
+	proverName, err := g.GetUPAKLoader().LookupUsername(ctx, prover)
+	if err != nil {
+		g.Log.CDebugf(ctx, "SendChatSBSResolutionMessage: failed to lookup invitee username: %s", err)
+		return false
+	}
+
+	subBody := chat1.NewMessageSystemWithSbsresolve(chat1.
+		MessageSystemSbsResolve{
+		Prover:            proverName.String(),
+		AssertionUsername: assertionUser,
+		AssertionService:  assertionService,
+	})
+	body := chat1.NewMessageBodyWithSystem(subBody)
+
+	g.StartStandaloneChat()
+
+	if _, err = g.ChatHelper.SendMsgByNameNonblock(ctx, team, nil,
+		chat1.ConversationMembersType_IMPTEAMNATIVE,
+		keybase1.TLFIdentifyBehavior_CHAT_CLI, body,
+		chat1.MessageType_SYSTEM, nil); err != nil {
+		g.Log.CDebugf(ctx, "SendChatSBSResolutionMessage: failed to send message: %s", err)
 		return false
 	}
 	return true
@@ -119,9 +168,10 @@ func SendTeamChatCreateMessage(ctx context.Context, g *libkb.GlobalContext, team
 	// Ensure we have chat available
 	g.StartStandaloneChat()
 
-	if err = g.ChatHelper.SendMsgByName(ctx, team, &globals.DefaultTeamTopic,
+	if _, err = g.ChatHelper.SendMsgByNameNonblock(ctx, team,
+		&globals.DefaultTeamTopic,
 		chat1.ConversationMembersType_TEAM, keybase1.TLFIdentifyBehavior_CHAT_CLI, body,
-		chat1.MessageType_SYSTEM); err != nil {
+		chat1.MessageType_SYSTEM, nil); err != nil {
 		return false
 	}
 
@@ -151,9 +201,10 @@ func SendTeamChatChangeAvatar(mctx libkb.MetaContext, team, username string) boo
 	// Ensure we have chat available
 	mctx.G().StartStandaloneChat()
 
-	if err = mctx.G().ChatHelper.SendMsgByName(mctx.Ctx(), team, &globals.DefaultTeamTopic,
+	if _, err = mctx.G().ChatHelper.SendMsgByNameNonblock(mctx.Ctx(), team,
+		&globals.DefaultTeamTopic,
 		chat1.ConversationMembersType_TEAM, keybase1.TLFIdentifyBehavior_CHAT_CLI, body,
-		chat1.MessageType_SYSTEM); err != nil {
+		chat1.MessageType_SYSTEM, nil); err != nil {
 		return false
 	}
 

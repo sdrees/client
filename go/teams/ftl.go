@@ -60,9 +60,7 @@ func NewFastTeamLoader(g *libkb.GlobalContext) *FastTeamChainLoader {
 		featureFlagGate: libkb.NewFeatureFlagGate(libkb.FeatureFTL, 2*time.Minute),
 		locktab:         libkb.NewLockTable(),
 	}
-	ret.storage = storage.NewFTLStorage(g, func(mctx libkb.MetaContext, s *keybase1.FastTeamData) (bool, error) {
-		return ret.upgradeStoredState(mctx, s)
-	})
+	ret.storage = storage.NewFTLStorage(g, ret.upgradeStoredState)
 	return ret
 }
 
@@ -474,10 +472,7 @@ func stateHasKeySeed(m libkb.MetaContext, gen keybase1.PerTeamKeyGeneration, sta
 		return false
 	}
 	_, foundPerTeamKey := state.Chain.PerTeamKeys[gen]
-	if !foundPerTeamKey {
-		return false
-	}
-	return true
+	return foundPerTeamKey
 }
 
 // stateHasKeys checks to see if the given state has the keys specified in the shopping list. If not, it will
@@ -997,7 +992,7 @@ func (f *FastTeamChainLoader) audit(m libkb.MetaContext, arg fastLoadArg, state 
 	if last == nil {
 		return NewAuditError("cannot run audit, no last chain data")
 	}
-	return m.G().GetTeamAuditor().AuditTeam(m, arg.ID, arg.Public, head.Seqno, state.Chain.LinkIDs, last.Seqno, false)
+	return m.G().GetTeamAuditor().AuditTeam(m, arg.ID, arg.Public, head.Seqno, state.Chain.LinkIDs, last.Seqno, keybase1.AuditMode_STANDARD)
 }
 
 // readDownPointer reads a down pointer out of a given link, if it's unstubbed. Down pointers

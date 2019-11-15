@@ -197,14 +197,15 @@ type ConnectionTransportTLS struct {
 	dialable       Dialable
 
 	// Protects everything below.
-	mutex           sync.Mutex
-	transport       Transporter
-	stagedTransport Transporter
-	conn            net.Conn
-	dialerTimeout   time.Duration
-	logFactory      LogFactory
-	wef             WrapErrorFunc
-	log             ConnectionLog
+	mutex            sync.Mutex
+	transport        Transporter
+	stagedTransport  Transporter
+	conn             net.Conn
+	dialerTimeout    time.Duration
+	handshakeTimeout time.Duration
+	logFactory       LogFactory
+	wef              WrapErrorFunc
+	log              ConnectionLog
 }
 
 // Test that ConnectionTransportTLS fully implements the ConnectionTransport interface.
@@ -274,8 +275,23 @@ func (ct *ConnectionTransportTLS) Dial(ctx context.Context) (
 		LogField{Key: "local-addr", Value: baseConn.LocalAddr()},
 		LogField{Key: ConnectionLogMsgKey, Value: "Handshake"})
 	conn := tls.Client(baseConn, config)
-	if err := conn.Handshake(); err != nil {
-		return nil, err
+
+	// run TLS handshake with a timeout
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- conn.Handshake()
+	}()
+	handshakeTimeout := ct.handshakeTimeout
+	if handshakeTimeout == 0 {
+		handshakeTimeout = time.Minute
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return nil, err
+		}
+	case <-time.After(handshakeTimeout):
+		return nil, errors.New("handshake timeout")
 	}
 	ct.log.Debug("%s", LogField{Key: ConnectionLogMsgKey, Value: "Handshaken"})
 
@@ -391,6 +407,9 @@ type ConnectionOpts struct {
 	// connections. Zero value is passed as-is to net.Dialer, which means no
 	// timeout. Note that OS may impose its own timeout.
 	DialerTimeout time.Duration
+	// HandshakeTimeout is a timeout on how long we wait for TLS handshake to
+	// complete. If no value specified, we default to time.Minute.
+	HandshakeTimeout time.Duration
 }
 
 // NewTLSConnectionWithConnectionLogFactory is like NewTLSConnection,
@@ -406,13 +425,14 @@ func NewTLSConnectionWithConnectionLogFactory(
 	opts ConnectionOpts,
 ) *Connection {
 	transport := &ConnectionTransportTLS{
-		rootCerts:      rootCerts,
-		srvRemote:      srvRemote,
-		maxFrameLength: maxFrameLength,
-		logFactory:     logFactory,
-		wef:            opts.WrapErrorFunc,
-		dialerTimeout:  opts.DialerTimeout,
-		log:            connectionLogFactory.Make("conn_tspt"),
+		rootCerts:        rootCerts,
+		srvRemote:        srvRemote,
+		maxFrameLength:   maxFrameLength,
+		logFactory:       logFactory,
+		wef:              opts.WrapErrorFunc,
+		dialerTimeout:    opts.DialerTimeout,
+		handshakeTimeout: opts.HandshakeTimeout,
+		log:              connectionLogFactory.Make("conn_tspt"),
 	}
 	connLog := connectionLogFactory.Make("conn")
 	return newConnectionWithTransportAndProtocolsWithLog(
@@ -432,13 +452,14 @@ func NewTLSConnection(
 	opts ConnectionOpts,
 ) *Connection {
 	transport := &ConnectionTransportTLS{
-		rootCerts:      rootCerts,
-		srvRemote:      srvRemote,
-		maxFrameLength: maxFrameLength,
-		logFactory:     logFactory,
-		wef:            opts.WrapErrorFunc,
-		dialerTimeout:  opts.DialerTimeout,
-		log:            newConnectionLogUnstructured(logOutput, "CONNTSPT"),
+		rootCerts:        rootCerts,
+		srvRemote:        srvRemote,
+		maxFrameLength:   maxFrameLength,
+		logFactory:       logFactory,
+		wef:              opts.WrapErrorFunc,
+		dialerTimeout:    opts.DialerTimeout,
+		handshakeTimeout: opts.HandshakeTimeout,
+		log:              newConnectionLogUnstructured(logOutput, "CONNTSPT"),
 	}
 	return newConnectionWithTransportAndProtocols(handler, transport, errorUnwrapper, logOutput, opts)
 }
@@ -456,13 +477,14 @@ func NewTLSConnectionWithTLSConfig(
 	opts ConnectionOpts,
 ) *Connection {
 	transport := &ConnectionTransportTLS{
-		srvRemote:      srvRemote,
-		tlsConfig:      copyTLSConfig(tlsConfig),
-		maxFrameLength: maxFrameLength,
-		logFactory:     logFactory,
-		wef:            opts.WrapErrorFunc,
-		dialerTimeout:  opts.DialerTimeout,
-		log:            newConnectionLogUnstructured(logOutput, "CONNTSPT"),
+		srvRemote:        srvRemote,
+		tlsConfig:        copyTLSConfig(tlsConfig),
+		maxFrameLength:   maxFrameLength,
+		logFactory:       logFactory,
+		wef:              opts.WrapErrorFunc,
+		dialerTimeout:    opts.DialerTimeout,
+		handshakeTimeout: opts.HandshakeTimeout,
+		log:              newConnectionLogUnstructured(logOutput, "CONNTSPT"),
 	}
 	return newConnectionWithTransportAndProtocols(handler, transport, errorUnwrapper, logOutput, opts)
 }
@@ -481,14 +503,15 @@ func NewTLSConnectionWithDialable(
 	dialable Dialable,
 ) *Connection {
 	transport := &ConnectionTransportTLS{
-		rootCerts:      rootCerts,
-		srvRemote:      srvRemote,
-		maxFrameLength: maxFrameLength,
-		logFactory:     logFactory,
-		wef:            opts.WrapErrorFunc,
-		dialerTimeout:  opts.DialerTimeout,
-		log:            newConnectionLogUnstructured(logOutput, "CONNTSPT"),
-		dialable:       dialable,
+		rootCerts:        rootCerts,
+		srvRemote:        srvRemote,
+		maxFrameLength:   maxFrameLength,
+		logFactory:       logFactory,
+		wef:              opts.WrapErrorFunc,
+		dialerTimeout:    opts.DialerTimeout,
+		handshakeTimeout: opts.HandshakeTimeout,
+		log:              newConnectionLogUnstructured(logOutput, "CONNTSPT"),
+		dialable:         dialable,
 	}
 	return newConnectionWithTransportAndProtocols(handler, transport, errorUnwrapper, logOutput, opts)
 }
@@ -530,11 +553,11 @@ func newConnectionWithTransportAndProtocolsWithLog(handler ConnectionHandler,
 		reconnectBackoff:              reconnectBackoff,
 		doCommandBackoff:              commandBackoff,
 		initialReconnectBackoffWindow: opts.InitialReconnectBackoffWindow,
-		wef:               opts.WrapErrorFunc,
-		tagsFunc:          opts.TagsFunc,
-		log:               log,
-		protocols:         opts.Protocols,
-		reconnectedBefore: opts.ForceInitialBackoff,
+		wef:                           opts.WrapErrorFunc,
+		tagsFunc:                      opts.TagsFunc,
+		log:                           log,
+		protocols:                     opts.Protocols,
+		reconnectedBefore:             opts.ForceInitialBackoff,
 	}
 	if !opts.DontConnectNow {
 		// start connecting now
@@ -565,7 +588,7 @@ func (c *Connection) connect(ctx context.Context) error {
 	// connect
 	transport, err := c.transport.Dial(ctx)
 	if err != nil {
-		c.log.Warning("Connection: error %s: %s",
+		c.log.Warning("Connection: error %s: %v",
 			LogField{Key: ConnectionLogMsgKey, Value: "dialing transport"},
 			LogField{Key: "error", Value: err})
 		return err
@@ -575,14 +598,16 @@ func (c *Connection) connect(ctx context.Context) error {
 	server := NewServer(transport, c.wef)
 
 	for _, p := range c.protocols {
-		server.Register(p)
+		if err := server.Register(p); err != nil {
+			return err
+		}
 	}
 
 	// call the connect handler
 	c.log.Debug("Connection: %s", LogField{Key: ConnectionLogMsgKey, Value: "calling OnConnect"})
 	err = c.handler.OnConnect(ctx, c, client, server)
 	if err != nil {
-		c.log.Warning("Connection: error calling %s handler: %s",
+		c.log.Warning("Connection: error calling %s handler: %v",
 			LogField{Key: ConnectionLogMsgKey, Value: "OnConnect"},
 			LogField{Key: "error", Value: err})
 		return err
@@ -760,7 +785,7 @@ func (c *Connection) doReconnect(ctx context.Context, disconnectStatus Disconnec
 	err := backoff.RetryNotifyWithContext(ctx, func() (err error) {
 		c.log.Debug("RetryNotify %s", LogField{Key: ConnectionLogMsgKey, Value: "attempt"})
 		defer func() {
-			c.log.Debug("RetryNotify operation result: %s", LogField{Key: ConnectionLogMsgKey, Value: err})
+			c.log.Debug("RetryNotify operation result: %v", LogField{Key: ConnectionLogMsgKey, Value: err})
 		}()
 		// try to connect
 		err = c.connect(ctx)
@@ -776,7 +801,7 @@ func (c *Connection) doReconnect(ctx context.Context, disconnectStatus Disconnec
 		if !c.handler.ShouldRetryOnConnect(err) {
 			// A fatal error happened.
 			*reconnectErrPtr = err
-			c.log.Debug("RetryNotify ShouldRetryOnConnect: %s", LogField{Key: ConnectionLogMsgKey, Value: err})
+			c.log.Debug("RetryNotify ShouldRetryOnConnect: %v", LogField{Key: ConnectionLogMsgKey, Value: err})
 			// short-circuit Retry
 			return nil
 		}
@@ -784,7 +809,7 @@ func (c *Connection) doReconnect(ctx context.Context, disconnectStatus Disconnec
 	}, c.reconnectBackoff(),
 		// give the caller a chance to log any other error or adjust state
 		c.handler.OnConnectError)
-	c.log.Debug("RetryNotify complete %s", LogField{Key: ConnectionLogMsgKey, Value: err})
+	c.log.Debug("RetryNotify complete %v", LogField{Key: ConnectionLogMsgKey, Value: err})
 
 	if err != nil {
 		// this shouldn't happen, but just in case.
@@ -844,21 +869,23 @@ type connectionClient struct {
 
 var _ GenericClient = connectionClient{}
 
-func (c connectionClient) Call(ctx context.Context, s string, args interface{}, res interface{}) error {
+func (c connectionClient) Call(ctx context.Context, s string, args interface{},
+	res interface{}, timeout time.Duration) error {
 	return c.conn.DoCommand(ctx, s, func(rawClient GenericClient) error {
-		return rawClient.Call(ctx, s, args, res)
+		return rawClient.Call(ctx, s, args, res, timeout)
 	})
 }
 
 func (c connectionClient) CallCompressed(ctx context.Context, s string,
-	args interface{}, res interface{}, ctype CompressionType) error {
+	args interface{}, res interface{}, ctype CompressionType, timeout time.Duration) error {
 	return c.conn.DoCommand(ctx, s, func(rawClient GenericClient) error {
-		return rawClient.CallCompressed(ctx, s, args, res, ctype)
+		return rawClient.CallCompressed(ctx, s, args, res, ctype, timeout)
 	})
 }
 
-func (c connectionClient) Notify(ctx context.Context, s string, args interface{}) error {
+func (c connectionClient) Notify(ctx context.Context, s string, args interface{},
+	timeout time.Duration) error {
 	return c.conn.DoCommand(ctx, s, func(rawClient GenericClient) error {
-		return rawClient.Notify(ctx, s, args)
+		return rawClient.Notify(ctx, s, args, timeout)
 	})
 }

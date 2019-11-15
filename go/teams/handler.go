@@ -249,17 +249,18 @@ func invalidateCaches(mctx libkb.MetaContext, teamID keybase1.TeamID) {
 	}
 }
 
-func handleChangeSingle(ctx context.Context, g *libkb.GlobalContext, row keybase1.TeamChangeRow, change keybase1.TeamChangeSet) (err error) {
+func handleChangeSingle(ctx context.Context, g *libkb.GlobalContext, row keybase1.TeamChangeRow, change keybase1.TeamChangeSet) (changedMetadata bool, err error) {
 	change.KeyRotated = row.KeyRotated
 	change.MembershipChanged = row.MembershipChanged
 	change.Misc = row.Misc
 	mctx := libkb.NewMetaContext(ctx, g)
 
-	defer mctx.Trace(fmt.Sprintf("team.handleChangeSingle(%+v, %+v)", row, change),
+	defer mctx.Trace(fmt.Sprintf("team.handleChangeSingle [%s] (%+v, %+v)", g.Env.GetUsername(), row, change),
 		func() error { return err })()
 
-	HintLatestSeqno(mctx, row.Id, row.LatestSeqno)
-	HintLatestHiddenSeqno(mctx, row.Id, row.LatestHiddenSeqno)
+	// Any errors are already logged in their respective functions.
+	_ = HintLatestSeqno(mctx, row.Id, row.LatestSeqno)
+	_ = HintLatestHiddenSeqno(mctx, row.Id, row.LatestHiddenSeqno)
 
 	// If we're handling a rename we should also purge the resolver cache and
 	// the KBFS favorites cache
@@ -272,25 +273,33 @@ func handleChangeSingle(ctx context.Context, g *libkb.GlobalContext, row keybase
 	}
 	// Send teamID and teamName in two separate notifications. It is
 	// server-trust that they are the same team.
-	g.NotifyRouter.HandleTeamChangedByBothKeys(ctx, row.Id, row.Name, row.LatestSeqno, row.ImplicitTeam, change, row.LatestHiddenSeqno)
+	g.NotifyRouter.HandleTeamChangedByBothKeys(ctx, row.Id, row.Name, row.LatestSeqno, row.ImplicitTeam, change, row.LatestHiddenSeqno, row.LatestOffchainSeqno)
 
+	// Note we only get updates about new subteams we create because the flow
+	// is that we join the team as an admin when we create them and then
+	// immediately leave.
 	if change.Renamed || change.MembershipChanged || change.Misc {
-		// this notification is specifically for the UI
-		g.NotifyRouter.HandleTeamListUnverifiedChanged(ctx, row.Name)
+		changedMetadata = true
 	}
 	if change.MembershipChanged {
 		g.NotifyRouter.HandleCanUserPerformChanged(ctx, row.Name)
 	}
-	return nil
+	return changedMetadata, nil
 }
 
 func HandleChangeNotification(ctx context.Context, g *libkb.GlobalContext, rows []keybase1.TeamChangeRow, changes keybase1.TeamChangeSet) (err error) {
-	ctx = libkb.WithLogTag(ctx, "CLKR")
+	ctx = libkb.WithLogTag(ctx, "THCN")
 	defer g.CTrace(ctx, "HandleChangeNotification", func() error { return err })()
+	var anyChangedMetadata bool
 	for _, row := range rows {
-		if err := handleChangeSingle(ctx, g, row, changes); err != nil {
+		if changedMetadata, err := handleChangeSingle(ctx, g, row, changes); err != nil {
 			return err
+		} else if changedMetadata {
+			anyChangedMetadata = true
 		}
+	}
+	if anyChangedMetadata {
+		g.NotifyRouter.HandleTeamMetadataUpdate(ctx)
 	}
 	return nil
 }
@@ -300,9 +309,13 @@ func HandleDeleteNotification(ctx context.Context, g *libkb.GlobalContext, rows 
 	defer mctx.Trace(fmt.Sprintf("team.HandleDeleteNotification(%v)", len(rows)),
 		func() error { return err })()
 
+	g.NotifyRouter.HandleTeamMetadataUpdate(ctx)
+
 	for _, row := range rows {
 		g.Log.CDebugf(ctx, "team.HandleDeleteNotification: (%+v)", row)
-		TombstoneTeam(libkb.NewMetaContext(ctx, g), row.Id)
+		if err := TombstoneTeam(libkb.NewMetaContext(ctx, g), row.Id); err != nil {
+			g.Log.CDebugf(ctx, "team.HandleDeleteNotification: failed to Tombstone: %s", err)
+		}
 		invalidateCaches(mctx, row.Id)
 		g.NotifyRouter.HandleTeamDeleted(ctx, row.Id)
 	}
@@ -315,9 +328,12 @@ func HandleExitNotification(ctx context.Context, g *libkb.GlobalContext, rows []
 	defer mctx.Trace(fmt.Sprintf("team.HandleExitNotification(%v)", len(rows)),
 		func() error { return err })()
 
+	g.NotifyRouter.HandleTeamMetadataUpdate(ctx)
 	for _, row := range rows {
 		mctx.Debug("team.HandleExitNotification: (%+v)", row)
-		FreezeTeam(mctx, row.Id)
+		if err := FreezeTeam(mctx, row.Id); err != nil {
+			mctx.Debug("team.HandleExitNotification: failed to FreezeTeam: %s", err)
+		}
 		invalidateCaches(mctx, row.Id)
 		mctx.G().NotifyRouter.HandleTeamExit(ctx, row.Id)
 	}
@@ -367,20 +383,20 @@ func handleSBSSingle(ctx context.Context, g *libkb.GlobalContext, teamID keybase
 		invite, found := team.chain().FindActiveInviteByID(untrustedInviteeFromGregor.InviteID)
 		if !found {
 			g.Log.CDebugf(ctx, "FindActiveInviteByID failed for invite %s", untrustedInviteeFromGregor.InviteID)
-			return libkb.NotFoundError{}
+			return libkb.NotFoundError{Msg: "Invite not found"}
 		}
 		g.Log.CDebugf(ctx, "Found invite: %+v", invite)
 		category, err := invite.Type.C()
 		if err != nil {
 			return err
 		}
+		ityp, err := invite.Type.String()
+		if err != nil {
+			return err
+		}
 		switch category {
 		case keybase1.TeamInviteCategory_SBS:
 			//  resolve assertion in link (with uid in invite msg)
-			ityp, err := invite.Type.String()
-			if err != nil {
-				return err
-			}
 			assertion := fmt.Sprintf("%s@%s+uid:%s", string(invite.Name), ityp, untrustedInviteeFromGregor.Uid)
 
 			arg := keybase1.Identify2Arg{
@@ -431,7 +447,8 @@ func handleSBSSingle(ctx context.Context, g *libkb.GlobalContext, teamID keybase
 			}
 
 			g.Log.CDebugf(ctx, "User already has same or higher role, canceling invite %s", invite.Id)
-			return removeInviteID(ctx, team, invite.Id)
+			const allowInaction = false
+			return removeInviteID(ctx, team, invite.Id, allowInaction)
 		}
 
 		tx := CreateAddMemberTx(team)
@@ -443,10 +460,24 @@ func handleSBSSingle(ctx context.Context, g *libkb.GlobalContext, teamID keybase
 		}
 
 		// Send chat welcome message
-		if !team.IsImplicit() {
+		if team.IsImplicit() {
+			// Do not send messages about keybase-type invites being resolved.
+			// They are supposed to be transparent for the users and look like
+			// a real members even though they have to be SBS-ed in.
+			if category != keybase1.TeamInviteCategory_KEYBASE {
+				iteamName, err := team.ImplicitTeamDisplayNameString(ctx)
+				if err != nil {
+					return err
+				}
+				g.Log.CDebugf(ctx,
+					"sending resolution message for successful SBS handle")
+				SendChatSBSResolutionMessage(ctx, g, iteamName,
+					string(invite.Name), ityp, verifiedInvitee.Uid)
+			}
+		} else {
 			g.Log.CDebugf(ctx, "sending welcome message for successful SBS handle")
 			SendChatInviteWelcomeMessage(ctx, g, team.Name().String(), category, invite.Inviter.Uid,
-				verifiedInvitee.Uid)
+				verifiedInvitee.Uid, invite.Role)
 		}
 
 		return nil
@@ -519,6 +550,7 @@ func HandleOpenTeamAccessRequest(ctx context.Context, g *libkb.GlobalContext, ms
 type chatSeitanRecip struct {
 	inviter keybase1.UID
 	invitee keybase1.UID
+	role    keybase1.TeamRole
 }
 
 func HandleTeamSeitan(ctx context.Context, g *libkb.GlobalContext, msg keybase1.TeamSeitanMsg) (err error) {
@@ -586,6 +618,7 @@ func HandleTeamSeitan(ctx context.Context, g *libkb.GlobalContext, msg keybase1.
 		chats = append(chats, chatSeitanRecip{
 			inviter: invite.Inviter.Uid,
 			invitee: seitan.Uid,
+			role:    invite.Role,
 		})
 	}
 
@@ -600,10 +633,10 @@ func HandleTeamSeitan(ctx context.Context, g *libkb.GlobalContext, msg keybase1.
 
 	// Send chats
 	for _, chat := range chats {
-		g.Log.CDebugf(ctx, "sending welcome message for successful Seitan handle: inviter: %s invitee: %s",
-			chat.inviter, chat.invitee)
+		g.Log.CDebugf(ctx, "sending welcome message for successful Seitan handle: inviter: %s invitee: %s, role: %v",
+			chat.inviter, chat.invitee, chat.role)
 		SendChatInviteWelcomeMessage(ctx, g, team.Name().String(), keybase1.TeamInviteCategory_SEITAN,
-			chat.inviter, chat.invitee)
+			chat.inviter, chat.invitee, chat.role)
 	}
 
 	return nil
@@ -691,7 +724,7 @@ func handleSeitanSingleV2(key keybase1.SeitanPubKey, invite keybase1.TeamInvite,
 	if err != nil || len(sig) != len(decodedSig) {
 		return errors.New("Signature length verification failed (seitan)")
 	}
-	copy(sig[:], decodedSig[:])
+	copy(sig[:], decodedSig)
 
 	now := keybase1.Time(seitan.UnixCTime) // For V2 this is ms since the epoch, not seconds
 	// NOTE: Since we are re-serializing the values from seitan here to

@@ -9,7 +9,6 @@ import (
 
 	"github.com/keybase/client/go/libkb"
 	"github.com/stretchr/testify/require"
-	context "golang.org/x/net/context"
 )
 
 func forceOpenDBs(tc libkb.TestContext) {
@@ -137,7 +136,7 @@ func assertDeprovisionWithSetup(tc libkb.TestContext, targ assertDeprovisionWith
 		expectedNumKeys -= 2
 	}
 
-	e := NewDeprovisionEngine(tc.G, fu.Username, true /* doRevoke */)
+	e := NewDeprovisionEngine(tc.G, fu.Username, true /* doRevoke */, libkb.LogoutOptions{})
 	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: fu.NewSecretUI(),
@@ -268,9 +267,11 @@ func assertDeprovisionLoggedOut(tc libkb.TestContext) {
 	// Unlike the first test, this time we log out before we run the
 	// deprovision. We should be able to do a deprovision with revocation
 	// disabled.
-	tc.G.Logout(context.TODO())
+	if err := m.LogoutKillSecrets(); err != nil {
+		tc.T.Fatal(err)
+	}
 
-	e := NewDeprovisionEngine(tc.G, fu.Username, false /* doRevoke */)
+	e := NewDeprovisionEngine(tc.G, fu.Username, false /* doRevoke */, libkb.LogoutOptions{})
 	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: fu.NewSecretUI(),
@@ -372,7 +373,7 @@ func assertCurrentDeviceRevoked(tc libkb.TestContext) {
 		tc.T.Fatal(err)
 	}
 
-	e := NewDeprovisionEngine(tc.G, fu.Username, true /* doRevoke */)
+	e := NewDeprovisionEngine(tc.G, fu.Username, true /* doRevoke */, libkb.LogoutOptions{})
 	uis = libkb.UIs{
 		LogUI:    tc.G.UI.GetLogUI(),
 		SecretUI: fu.NewSecretUI(),

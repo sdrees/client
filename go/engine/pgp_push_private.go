@@ -145,8 +145,26 @@ func (e *PGPPushPrivate) remove(m libkb.MetaContext, fs *keybase1.SimpleFSClient
 	return err
 }
 
+func (e *PGPPushPrivate) linkExists(m libkb.MetaContext, fs *keybase1.SimpleFSClient, file string) (exists bool, err error) {
+	defer m.Trace(fmt.Sprintf("linkExists(%q)", file), func() error { return err })()
+
+	var dirent keybase1.Dirent
+	dirent, err = fs.SimpleFSStat(m.Ctx(), keybase1.SimpleFSStatArg{
+		Path:                keybase1.NewPathWithKbfsPath(file),
+		RefreshSubscription: false,
+	})
+	if err != nil {
+		m.Debug("error accessing %s; assuming that the file doesn't exist (%s)", file, err.Error())
+		return false, nil
+	}
+	if dirent.DirentType != keybase1.DirentType_SYM {
+		return false, fmt.Errorf("Cannot rewrite %s since it's not a symlink", file)
+	}
+	return true, nil
+}
+
 func (e *PGPPushPrivate) push(m libkb.MetaContext, fp libkb.PGPFingerprint, tty string, fs *keybase1.SimpleFSClient) error {
-	armored, err := m.G().GetGpgClient().ImportKeyArmored(true /* secret */, fp, tty)
+	armored, err := m.G().GetGpgClient().ImportKeyArmored(m, true /* secret */, fp, tty)
 	if err != nil {
 		return err
 	}
@@ -163,7 +181,7 @@ func (e *PGPPushPrivate) push(m libkb.MetaContext, fp libkb.PGPFingerprint, tty 
 	if err != nil {
 		return err
 	}
-	path = path + "/pgp"
+	path += "/pgp"
 	err = e.mkdir(m, fs, path)
 	if err != nil {
 		return err
@@ -179,7 +197,18 @@ func (e *PGPPushPrivate) push(m libkb.MetaContext, fp libkb.PGPFingerprint, tty 
 		return err
 	}
 
-	e.remove(m, fs, linkpath)
+	linkExists, err := e.linkExists(m, fs, linkpath)
+	if err != nil {
+		return err
+	}
+
+	// Note the small chance of a race here, but it doesn't seem dangerous.
+	if linkExists {
+		err = e.remove(m, fs, linkpath)
+		if err != nil {
+			return err
+		}
+	}
 
 	err = e.link(m, fs, filename, linkpath)
 	return err

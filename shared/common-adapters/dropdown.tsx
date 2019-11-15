@@ -136,7 +136,7 @@ export const InlineDropdown = (props: InlineDropdownProps) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   inlineDropdown: {
     paddingRight: Styles.globalMargins.tiny,
   },
@@ -192,9 +192,9 @@ const styles = Styles.styleSheetCreate({
     isElectron: {minHeight: 32},
     isMobile: {minHeight: 48},
   }),
-})
+}))
 
-const ItemBox = Styles.styled(Box)({
+const ItemBox = Styles.styled(Box)(() => ({
   ...Styles.globalStyles.flexBoxRow,
   ...(Styles.isMobile
     ? {}
@@ -208,7 +208,7 @@ const ItemBox = Styles.styled(Box)({
   borderStyle: 'solid',
   minHeight: Styles.isMobile ? 40 : 32,
   width: '100%',
-})
+}))
 
 // @ts-ignore styled can have more than one argument
 const ButtonBox = Styles.styled(Box, {shouldForwardProp: prop => prop !== 'inline'})(props => ({

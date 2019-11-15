@@ -1,8 +1,11 @@
 import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
+import * as Types from '../../constants/types/devices'
+import DeviceIcon from '../device-icon'
 
 export type Props = {
+  device: Types.Device
   firstItem: boolean
   isCurrentDevice: boolean
   isNew: boolean
@@ -12,17 +15,6 @@ export type Props = {
   type: 'desktop' | 'backup' | 'mobile'
 }
 
-const typeToIcon = (type: Props['type'], isCurrentDevice: boolean) => {
-  switch (type) {
-    case 'backup':
-      return 'icon-paper-key-32'
-    case 'desktop':
-      return isCurrentDevice ? 'icon-computer-success-32' : 'icon-computer-32'
-    case 'mobile':
-      return isCurrentDevice ? 'icon-phone-success-32' : 'icon-phone-32'
-  }
-}
-
 const DeviceRow = (props: Props) => {
   return (
     <Kb.ListItem2
@@ -30,8 +22,10 @@ const DeviceRow = (props: Props) => {
       firstItem={props.firstItem}
       onClick={props.showExistingDevicePage}
       icon={
-        <Kb.Icon
-          type={typeToIcon(props.type, props.isCurrentDevice)}
+        <DeviceIcon
+          current={props.device.currentDevice}
+          device={props.device}
+          size={32}
           style={Kb.iconCastPlatformStyles(props.isRevoked ? styles.icon : null)}
         />
       }
@@ -49,15 +43,18 @@ const DeviceRow = (props: Props) => {
     />
   )
 }
-const styles = Styles.styleSheetCreate({
-  icon: {opacity: 0.3},
-  meta: {alignSelf: 'flex-start'},
-  text: {
-    color: Styles.globalColors.black_20,
-    flex: 0,
-    textDecorationLine: 'line-through' as const,
-    textDecorationStyle: 'solid' as const,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      icon: {opacity: 0.3},
+      meta: {alignSelf: 'flex-start'},
+      text: {
+        color: Styles.globalColors.black_20,
+        flex: 0,
+        textDecorationLine: 'line-through' as const,
+        textDecorationStyle: 'solid' as const,
+      },
+    } as const)
+)
 
 export default DeviceRow

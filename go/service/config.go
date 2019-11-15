@@ -6,6 +6,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,7 +42,7 @@ func NewConfigHandler(xp rpc.Transporter, i libkb.ConnectionID, g *libkb.GlobalC
 }
 
 func (h ConfigHandler) GetCurrentStatus(ctx context.Context, sessionID int) (res keybase1.CurrentStatus, err error) {
-	mctx := libkb.NewMetaContext(ctx, h.G())
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("CFG")
 	return status.GetCurrentStatus(mctx)
 }
 
@@ -85,7 +86,7 @@ func (h ConfigHandler) getValue(_ context.Context, path string, reader libkb.JSO
 }
 
 func (h ConfigHandler) GuiSetValue(ctx context.Context, arg keybase1.GuiSetValueArg) (err error) {
-	return h.setValue(ctx, keybase1.SetValueArg{Path: arg.Path, Value: arg.Value}, h.G().Env.GetGUIConfig())
+	return h.setValue(ctx, keybase1.SetValueArg(arg), h.G().Env.GetGUIConfig())
 }
 
 func (h ConfigHandler) SetValue(ctx context.Context, arg keybase1.SetValueArg) (err error) {
@@ -104,6 +105,8 @@ func (h ConfigHandler) setValue(_ context.Context, arg keybase1.SetValueArg, w l
 		err = w.SetStringAtPath(arg.Path, *arg.Value.S)
 	case arg.Value.I != nil:
 		err = w.SetIntAtPath(arg.Path, *arg.Value.I)
+	case arg.Value.F != nil:
+		err = w.SetFloatAtPath(arg.Path, *arg.Value.F)
 	case arg.Value.B != nil:
 		err = w.SetBoolAtPath(arg.Path, *arg.Value.B)
 	case arg.Value.O != nil:
@@ -116,7 +119,10 @@ func (h ConfigHandler) setValue(_ context.Context, arg keybase1.SetValueArg, w l
 		err = fmt.Errorf("Bad type for setting a value")
 	}
 	if err == nil {
-		h.G().ConfigReload()
+		reloadErr := h.G().ConfigReload()
+		if reloadErr != nil {
+			h.G().Log.Debug("setValue: error reloading: %+v", reloadErr)
+		}
 	}
 	return err
 }
@@ -131,18 +137,17 @@ func (h ConfigHandler) ClearValue(ctx context.Context, path string) error {
 
 func (h ConfigHandler) clearValue(_ context.Context, path string, w libkb.JSONWriter) error {
 	w.DeleteAtPath(path)
-	h.G().ConfigReload()
-	return nil
+	return h.G().ConfigReload()
 }
 
 func (h ConfigHandler) GetClientStatus(ctx context.Context, sessionID int) (res []keybase1.ClientStatus, err error) {
-	mctx := libkb.NewMetaContext(ctx, h.G())
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("CFG")
 	defer mctx.TraceTimed("GetClientStatus", func() error { return err })()
 	return libkb.GetClientStatus(mctx), nil
 }
 
 func (h ConfigHandler) GetConfig(ctx context.Context, sessionID int) (res keybase1.Config, err error) {
-	mctx := libkb.NewMetaContext(ctx, h.G())
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("CFG")
 	defer mctx.TraceTimed("GetConfig", func() error { return err })()
 	forkType := keybase1.ForkType_NONE
 	if h.svc != nil {
@@ -152,13 +157,13 @@ func (h ConfigHandler) GetConfig(ctx context.Context, sessionID int) (res keybas
 }
 
 func (h ConfigHandler) GetFullStatus(ctx context.Context, sessionID int) (res *keybase1.FullStatus, err error) {
-	mctx := libkb.NewMetaContext(ctx, h.G())
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("CFG")
 	defer mctx.TraceTimed("GetFullStatus", func() error { return err })()
 	return status.GetFullStatus(mctx)
 }
 
 func (h ConfigHandler) LogSend(ctx context.Context, arg keybase1.LogSendArg) (res keybase1.LogSendID, err error) {
-	mctx := libkb.NewMetaContext(ctx, h.G())
+	mctx := libkb.NewMetaContext(ctx, h.G()).WithLogTag("CFG")
 	defer mctx.TraceTimed("LogSend", func() error { return err })()
 
 	fstatus, err := status.GetFullStatus(mctx)
@@ -178,7 +183,7 @@ func (h ConfigHandler) LogSend(ctx context.Context, arg keybase1.LogSendArg) (re
 }
 
 func (h ConfigHandler) GetAllProvisionedUsernames(ctx context.Context, sessionID int) (res keybase1.AllProvisionedUsernames, err error) {
-	defaultUsername, all, err := libkb.GetAllProvisionedUsernames(libkb.NewMetaContext(ctx, h.G()))
+	defaultUsername, all, err := libkb.GetAllProvisionedUsernames(libkb.NewMetaContext(ctx, h.G()).WithLogTag("CFG"))
 	if err != nil {
 		return res, err
 	}
@@ -330,16 +335,24 @@ func (h ConfigHandler) GetBootstrapStatus(ctx context.Context, sessionID int) (k
 
 func (h ConfigHandler) RequestFollowerInfo(ctx context.Context, uid keybase1.UID) error {
 	// Queue up a load for follower info
-	h.svc.trackerLoader.Queue(ctx, uid)
-	return nil
+	return h.svc.trackerLoader.Queue(ctx, uid)
 }
 
 func (h ConfigHandler) GetRememberPassphrase(ctx context.Context, sessionID int) (bool, error) {
-	return h.G().Env.RememberPassphrase(), nil
+	username := h.G().Env.GetUsername()
+	if username.IsNil() {
+		h.G().Log.CDebugf(ctx, "GetRememberPassphrase: got nil username; using legacy remember_passphrase setting")
+	}
+	return h.G().Env.GetRememberPassphrase(username), nil
 }
 
 func (h ConfigHandler) SetRememberPassphrase(ctx context.Context, arg keybase1.SetRememberPassphraseArg) error {
 	m := libkb.NewMetaContext(ctx, h.G())
+
+	username := m.G().Env.GetUsername()
+	if username.IsNil() {
+		m.Debug("SetRememberPassphrase: got nil username; using legacy remember_passphrase setting")
+	}
 	remember, err := h.GetRememberPassphrase(ctx, arg.SessionID)
 	if err != nil {
 		return err
@@ -351,18 +364,20 @@ func (h ConfigHandler) SetRememberPassphrase(ctx context.Context, arg keybase1.S
 
 	// set the config variable
 	w := h.G().Env.GetConfigWriter()
-	if err := w.SetRememberPassphrase(arg.Remember); err != nil {
+	if err := w.SetRememberPassphrase(username, arg.Remember); err != nil {
 		return err
 	}
-	h.G().ConfigReload()
+	err = h.G().ConfigReload()
+	if err != nil {
+		return err
+	}
 
-	// replace the secret store
 	if err := h.G().ReplaceSecretStore(ctx); err != nil {
 		m.Debug("error replacing secret store for SetRememberPassphrase(%v): %s", arg.Remember, err)
 		return err
 	}
 
-	m.Debug("SetRememberPassphrase(%v) success", arg.Remember)
+	m.Debug("SetRememberPassphrase(%s, %v) success", username.String(), arg.Remember)
 
 	return nil
 }
@@ -453,12 +468,21 @@ func (h ConfigHandler) SetProxyData(ctx context.Context, arg keybase1.ProxyData)
 		return fmt.Errorf("failed to convert proxy type into a string")
 	}
 
-	configWriter.SetStringAtPath("proxy", arg.AddressWithPort)
-	configWriter.SetBoolAtPath("disable-cert-pinning", !arg.CertPinning)
-	configWriter.SetStringAtPath("proxy-type", proxyTypeStr)
+	err := configWriter.SetStringAtPath("proxy", arg.AddressWithPort)
+	if err != nil {
+		return err
+	}
+	err = configWriter.SetBoolAtPath("disable-cert-pinning", !arg.CertPinning)
+	if err != nil {
+		return err
+	}
+	err = configWriter.SetStringAtPath("proxy-type", proxyTypeStr)
+	if err != nil {
+		return err
+	}
 
 	// Reload the config file in order to actually start using the proxy
-	err := h.G().ConfigReload()
+	err = h.G().ConfigReload()
 	if err != nil {
 		return err
 	}
@@ -469,7 +493,10 @@ func (h ConfigHandler) SetProxyData(ctx context.Context, arg keybase1.ProxyData)
 func (h ConfigHandler) ToggleRuntimeStats(ctx context.Context) error {
 	configWriter := h.G().Env.GetConfigWriter()
 	curValue := h.G().Env.GetRuntimeStatsEnabled()
-	configWriter.SetBoolAtPath("runtime_stats_enabled", !curValue)
+	err := configWriter.SetBoolAtPath("runtime_stats_enabled", !curValue)
+	if err != nil {
+		return err
+	}
 	if err := h.G().ConfigReload(); err != nil {
 		return err
 	}
@@ -479,4 +506,25 @@ func (h ConfigHandler) ToggleRuntimeStats(ctx context.Context) error {
 		h.svc.runtimeStats.Start(ctx)
 	}
 	return nil
+}
+
+func (h ConfigHandler) AppendGUILogs(ctx context.Context, content string) error {
+	wr := h.G().GetGUILogWriter()
+	if wr == nil {
+		return nil
+	}
+	_, err := io.WriteString(wr, content)
+	return err
+}
+
+func (h ConfigHandler) GenerateWebAuthToken(ctx context.Context) (ret string, err error) {
+	nist, err := h.G().ActiveDevice.NISTWebAuthToken(ctx)
+	if err != nil {
+		return ret, err
+	}
+	if nist == nil {
+		return ret, fmt.Errorf("cannot generate a token when you are logged off")
+	}
+	uri := libkb.SiteURILookup[h.G().Env.GetRunMode()] + "/_/login/nist?tok=" + nist.Token().String()
+	return uri, nil
 }

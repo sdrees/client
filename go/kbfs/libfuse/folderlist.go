@@ -280,6 +280,22 @@ func (fl *FolderList) Remove(ctx context.Context, req *fuse.RemoveRequest) (err 
 	}
 }
 
+var _ fs.NodeSymlinker = (*FolderList)(nil)
+
+// Symlink implements the fs.NodeSymlinker interface for FolderList.
+func (fl *FolderList) Symlink(
+	_ context.Context, _ *fuse.SymlinkRequest) (fs.Node, error) {
+	return nil, fuse.ENOTSUP
+}
+
+var _ fs.NodeLinker = (*FolderList)(nil)
+
+// Link implements the fs.NodeLinker interface for FolderList.
+func (fl *FolderList) Link(
+	_ context.Context, _ *fuse.LinkRequest, _ fs.Node) (fs.Node, error) {
+	return nil, fuse.ENOTSUP
+}
+
 func (fl *FolderList) updateTlfName(ctx context.Context, oldName string,
 	newName string) {
 	ok := func() bool {
@@ -328,4 +344,18 @@ func (fl *FolderList) userChanged(ctx context.Context, _, newUser kbname.Normali
 	if newUser != kbname.NormalizedUsername("") {
 		fl.fs.config.KBFSOps().ForceFastForward(ctx)
 	}
+}
+
+func (fl *FolderList) openFileCount() (ret int64) {
+	fl.mu.Lock()
+	defer fl.mu.Unlock()
+	for _, tlf := range fl.folders {
+		ret += tlf.openFileCount()
+	}
+	return ret + int64(len(fl.folders))
+}
+
+// Forget kernel reference to this node.
+func (fl *FolderList) Forget() {
+	fl.fs.root.forgetFolderList(fl.tlfType)
 }

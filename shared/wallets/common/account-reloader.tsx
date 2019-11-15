@@ -29,7 +29,10 @@ const AccountReloader = (props: Props) => (
 const mapStateToProps = () => ({})
 
 const mapDispatchToProps = dispatch => ({
-  onReload: () => dispatch(WalletsGen.createLoadAccounts({reason: 'initial-load'})),
+  onReload: () => {
+    dispatch(WalletsGen.createLoadAccounts({reason: 'initial-load'}))
+    dispatch(WalletsGen.createUpdateAirdropDetails())
+  },
 })
 
 const mergeProps = (_, dispatchProps, ownProps: OwnProps) => ({
@@ -38,6 +41,9 @@ const mergeProps = (_, dispatchProps, ownProps: OwnProps) => ({
   onReload: dispatchProps.onReload,
 })
 
-export default namedConnect(mapStateToProps, mapDispatchToProps, mergeProps, 'AccountReloader')(
-  AccountReloader
-)
+export default namedConnect(
+  mapStateToProps,
+  mapDispatchToProps,
+  mergeProps,
+  'AccountReloader'
+)(AccountReloader)

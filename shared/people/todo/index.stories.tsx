@@ -1,7 +1,7 @@
 import * as React from 'react'
 import {storiesOf, action} from '../../stories/storybook'
-import {Task, TaskButton} from '.'
-import {Provider as SearchBarProvider} from '../../profile/search/index.stories'
+import {Task} from '.'
+import {TaskButton} from '../item'
 
 const defaultButtons = (label, dismissLabel?) => {
   const ret = [
@@ -43,7 +43,7 @@ const bioTaskProps = {
 
 const proofTaskProps = {
   badged: true,
-  buttons: defaultButtons('Prove your identities', 'Later'),
+  buttons: defaultButtons('Prove your identities', 'Skip'),
   icon: 'icon-onboarding-proofs-48',
   instructions:
     'Add some proofs to your profile. The more you have, the stronger your cryptographic identity.',
@@ -51,7 +51,7 @@ const proofTaskProps = {
 
 const installTaskProps = {
   badged: true,
-  buttons: defaultButtons('Get the download link', 'Later'),
+  buttons: defaultButtons('Get the download link', 'Skip'),
   icon: 'icon-onboarding-phone-48',
   instructions: 'Install Keybase on your phone. Until you have at least 2 devices, you risk losing data.',
 } as const
@@ -60,7 +60,7 @@ const followTaskProps = {
   badged: true,
   buttons: [
     {
-      label: 'Follow later',
+      label: 'Skip',
       mode: 'Secondary',
       onClick: action('onDismiss'),
     },
@@ -72,7 +72,7 @@ const followTaskProps = {
 
 const chatTaskProps = {
   badged: true,
-  buttons: defaultButtons('Start a chat', 'Later'),
+  buttons: defaultButtons('Start a chat', 'Skip'),
   icon: 'icon-onboarding-chat-48',
   instructions: 'Start a chat! All conversations on Keybase are end-to-end encrypted.',
 } as const
@@ -87,7 +87,7 @@ const paperKeyTaskProps = {
 
 const teamTaskProps = {
   badged: true,
-  buttons: defaultButtons('Create a team', 'Later'),
+  buttons: defaultButtons('Create a team', 'Skip'),
   icon: 'icon-onboarding-team-48',
   instructions:
     'Create a team! Keybase team chats are end-to-end encrypted - unlike Slack - and work for any kind of group, from casual friends to large communities.',
@@ -95,7 +95,7 @@ const teamTaskProps = {
 
 const folderTaskProps = {
   badged: true,
-  buttons: defaultButtons('Open a private folder', 'Later'),
+  buttons: defaultButtons('Open a private folder', 'Skip'),
   icon: 'icon-onboarding-folder-48',
   instructions:
     'Open an encrypted private folder with someone! They’ll only get notified once you drop files in it.',
@@ -113,7 +113,7 @@ const gitTaskProps = {
       onClick: action('onTeamRepo'),
     },
     {
-      label: 'Later',
+      label: 'Skip',
       mode: 'Secondary',
       onClick: action('onDismiss'),
     },
@@ -125,7 +125,7 @@ const gitTaskProps = {
 
 const publicityTaskProps = {
   badged: true,
-  buttons: defaultButtons('Set publicity settings', 'Later'),
+  buttons: defaultButtons('Set publicity settings', 'Skip'),
   icon: 'icon-onboarding-team-publicity-48',
   instructions: `Tip: Keybase team chats are private, but you can choose to publish that you're an admin. Check out “Publicity settings" on any team you manage.`,
 } as const
@@ -187,14 +187,12 @@ const legacyEmailVisibilityProps = {
 
 const load = () => {
   storiesOf('People/Todos', module)
-    .addDecorator(SearchBarProvider)
     .add('Edit team avatar', () => <Task {...avatarTeamTaskProps} />)
     .add('Edit avatar', () => <Task {...avatarUserTaskProps} />)
     .add('Fill out bio', () => <Task {...bioTaskProps} />)
     .add('Prove something', () => <Task {...proofTaskProps} />)
     .add('Install on phone', () => <Task {...installTaskProps} />)
-    .add('Follow someone', () => <Task {...followTaskProps} />)
-    .add('Follow someone with search', () => <Task {...followTaskProps} showSearchBar={true} />)
+    .add('Follow people', () => <Task {...followTaskProps} />)
     .add('Chat', () => <Task {...chatTaskProps} />)
     .add('Make a paper key', () => <Task {...paperKeyTaskProps} />)
     .add('Make a team', () => <Task {...teamTaskProps} />)

@@ -66,13 +66,14 @@ const createPropProvider = (...maps: SelectorMap[]) => {
         // @ts-ignore
         createStore(state => state, merged)
       }
+      // @ts-ignore
       merged={merged}
     >
       <GatewayProvider>
-        <React.Fragment>
+        <>
           <StorybookErrorBoundary children={story()} />
           <GatewayDest component={DestBox} name="popup-root" />
-        </React.Fragment>
+        </>
       </GatewayProvider>
     </Provider>
   )
@@ -90,13 +91,14 @@ export const MockStore = ({store, children}): any => (
   <Provider
     key={`storyprovider:${uniqueProviderKey++}`}
     store={createStore(state => state, {...store, ...PP.Common()}, applyMiddleware(actionLog))}
+    // @ts-ignore
     merged={store}
   >
     <GatewayProvider>
-      <React.Fragment>
+      <>
         <StorybookErrorBoundary children={children} />
         <GatewayDest component={DestBox} name="popup-root" />
-      </React.Fragment>
+      </>
     </GatewayProvider>
   </Provider>
 )

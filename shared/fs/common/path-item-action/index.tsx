@@ -3,6 +3,8 @@ import * as Types from '../../../constants/types/fs'
 import * as Constants from '../../../constants/fs'
 import * as Styles from '../../../styles'
 import * as Kb from '../../../common-adapters'
+import * as FsGen from '../../../actions/fs-gen'
+import * as Kbfs from '../../common'
 import ChooseView from './choose-view'
 
 type SizeType = any
@@ -29,17 +31,16 @@ export type Clickable = ClickableComponent | ClickableIcon
 
 export type Props = {
   clickable: Clickable
-  init: () => void
   mode: 'row' | 'screen'
-  onHidden: () => void
   path: Types.Path
+  initView: Types.PathItemActionMenuView
 }
 
 const IconClickable = props => (
-  <Kb.WithTooltip text="More actions">
+  <Kb.WithTooltip tooltip="More actions">
     <Kb.Icon
       type="iconfont-ellipsis"
-      color={props.actionIconWhite ? Styles.globalColors.white : Styles.globalColors.black_50}
+      color={props.actionIconWhite ? Styles.globalColors.whiteOrBlueDark : Styles.globalColors.black_50}
       hoverColor={props.actionIconWhite ? null : Styles.globalColors.black}
       padding="tiny"
       sizeType={props.sizeType || 'Default'}
@@ -54,23 +55,19 @@ const PathItemAction = Kb.OverlayParentHOC((props: Props & Kb.OverlayParentProps
     return null
   }
 
-  const hideMenuOnce = (() => {
-    let hideMenuCalled = false
-    return () => {
-      if (hideMenuCalled) {
-        return
-      }
-      hideMenuCalled = true
-      props.toggleShowingMenu()
-      props.onHidden()
-    }
-  })()
+  const dispatch = Kbfs.useDispatchWhenKbfsIsConnected()
+  const {setShowingMenu, initView} = props
+  const onClick = React.useCallback(() => {
+    dispatch(FsGen.createSetPathItemActionMenuView({view: initView}))
+    setShowingMenu(true)
+  }, [initView, dispatch, setShowingMenu])
+  const hide = React.useCallback(() => {
+    setShowingMenu(false)
+    dispatch(FsGen.createSetPathItemActionMenuDownload({downloadID: null, intent: null}))
+  }, [setShowingMenu, dispatch])
 
-  const onClick = () => {
-    props.init()
-    props.toggleShowingMenu()
-  }
-
+  // TODO: should probably React.memo this as it's on every row. Would need to
+  // do something about the `clickable` prop though, perhaps flattening it.
   return (
     <>
       {props.clickable.type === 'component' && (
@@ -91,7 +88,7 @@ const PathItemAction = Kb.OverlayParentHOC((props: Props & Kb.OverlayParentProps
           floatingMenuProps={{
             attachTo: props.getAttachmentRef,
             containerStyle: styles.floatingContainer,
-            hideOnce: hideMenuOnce,
+            hide,
             visible: props.showingMenu,
           }}
         />
@@ -100,20 +97,23 @@ const PathItemAction = Kb.OverlayParentHOC((props: Props & Kb.OverlayParentProps
   )
 })
 
-const styles = Styles.styleSheetCreate({
-  floatingContainer: Styles.platformStyles({
-    common: {
-      overflow: 'visible',
-    },
-    isElectron: {
-      marginTop: 12,
-      width: 220,
-    },
-    isMobile: {
-      marginTop: undefined,
-      width: '100%',
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      floatingContainer: Styles.platformStyles({
+        common: {
+          overflow: 'visible',
+        },
+        isElectron: {
+          marginTop: 12,
+          width: 280,
+        },
+        isMobile: {
+          marginTop: undefined,
+          width: '100%',
+        },
+      }),
+    } as const)
+)
 
 export default PathItemAction

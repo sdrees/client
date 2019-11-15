@@ -26,79 +26,81 @@ const UnmutedNotificationPrefs = (props: Props) => {
     ignoreMentionsSuffix = '(desktop)'
   }
   return (
-    <React.Fragment>
+    <>
       {!allNotifsEnabled && (
         <Kb.Checkbox
           checked={!props.channelWide}
           label=""
           labelComponent={
-            <Kb.Text type="Body">
-              Ignore <Kb.Text type="BodySemibold">@here</Kb.Text> and{' '}
-              <Kb.Text type="BodySemibold">@channel</Kb.Text> mentions {ignoreMentionsSuffix}
-            </Kb.Text>
+            <Kb.Box2 direction="vertical" style={{flex: 1}}>
+              <Kb.Text type="Body">
+                Ignore <Kb.Text type="BodySemibold">@here</Kb.Text> and{' '}
+                <Kb.Text type="BodySemibold">@channel</Kb.Text> mentions {ignoreMentionsSuffix}
+              </Kb.Text>
+            </Kb.Box2>
           }
           onCheck={props.toggleChannelWide}
         />
       )}
 
-      <Kb.Box style={Styles.isMobile ? styleHeaderMobile : styleHeader}>
+      <Kb.Box style={styles.header}>
         <Kb.Text type="BodySmallSemibold">Desktop notifications</Kb.Text>
       </Kb.Box>
 
-      <Kb.Box style={styleRadioButton}>
+      <Kb.Box style={styles.radioButton}>
         <Kb.RadioButton
           style={{marginTop: Styles.globalMargins.xtiny}}
           onSelect={() => props.updateDesktop('onAnyActivity')}
           selected={props.desktop === 'onAnyActivity'}
-          label={'On any activity'}
+          label="On any activity"
         />
       </Kb.Box>
-      <Kb.Box style={styleRadioButton}>
+      <Kb.Box style={styles.radioButton}>
         <Kb.RadioButton
           style={{marginTop: Styles.globalMargins.xtiny}}
           onSelect={() => props.updateDesktop('onWhenAtMentioned')}
           selected={props.desktop === 'onWhenAtMentioned'}
-          label={'Only when @mentioned'}
+          label="Only when @mentioned"
         />
       </Kb.Box>
-      <Kb.Box style={styleRadioButton}>
+      <Kb.Box style={styles.radioButton}>
         <Kb.RadioButton
           style={{marginTop: Styles.globalMargins.xtiny}}
           onSelect={() => props.updateDesktop('never')}
           selected={props.desktop === 'never'}
-          label={'Never'}
+          label="Never"
         />
       </Kb.Box>
 
-      <Kb.Box style={styleHeader}>
+      <Kb.Box style={styles.header}>
         <Kb.Text type="BodySmallSemibold">Mobile notifications</Kb.Text>
       </Kb.Box>
 
-      <Kb.Box style={styleRadioButton}>
+      <Kb.Box style={styles.radioButton}>
         <Kb.RadioButton
           style={{marginTop: Styles.globalMargins.xtiny}}
           onSelect={() => props.updateMobile('onAnyActivity')}
           selected={props.mobile === 'onAnyActivity'}
-          label={'On any activity'}
+          label="On any activity"
         />
       </Kb.Box>
-      <Kb.Box style={styleRadioButton}>
+      <Kb.Box style={styles.radioButton}>
         <Kb.RadioButton
           style={{marginTop: Styles.globalMargins.xtiny}}
           onSelect={() => props.updateMobile('onWhenAtMentioned')}
           selected={props.mobile === 'onWhenAtMentioned'}
-          label={'Only when @mentioned'}
+          label="Only when @mentioned"
         />
       </Kb.Box>
-      <Kb.Box style={styleRadioButton}>
+      <Kb.Box style={styles.radioButton}>
         <Kb.RadioButton
           style={{marginTop: Styles.globalMargins.xtiny}}
           onSelect={() => props.updateMobile('never')}
           selected={props.mobile === 'never'}
-          label={'Never'}
+          label="Never"
         />
       </Kb.Box>
-    </React.Fragment>
+    </>
   )
 }
 
@@ -131,18 +133,22 @@ export const Notifications = (props: Props) => (
   </Kb.Box>
 )
 
-const styleHeader = {
-  ...Styles.globalStyles.flexBoxRow,
-  paddingTop: Styles.globalMargins.small,
-}
-
-const styleHeaderMobile = {
-  ...styleHeader,
-  paddingBottom: Styles.globalMargins.tiny,
-  paddingTop: Styles.globalMargins.medium,
-}
-
-const styleRadioButton = {
-  ...Styles.globalStyles.flexBoxRow,
-  marginLeft: Styles.globalMargins.tiny,
-}
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      header: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.flexBoxRow,
+          paddingTop: Styles.globalMargins.small,
+        },
+        isMobile: {
+          paddingBottom: Styles.globalMargins.tiny,
+          paddingTop: Styles.globalMargins.medium,
+        },
+      }),
+      radioButton: {
+        ...Styles.globalStyles.flexBoxRow,
+        marginLeft: Styles.globalMargins.tiny,
+      },
+    } as const)
+)

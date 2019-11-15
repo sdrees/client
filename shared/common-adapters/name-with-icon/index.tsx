@@ -11,6 +11,7 @@ type Size = 'smaller' | 'small' | 'default' | 'big' | 'huge'
 
 // Exposed style props for the top-level container and box around metadata arbitrarily
 export type NameWithIconProps = {
+  avatarImageOverride?: string
   avatarSize?: AvatarSize
   avatarStyle?: Styles.StylesCrossPlatform
   colorBroken?: boolean
@@ -40,6 +41,7 @@ export type NameWithIconProps = {
   titleStyle?: StylesTextCrossPlatform
   underline?: boolean
   username?: string
+  withProfileCardPopup?: boolean
 }
 
 // If lineclamping isn't working, try adding a static width in containerStyle
@@ -64,6 +66,7 @@ class NameWithIcon extends React.Component<NameWithIconProps> {
     if (isAvatar) {
       avatarOrIcon = (
         <Avatar
+          imageOverrideUrl={this.props.avatarImageOverride}
           editable={this.props.editableIcon}
           onEditAvatarClick={this.props.editableIcon ? this.props.onEditIcon : undefined}
           size={
@@ -114,9 +117,10 @@ class NameWithIcon extends React.Component<NameWithIconProps> {
         usernames={[username]}
         colorBroken={this.props.colorBroken}
         colorFollowing={this.props.colorFollowing}
-        colorYou={this.props.notFollowingColorOverride}
+        colorYou={this.props.notFollowingColorOverride || true}
         notFollowingColorOverride={this.props.notFollowingColorOverride}
         style={this.props.size === 'smaller' ? {} : styles.fullWidthText}
+        withProfileCardPopup={this.props.withProfileCardPopup}
       />
     )
 
@@ -141,10 +145,10 @@ class NameWithIcon extends React.Component<NameWithIconProps> {
         {metaTwo}
       </Box>
     ) : (
-      <React.Fragment>
+      <>
         {metaOne}
         {metaTwo}
-      </React.Fragment>
+      </>
     )
 
     return (
@@ -197,7 +201,7 @@ const TextOrComponent = (props: {
   return props.val
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   fullWidthText: Styles.platformStyles({
     isElectron: {display: 'unset', whiteSpace: 'nowrap', width: '100%', wordBreak: 'break-all'},
   }),
@@ -242,7 +246,7 @@ const styles = Styles.styleSheetCreate({
       textAlign: 'center',
     },
   }),
-})
+}))
 
 // Get props to pass to subcomponents (Text, Avatar, etc.)
 const getAdapterProps = (

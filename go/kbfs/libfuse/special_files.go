@@ -69,6 +69,9 @@ func handleNonTLFSpecialFile(
 
 	case libfs.EditHistoryName:
 		return NewUserEditHistoryFile(&Folder{fs: fs}, entryValid)
+
+	case libfs.OpenFileCountFileName:
+		return NewOpenFileCountFile(&Folder{fs: fs}, entryValid)
 	}
 
 	return nil
@@ -83,9 +86,6 @@ func handleTLFSpecialFile(
 	}
 
 	switch name {
-	case libfs.UpdateHistoryFileName:
-		return NewUpdateHistoryFile(folder, entryValid)
-
 	case libfs.EditHistoryName:
 		return NewTlfEditHistoryFile(folder, entryValid)
 

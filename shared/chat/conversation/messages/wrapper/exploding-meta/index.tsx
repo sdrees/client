@@ -13,6 +13,7 @@ const oneDayInMs = oneHourInMs * 24
 export type _Props = {
   exploded: boolean
   explodesAt: number
+  isParentHighlighted: boolean
   messageKey: string
   onClick?: () => void
   pending: boolean
@@ -121,26 +122,52 @@ class ExplodingMeta extends React.Component<Props, State> {
                 </Kb.Box2>
               ) : (
                 <Kb.Box2
+                  className="explodingTimeContainer"
                   direction="horizontal"
                   style={Styles.collapseStyles([
                     styles.countdownContainer,
                     {
                       backgroundColor,
                     },
+                    this.props.isParentHighlighted && styles.countdownContainerHighlighted,
                   ])}
                 >
-                  <Kb.Text type="Body" style={styles.countdown}>
+                  <Kb.Text
+                    className="explodingTimeText"
+                    type="Body"
+                    style={Styles.collapseStyles([
+                      styles.countdown,
+                      this.props.isParentHighlighted && styles.countdownHighlighted,
+                    ])}
+                  >
                     {formatDurationShort(this.props.explodesAt - Date.now())}
                   </Kb.Text>
                 </Kb.Box2>
               )}
-              <Kb.Icon type="iconfont-timer" fontSize={stopWatchIconSize} color={Styles.globalColors.black} />
+              <Kb.Icon
+                className="explodingTimeIcon"
+                type="iconfont-timer"
+                fontSize={stopWatchIconSize}
+                color={
+                  this.props.isParentHighlighted
+                    ? Styles.globalColors.blackOrBlack
+                    : Styles.globalColors.black
+                }
+              />
             </Kb.Box2>
           )
         }
         break
       case 'boom':
-        children = <Kb.Icon type="iconfont-boom" color={Styles.globalColors.black} />
+        children = (
+          <Kb.Icon
+            className="explodingTimeIcon"
+            type="iconfont-boom"
+            color={
+              this.props.isParentHighlighted ? Styles.globalColors.blackOrBlack : Styles.globalColors.black
+            }
+          />
+        )
     }
 
     if (this.props.pending) {
@@ -202,48 +229,57 @@ export const getLoopInterval = (diff: number) => {
   return deltaMS + halfNearestUnit
 }
 
-const styles = Styles.styleSheetCreate({
-  container: Styles.platformStyles({
-    common: {
-      ...Styles.globalStyles.flexBoxRow,
-      marginLeft: Styles.globalMargins.tiny,
-      position: 'relative',
-    },
-    isMobile: {height: 21},
-  }),
-  countdown: Styles.platformStyles({
-    common: {color: Styles.globalColors.white, fontWeight: 'bold'},
-    isElectron: {fontSize: 10, lineHeight: 14},
-    isMobile: {fontSize: 11, lineHeight: 16},
-  }),
-  countdownContainer: Styles.platformStyles({
-    common: {
-      alignItems: 'center',
-      borderRadius: 2,
-      justifyContent: 'center',
-      paddingLeft: 2,
-      paddingRight: 2,
-    },
-    isElectron: {
-      height: 14,
-      width: 28,
-    },
-    isMobile: {
-      height: 16,
-      width: 30,
-    },
-  }),
-  progressContainer: Styles.platformStyles({
-    common: {
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    isElectron: {width: 28},
-    isMobile: {
-      height: 15,
-      width: 32,
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.flexBoxRow,
+          marginLeft: Styles.globalMargins.tiny,
+          position: 'relative',
+        },
+        isMobile: {height: 21},
+      }),
+      countdown: Styles.platformStyles({
+        common: {color: Styles.globalColors.white, fontWeight: 'bold'},
+        isElectron: {fontSize: 10, lineHeight: 14},
+        isMobile: {fontSize: 11, lineHeight: 16},
+      }),
+      countdownContainer: Styles.platformStyles({
+        common: {
+          alignItems: 'center',
+          borderRadius: 2,
+          justifyContent: 'center',
+          paddingLeft: 2,
+          paddingRight: 2,
+        },
+        isElectron: {
+          height: 14,
+          width: 28,
+        },
+        isMobile: {
+          height: 16,
+          width: 30,
+        },
+      }),
+      countdownContainerHighlighted: {
+        backgroundColor: Styles.globalColors.blackOrBlack,
+      },
+      countdownHighlighted: {
+        color: Styles.globalColors.whiteOrWhite,
+      },
+      progressContainer: Styles.platformStyles({
+        common: {
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+        isElectron: {width: 28},
+        isMobile: {
+          height: 15,
+          width: 32,
+        },
+      }),
+    } as const)
+)
 
 export default Kb.HOCTimers(ExplodingMeta)

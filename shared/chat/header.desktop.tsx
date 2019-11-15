@@ -26,9 +26,10 @@ type Props = {
   showActions: boolean
   unMuteConversation: () => void
   username: string
+  fullName?: string
 }
 
-const descStyle = {fontSize: 13, lineHeight: '17px' as any, wordBreak: 'break-all'} as const
+const descStyle = {fontSize: 13, lineHeight: '16px', wordBreak: 'break-all'} as const // approximates BodySmall since markdown does not support text type
 const descStyleOverride = {
   del: descStyle,
   em: descStyle,
@@ -40,7 +41,7 @@ const descStyleOverride = {
   paragraph: descStyle,
   preview: descStyle,
   strong: descStyle,
-}
+} as any
 
 const Header = (p: Props) => {
   let description = !!p.desc && (
@@ -63,7 +64,7 @@ const Header = (p: Props) => {
   }
   if (p.isTeam && p.desc && p.canEditDesc) {
     description = (
-      <Kb.WithTooltip position="bottom left" text="Set the description using the /headline command.">
+      <Kb.WithTooltip position="bottom left" tooltip="Set the description using the /headline command.">
         {description}
       </Kb.WithTooltip>
     )
@@ -73,6 +74,24 @@ const Header = (p: Props) => {
     p.participants && p.participants.length > 1
       ? p.participants.filter(part => part !== p.username)
       : p.participants
+
+  // if there is no description (and is not a 1-on-1), don't render the description box
+  const renderDescription = description || (p.fullName && withoutSelf && withoutSelf.length === 1)
+
+  // trim() call makes sure that string is not just whitespace
+  if (withoutSelf && withoutSelf.length === 1 && p.desc.trim()) {
+    description = (
+      <Kb.Markdown
+        smallStandaloneEmoji={true}
+        style={{...styles.desc, flex: 1}}
+        styleOverride={descStyleOverride}
+        lineClamp={1}
+        selectable={true}
+      >
+        {p.desc}
+      </Kb.Markdown>
+    )
+  }
   return (
     <Kb.Box2 direction="horizontal" style={styles.container} fullWidth={true}>
       <Kb.Box2 direction="vertical" style={styles.left}>
@@ -85,11 +104,18 @@ const Header = (p: Props) => {
         alignItems="flex-end"
         alignSelf="flex-end"
       >
-        <Kb.Box2 direction="vertical" style={styles.headerTitle}>
+        <Kb.Box2
+          direction="vertical"
+          style={renderDescription ? styles.headerTitle : styles.headerTitleNoDesc}
+        >
           <Kb.Box2 direction="horizontal" fullWidth={true}>
             {p.channel ? (
               <Kb.Text selectable={true} type="Header" lineClamp={1}>
                 {p.channel}
+              </Kb.Text>
+            ) : p.fullName ? (
+              <Kb.Text type="Header" lineClamp={1}>
+                {p.fullName}
               </Kb.Text>
             ) : withoutSelf ? (
               <Kb.Box2 direction="horizontal" style={Styles.globalStyles.flexOne}>
@@ -121,7 +147,29 @@ const Header = (p: Props) => {
               />
             )}
           </Kb.Box2>
-          {description}
+          {renderDescription && (
+            <Kb.Box2 direction="vertical" style={styles.descriptionContainer} fullWidth={true}>
+              {p.fullName && withoutSelf && withoutSelf.length === 1 ? (
+                <Kb.Box2 direction="horizontal" fullWidth={true} alignItems="center">
+                  <Kb.ConnectedUsernames
+                    colorFollowing={true}
+                    underline={true}
+                    inline={true}
+                    commaColor={Styles.globalColors.black_50}
+                    type="BodySmallSemibold"
+                    usernames={[withoutSelf[0]]}
+                    onUsernameClicked="profile"
+                  />
+                  <Kb.Text type="BodySmall" style={styles.desc}>
+                    &nbsp;•&nbsp;
+                  </Kb.Text>
+                  {description}
+                </Kb.Box2>
+              ) : (
+                description
+              )}
+            </Kb.Box2>
+          )}
         </Kb.Box2>
         {p.showActions && (
           <Kb.Box2
@@ -131,16 +179,16 @@ const Header = (p: Props) => {
             alignSelf="flex-end"
             style={styles.actionIcons}
           >
-            <Kb.WithTooltip text={`Search in this chat (${Platforms.shortcutSymbol}F)`}>
+            <Kb.WithTooltip tooltip={`Search in this chat (${Platforms.shortcutSymbol}F)`}>
               <Kb.Icon style={styles.clickable} type="iconfont-search" onClick={p.onToggleThreadSearch} />
             </Kb.WithTooltip>
-            <Kb.WithTooltip text="Open folder">
+            <Kb.WithTooltip tooltip="Open folder">
               <Kb.Icon style={styles.clickable} type="iconfont-folder-private" onClick={p.onOpenFolder} />
             </Kb.WithTooltip>
-            <Kb.WithTooltip text="Chat info & settings">
+            <Kb.WithTooltip tooltip="Chat info & settings">
               <Kb.Icon
                 style={styles.clickable}
-                type={'iconfont-info'}
+                type="iconfont-info"
                 onClick={p.onToggleInfoPanel}
                 color={p.infoPanelOpen ? Styles.globalColors.blue : undefined}
               />
@@ -152,46 +200,67 @@ const Header = (p: Props) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  actionIcons: {
-    paddingBottom: Styles.globalMargins.tiny,
-  },
-  clickable: Styles.platformStyles({isElectron: Styles.desktopStyles.windowDraggingClickable}),
-  container: {
-    flexGrow: 1,
-    height: 40 - 1,
-  },
-  desc: {
-    ...Styles.platformStyles({isElectron: Styles.desktopStyles.windowDraggingClickable}),
-    color: Styles.globalColors.black_50,
-  },
-  headerTitle: Styles.platformStyles({
-    common: {flexGrow: 1, paddingBottom: Styles.globalMargins.xtiny},
-    isElectron: Styles.desktopStyles.windowDraggingClickable,
-  }),
-  left: {minWidth: 260},
-  right: {
-    flexGrow: 1,
-    paddingLeft: Styles.globalMargins.xsmall,
-    paddingRight: Styles.globalMargins.xsmall,
-  },
-  shhIconStyle: {
-    marginLeft: Styles.globalMargins.xtiny,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      actionIcons: {
+        paddingBottom: Styles.globalMargins.tiny,
+      },
+      clickable: Styles.platformStyles({isElectron: Styles.desktopStyles.windowDraggingClickable}),
+      container: {
+        flexGrow: 1,
+        height: 40 - 1,
+      },
+      desc: {
+        ...Styles.platformStyles({isElectron: Styles.desktopStyles.windowDraggingClickable}),
+        color: Styles.globalColors.black_50,
+      },
+      descriptionContainer: {
+        height: 17,
+        overflow: 'hidden',
+      },
+      headerTitle: Styles.platformStyles({
+        common: {flexGrow: 1, paddingBottom: Styles.globalMargins.xtiny},
+        isElectron: Styles.desktopStyles.windowDraggingClickable,
+      }),
+      headerTitleNoDesc: Styles.platformStyles({
+        common: {flexGrow: 1, paddingBottom: Styles.globalMargins.tiny},
+        isElectron: Styles.desktopStyles.windowDraggingClickable,
+      }),
+      left: {minWidth: 260},
+      right: {
+        flexGrow: 1,
+        paddingLeft: Styles.globalMargins.xsmall,
+        paddingRight: Styles.globalMargins.xsmall,
+      },
+      shhIconStyle: {
+        marginLeft: Styles.globalMargins.xtiny,
+      },
+    } as const)
+)
 
 const Connected = Container.connect(
   state => {
     const _conversationIDKey = Constants.getSelectedConversation(state)
-    const _fullnames = state.users.infoMap
+    const userInfo = state.users.infoMap
     const _meta = Constants.getMeta(state, _conversationIDKey)
+
+    const otherParticipants = Constants.getRowParticipants(_meta, state.config.username)
+    const first: string =
+      _meta.teamType === 'adhoc' && otherParticipants.length === 1 ? otherParticipants[0] : ''
+    const otherInfo = userInfo.get(first)
+    // If it's a one-on-one chat, use the user's fullname as the description
+    const desc =
+      (otherInfo && otherInfo.bio && otherInfo.bio.replace(/(\r\n|\n|\r)/gm, ' ')) ||
+      _meta.descriptionDecorated
+    const fullName = otherInfo && otherInfo.fullname
 
     return {
       _conversationIDKey,
-      _fullnames,
       _meta,
-      _username: state.config.username,
       canEditDesc: TeamConstants.getCanPerform(state, _meta.teamname).editChannelDescription,
+      desc,
+      fullName,
       infoPanelOpen: Constants.isInfoPanelOpen(),
       username: state.config.username,
     }
@@ -207,12 +276,7 @@ const Connected = Container.connect(
   }),
   (stateProps, dispatchProps, _: OwnProps) => {
     const meta = stateProps._meta
-    const otherParticipants = Constants.getRowParticipants(meta, stateProps._username || '').toArray()
-    // If it's a one-on-one chat, use the user's fullname as the description
-    const desc =
-      meta.teamType === 'adhoc' && otherParticipants.length === 1
-        ? stateProps._fullnames.get(otherParticipants[0], {fullname: ''}).fullname
-        : meta.descriptionDecorated
+
     return {
       canEditDesc: stateProps.canEditDesc,
       channel:
@@ -221,7 +285,8 @@ const Connected = Container.connect(
           : meta.teamType === 'small'
           ? meta.teamname
           : null,
-      desc,
+      desc: stateProps.desc,
+      fullName: stateProps.fullName,
       infoPanelOpen: stateProps.infoPanelOpen,
       isTeam: ['small', 'big'].includes(meta.teamType),
       muted: meta.isMuted,
@@ -229,7 +294,7 @@ const Connected = Container.connect(
       onOpenFolder: () => dispatchProps._onOpenFolder(stateProps._conversationIDKey),
       onToggleInfoPanel: dispatchProps.onToggleInfoPanel,
       onToggleThreadSearch: () => dispatchProps.onToggleThreadSearch(stateProps._conversationIDKey),
-      participants: meta.teamType === 'adhoc' ? meta.participants.toArray() : null,
+      participants: meta.teamType === 'adhoc' ? meta.nameParticipants : null,
       showActions: Constants.isValidConversationIDKey(stateProps._conversationIDKey),
       unMuteConversation: () => dispatchProps.onUnMuteConversation(stateProps._conversationIDKey),
       username: stateProps.username,

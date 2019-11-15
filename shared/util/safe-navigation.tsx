@@ -2,14 +2,15 @@ import * as React from 'react'
 import * as RouteTreeGen from '../actions/route-tree-gen'
 import {getActiveKey} from '../router-v2/util'
 import {NavigationInjectedProps, withNavigation} from '@react-navigation/core'
-import {hoistNonReactStatic} from '../util/container'
+import {hoistNonReactStatic} from './container'
 import {useNavigationState} from './navigation-hooks'
 
 type Path = Array<string | {props?: any; selected?: string}>
 
-export type PropsWithSafeNavigation<P> = {
+export type PropsWithSafeNavigation<P = {}> = {
   safeNavigateAppendPayload: (arg0: {path: Path; replace?: boolean}) => RouteTreeGen.NavigateAppendPayload
   safeNavigateUpPayload: () => RouteTreeGen.NavigateUpPayload
+  navKey: string
 } & P
 
 function withSafeNavigation<P extends {}>(
@@ -22,13 +23,15 @@ function withSafeNavigation<P extends {}>(
 
   class WithSafeNavigation extends React.Component<WithSafeNavigationProps> {
     static displayName = `WithSafeNavigation(${Component.displayName || Component.name || 'Component'})`
+    _activeKey: string = ''
 
     _navigateAppend = ({path, replace}: {path: Path; replace?: boolean}) =>
-      RouteTreeGen.createNavigateAppend({fromKey: getActiveKey(this.props.navigation.state), path, replace})
+      RouteTreeGen.createNavigateAppend({fromKey: this._activeKey, path, replace})
 
-    _navigateUp = () => RouteTreeGen.createNavigateUp({fromKey: getActiveKey(this.props.navigation.state)})
+    _navigateUp = () => RouteTreeGen.createNavigateUp({fromKey: this._activeKey})
 
     render() {
+      this._activeKey = getActiveKey(this.props.navigation.state)
       const {forwardedRef, ...rest} = this.props
       return (
         // @ts-ignore
@@ -37,6 +40,7 @@ function withSafeNavigation<P extends {}>(
           {...rest}
           safeNavigateAppendPayload={this._navigateAppend}
           safeNavigateUpPayload={this._navigateUp}
+          navKey={this._activeKey}
         />
       )
     }
@@ -66,11 +70,12 @@ function withSafeNavigationStorybook<P extends {}>(
   )
 }
 
-export const useSafeNavigation: () => PropsWithSafeNavigation<{}> = () => {
+const useSafeNavigationReal: () => PropsWithSafeNavigation = () => {
   const state = useNavigationState()
   const fromKey = getActiveKey(state)
   return React.useMemo(
     () => ({
+      navKey: fromKey,
       safeNavigateAppendPayload: ({path, replace}) =>
         RouteTreeGen.createNavigateAppend({fromKey, path, replace}),
       safeNavigateUpPayload: () => RouteTreeGen.createNavigateUp({fromKey}),
@@ -79,4 +84,14 @@ export const useSafeNavigation: () => PropsWithSafeNavigation<{}> = () => {
   )
 }
 
-export default (__STORYBOOK__ ? withSafeNavigationStorybook : withSafeNavigation)
+const useSafeNavigationStorybook: () => PropsWithSafeNavigation = () => {
+  return {
+    navKey: '',
+    safeNavigateAppendPayload: ({path, replace}) => RouteTreeGen.createNavigateAppend({path, replace}),
+    safeNavigateUpPayload: () => RouteTreeGen.createNavigateUp({}),
+  }
+}
+
+export const useSafeNavigation = __STORYBOOK__ ? useSafeNavigationStorybook : useSafeNavigationReal
+
+export default __STORYBOOK__ ? withSafeNavigationStorybook : withSafeNavigation

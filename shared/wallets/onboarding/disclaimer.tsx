@@ -2,7 +2,6 @@ import * as React from 'react'
 import * as Constants from '../../constants/wallets'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
-import {WalletPopup} from '../common'
 import {addTicker, removeTicker, TickerID} from '../../util/second-timer'
 
 type DisclaimerProps = {
@@ -33,21 +32,27 @@ class Disclaimer extends React.Component<DisclaimerProps, DisclaimerState> {
   beforeTimer: TickerID | null = null
 
   afterTick = () => {
-    this.setState({secondsLeftAfterAccept: Math.max(0, this.state.secondsLeftAfterAccept - 1)}, () => {
-      if (this.state.secondsLeftAfterAccept === 0 && this.afterTimer) {
-        removeTicker(this.afterTimer)
-        this.afterTimer = null
-        this.props.onCheckDisclaimer()
+    this.setState(
+      s => ({secondsLeftAfterAccept: Math.max(0, s.secondsLeftAfterAccept - 1)}),
+      () => {
+        if (this.state.secondsLeftAfterAccept === 0 && this.afterTimer) {
+          removeTicker(this.afterTimer)
+          this.afterTimer = null
+          this.props.onCheckDisclaimer()
+        }
       }
-    })
+    )
   }
 
   beforeTick = () => {
-    this.setState({secondsLeftBeforeAccept: this.state.secondsLeftBeforeAccept - 1}, () => {
-      if (this.state.secondsLeftBeforeAccept === 0 && this.beforeTimer) {
-        removeTicker(this.beforeTimer)
+    this.setState(
+      s => ({secondsLeftBeforeAccept: s.secondsLeftBeforeAccept - 1}),
+      () => {
+        if (this.state.secondsLeftBeforeAccept === 0 && this.beforeTimer) {
+          removeTicker(this.beforeTimer)
+        }
       }
-    })
+    )
   }
 
   removeTimers = () => {
@@ -81,7 +86,8 @@ class Disclaimer extends React.Component<DisclaimerProps, DisclaimerState> {
     }
   }
   render() {
-    const afterLabel = `Opening your Wallet`.concat(
+    const props = this.props
+    const afterLabel = `Opening wallet...`.concat(
       this.state.secondsLeftAfterAccept ? ` (${this.state.secondsLeftAfterAccept})` : ''
     )
     const beforeLabel = this.state.tryAgain
@@ -126,51 +132,81 @@ class Disclaimer extends React.Component<DisclaimerProps, DisclaimerState> {
       )
     )
 
+    const disclaimer =
+      this.props.sections.length === 0 ? (
+        <StaticDisclaimer />
+      ) : (
+        this.props.sections.map(b =>
+          b.lines.map(l => (
+            <Kb.Markdown
+              key={l.text}
+              style={l.bullet ? Styles.collapseStyles([styles.bodyText, styles.bodyBullet]) : styles.bodyText}
+              styleOverride={l.bullet ? bulletOverride : bodyOverride}
+            >
+              {(l.bullet ? '• ' : '').concat(l.text)}
+            </Kb.Markdown>
+          ))
+        )
+      )
+
+    // xxx test error presentation
     return (
-      <WalletPopup
-        bottomButtons={buttons}
-        onExit={this.props.onNotNow}
-        backButtonType="close"
-        buttonBarDirection="column"
-        containerStyle={styles.container}
-        buttonBarStyle={styles.buttonBar}
+      <Kb.Modal
+        mobileStyle={styles.background}
+        header={
+          Styles.isMobile
+            ? {
+                leftButton: (
+                  <Kb.Text style={styles.closeLabelStyle} type="BodyBigLink" onClick={props.onNotNow}>
+                    Close
+                  </Kb.Text>
+                ),
+              }
+            : undefined
+        }
+        footer={{
+          content: (
+            <>
+              <Kb.ButtonBar direction="column" fullWidth={true}>
+                {buttons}
+              </Kb.ButtonBar>
+              {!!this.props.acceptDisclaimerError && (
+                <Kb.Banner inline={true} color="red">
+                  <Kb.BannerParagraph bannerColor="red" content={this.props.acceptDisclaimerError} />
+                </Kb.Banner>
+              )}
+            </>
+          ),
+          style: styles.background,
+        }}
+        onClose={props.onNotNow}
       >
-        <Kb.Box2 direction="vertical" style={styles.header}>
-          <Kb.Text center={true} type="Header" style={styles.headerText}>
-            Almost done.
-          </Kb.Text>
-          <Kb.Text center={true} type="Header" style={styles.headerText}>
-            It's important you read this.
-          </Kb.Text>
-        </Kb.Box2>
-
-        <Kb.ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollViewContentContainer}>
-          {this.props.sections.length === 0 ? (
-            <StaticDisclaimer />
+        <Kb.Box2 direction="vertical" fullWidth={true} centerChildren={true} style={styles.container}>
+          <Kb.Box2 direction="vertical" style={styles.header}>
+            <Kb.Text center={true} type="Header" style={styles.headerText}>
+              Almost done.
+            </Kb.Text>
+            <Kb.Text center={true} type="Header" style={styles.headerText}>
+              It's important you read this.
+            </Kb.Text>
+          </Kb.Box2>
+          {Styles.isMobile ? (
+            <Kb.Box2 direction="vertical" style={styles.disclaimerContainer}>
+              {disclaimer}
+            </Kb.Box2>
           ) : (
-            this.props.sections.map(b =>
-              b.lines.map(l => (
-                <Kb.Markdown
-                  key={l.text}
-                  style={
-                    l.bullet ? Styles.collapseStyles([styles.bodyText, styles.bodyBullet]) : styles.bodyText
-                  }
-                  styleOverride={l.bullet ? bulletOverride : bodyOverride}
-                >
-                  {(l.bullet ? '• ' : '').concat(l.text)}
-                </Kb.Markdown>
-              ))
-            )
+            <Kb.Box2 direction="vertical" fullWidth={true} fullHeight={true} style={{position: 'relative'}}>
+              <Kb.ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={styles.scrollViewContentContainer}
+              >
+                {disclaimer}
+              </Kb.ScrollView>
+              <Kb.Box style={styles.gradient} />
+            </Kb.Box2>
           )}
-        </Kb.ScrollView>
-
-        <Kb.Box style={styles.gradient} />
-        {!!this.props.acceptDisclaimerError && (
-          <Kb.Banner inline={true} color="red">
-            <Kb.BannerParagraph bannerColor="red" content={this.props.acceptDisclaimerError} />
-          </Kb.Banner>
-        )}
-      </WalletPopup>
+        </Kb.Box2>
+      </Kb.Modal>
     )
   }
 }
@@ -261,10 +297,17 @@ const StaticDisclaimer = () => (
     <Kb.Text type="Body" style={styles.bodyText}>
       6. FINALLY HAVE FUN WHILE YOU CAN. Something is coming.
     </Kb.Text>
+
+    {/* Spacer to get over the gradient at the end. */}
+    {!Styles.isMobile && (
+      <Kb.Text type="Body" style={styles.bodyText}>
+        <br />
+      </Kb.Text>
+    )}
   </>
 )
 
-const bodyOverride = {
+const bodyOverride = Styles.styleSheetCreate(() => ({
   paragraph: {
     color: Styles.globalColors.white,
     fontSize: Styles.isMobile ? 16 : 13,
@@ -273,9 +316,9 @@ const bodyOverride = {
     textAlign: 'left' as const,
   },
   strong: Styles.globalStyles.fontExtrabold,
-}
+}))
 
-const bulletOverride = {
+const bulletOverride = Styles.styleSheetCreate(() => ({
   paragraph: {
     ...bodyOverride.paragraph,
     marginBottom: Styles.globalMargins.tiny,
@@ -283,61 +326,71 @@ const bulletOverride = {
     marginTop: undefined,
   },
   strong: bodyOverride.strong,
-}
+}))
 
-const styles = Styles.styleSheetCreate({
-  bodyBullet: {
-    marginLeft: Styles.globalMargins.tiny,
-  },
-  bodyText: {
-    color: Styles.globalColors.white,
-    textAlign: 'left',
-  },
-  buttonBar: Styles.platformStyles({
-    isElectron: {
-      minHeight: 40,
-    },
-  }),
-  buttonLabelStyle: {color: Styles.globalColors.purpleDark},
-  buttonStyle: {backgroundColor: Styles.globalColors.white, width: '100%'},
-  container: {
-    backgroundColor: Styles.globalColors.purple,
-    padding: Styles.globalMargins.medium,
-  },
-  gradient: Styles.platformStyles({
-    isElectron: {
-      backgroundImage: `linear-gradient(to bottom, ${Styles.globalColors.purple_01}, ${
-        Styles.globalColors.purple
-      })`,
-      height: Styles.globalMargins.large,
-      position: 'relative',
-      top: -30,
-      width: '100%',
-    },
-  }),
-  header: {
-    marginTop: Styles.globalMargins.small,
-  },
-  headerText: {
-    color: Styles.globalColors.white,
-  },
-  labelStyle: {
-    color: Styles.globalColors.purpleDark,
-  },
-  notNowButtonStyle: {width: '100%'},
-  scrollView: {
-    marginBottom: 0,
-    marginTop: Styles.globalMargins.small,
-  },
-  scrollViewContentContainer: Styles.platformStyles({
-    common: {
-      ...Styles.globalStyles.flexBoxColumn,
-    },
-    isElectron: {
-      height: 300,
-    },
-  }),
-  section: {marginBottom: Styles.globalMargins.xxtiny},
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      background: {backgroundColor: Styles.globalColors.purple},
+      bodyBullet: {
+        marginLeft: Styles.globalMargins.tiny,
+        marginTop: 0,
+      },
+      bodyText: {
+        color: Styles.globalColors.white,
+        marginTop: Styles.globalMargins.xsmall,
+        textAlign: 'left',
+      },
+      buttonBar: Styles.platformStyles({
+        isElectron: {
+          minHeight: 40,
+        },
+      }),
+      buttonLabelStyle: {color: Styles.globalColors.purpleDark},
+      buttonStyle: {backgroundColor: Styles.globalColors.white, width: '100%'},
+      closeLabelStyle: {color: Styles.globalColors.white},
+      container: {
+        backgroundColor: Styles.globalColors.purple,
+        paddingBottom: Styles.globalMargins.medium,
+        paddingLeft: Styles.globalMargins.medium,
+        paddingRight: Styles.globalMargins.medium,
+        paddingTop: 0,
+      },
+      disclaimerContainer: {marginTop: Styles.globalMargins.small},
+      gradient: Styles.platformStyles({
+        isElectron: {
+          backgroundImage: `linear-gradient(to bottom, ${Styles.globalColors.purple_01}, ${Styles.globalColors.purple})`,
+          bottom: 0,
+          height: Styles.globalMargins.large,
+          left: 0,
+          position: 'absolute',
+          width: '100%',
+        },
+      }),
+      header: {
+        marginTop: Styles.globalMargins.small,
+      },
+      headerText: {
+        color: Styles.globalColors.white,
+      },
+      labelStyle: {
+        color: Styles.globalColors.purpleDark,
+      },
+      notNowButtonStyle: {width: '100%'},
+      scrollView: {
+        marginBottom: 0,
+        marginTop: Styles.globalMargins.small,
+      },
+      scrollViewContentContainer: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.flexBoxColumn,
+        },
+        isElectron: {
+          height: 300,
+        },
+      }),
+      section: {marginBottom: Styles.globalMargins.xxtiny},
+    } as const)
+)
 
 export default Disclaimer

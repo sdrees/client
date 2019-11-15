@@ -3,14 +3,16 @@ import * as I from 'immutable'
 import * as Constants from '../constants/team-building'
 import * as Types from '../constants/types/team-building'
 import * as TeamBuildingGen from '../actions/team-building-gen'
-import {trim} from 'lodash-es'
+import trim from 'lodash/trim'
+
+const noUsers = []
 
 export default function(
   namespace: string,
   state: Types.TeamBuildingSubState,
   action: TeamBuildingGen.Actions
 ): Types.TeamBuildingSubState {
-  if (action.type === TeamBuildingGen.resetStore) {
+  if (action.type === TeamBuildingGen.resetStore || action.type === TeamBuildingGen.tbResetStore) {
     return Constants.makeSubState()
   }
 
@@ -26,7 +28,7 @@ export default function(
     case TeamBuildingGen.changeSendNotification:
       return state.set('teamBuildingSendNotification', action.payload.sendNotification)
     case TeamBuildingGen.addUsersToTeamSoFar:
-      return state.mergeIn(['teamBuildingTeamSoFar'], I.Set(action.payload.users))
+      return state.update('teamBuildingTeamSoFar', teamSoFar => teamSoFar.merge(action.payload.users))
     case TeamBuildingGen.removeUsersFromTeamSoFar: {
       const setToRemove = I.Set(action.payload.users)
       return state.update('teamBuildingTeamSoFar', teamSoFar => teamSoFar.filter(u => !setToRemove.has(u.id)))
@@ -34,7 +36,9 @@ export default function(
     case TeamBuildingGen.searchResultsLoaded: {
       const {query, service, users} = action.payload
       // @ts-ignore tricky when we traverse into map types
-      return state.mergeIn(['teamBuildingSearchResults', query], {[service]: users})
+      return state.mergeIn(['teamBuildingSearchResults', query], {
+        [service]: users.length === 0 ? noUsers : users, // use the special empty list to we don't render thrash
+      })
     }
     case TeamBuildingGen.finishedTeamBuilding: {
       const initialState = Constants.makeSubState()
@@ -60,7 +64,6 @@ export default function(
         teamBuildingSelectedService: service,
       })
     }
-
     case TeamBuildingGen.fetchUserRecs:
       return state
 

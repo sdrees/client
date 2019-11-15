@@ -45,9 +45,9 @@ func TestLookupContactList(t *testing.T) {
 	rawPhone := keybase1.RawPhoneNumber(phone)
 	res, err := contactsCli.LookupContactList(context.Background(), keybase1.LookupContactListArg{
 		Contacts: []keybase1.Contact{
-			keybase1.Contact{Name: "It's me",
+			{Name: "It's me",
 				Components: []keybase1.ContactComponent{
-					keybase1.ContactComponent{
+					{
 						PhoneNumber: &rawPhone,
 					},
 				},
@@ -76,9 +76,9 @@ func TestLookupContactList(t *testing.T) {
 
 	res, err = contactsCli.LookupContactList(context.Background(), keybase1.LookupContactListArg{
 		Contacts: []keybase1.Contact{
-			keybase1.Contact{Name: "It's me",
+			{Name: "It's me",
 				Components: []keybase1.ContactComponent{
-					keybase1.ContactComponent{
+					{
 						Email: &emailAddr,
 					},
 				},
@@ -163,10 +163,6 @@ func TestBulkLookupContacts(t *testing.T) {
 	pvv1 := tt.addUser("blpvv")
 	pvv1Number := addPhoneNumber(pvv1, keybase1.IdentityVisibility_PUBLIC, true)
 	pvv1NumberRaw := keybase1.RawPhoneNumber(pvv1Number)
-	// Someone with a verified visible phone number #2, without prefix
-	pvv2 := tt.addUser("blpvv")
-	pvv2Number := addPhoneNumber(pvv2, keybase1.IdentityVisibility_PUBLIC, true)
-	pvv2NumberRaw := keybase1.RawPhoneNumber(pvv2Number[2:])
 	// Someone with a verified private phone number
 	pvp := tt.addUser("blpvp")
 	pvpNumber := addPhoneNumber(pvp, keybase1.IdentityVisibility_PRIVATE, false)
@@ -192,12 +188,11 @@ func TestBulkLookupContacts(t *testing.T) {
 		},
 		[]keybase1.RawPhoneNumber{
 			pvv1NumberRaw,
-			pvv2NumberRaw,
 			pvpNumberRaw,
 			ppvNumberRaw,
 			randomNumber,
 		},
-		keybase1.RegionCode("US"),
+		contacts.NoneToken,
 	)
 	require.NoError(t, err)
 
@@ -213,7 +208,6 @@ tableLoop:
 		{contacts.MakeEmailLookupKey(epvEmail), false, false},
 		{contacts.MakeEmailLookupKey(randomEmail), false, false},
 		{contacts.MakePhoneLookupKey(pvv1NumberRaw), true, false},
-		{contacts.MakePhoneLookupKey(pvv2NumberRaw), true, true},
 		{contacts.MakePhoneLookupKey(pvpNumberRaw), false, false},
 		{contacts.MakePhoneLookupKey(ppvNumberRaw), false, false},
 		{contacts.MakeEmailLookupKey(randomNumber), false, false},
@@ -279,12 +273,13 @@ func TestLookupSelfAfterRemove(t *testing.T) {
 	emailAddr := keybase1.EmailAddress(randomUser("newemail").email)
 	{
 		// Add and verify an email address
-		emailCli.AddEmail(context.Background(), keybase1.AddEmailArg{
+		err := emailCli.AddEmail(context.Background(), keybase1.AddEmailArg{
 			Email:      emailAddr,
 			Visibility: keybase1.IdentityVisibility_PUBLIC,
 		})
+		require.NoError(t, err)
 
-		err := kbtest.VerifyEmailAuto(ann.MetaContext(), emailAddr)
+		err = kbtest.VerifyEmailAuto(ann.MetaContext(), emailAddr)
 		require.NoError(t, err)
 	}
 
@@ -296,32 +291,32 @@ func TestLookupSelfAfterRemove(t *testing.T) {
 		{
 			Name: "Ann Test",
 			Components: []keybase1.ContactComponent{
-				keybase1.ContactComponent{Label: "phone", PhoneNumber: &rawPhone},
-				keybase1.ContactComponent{Label: "email", Email: &emailAddr},
+				{Label: "phone", PhoneNumber: &rawPhone},
+				{Label: "email", Email: &emailAddr},
 			},
 		},
 		{
 			Name: "Ann Test 2",
 			Components: []keybase1.ContactComponent{
-				keybase1.ContactComponent{Email: &emailAddr},
+				{Email: &emailAddr},
 			},
 		},
 		{
 			Name: "Test Ann",
 			Components: []keybase1.ContactComponent{
-				keybase1.ContactComponent{PhoneNumber: &rawPhone},
+				{PhoneNumber: &rawPhone},
 			},
 		},
 		{
 			Name: "Someone else",
 			Components: []keybase1.ContactComponent{
-				keybase1.ContactComponent{PhoneNumber: &miscPhoneNum},
+				{PhoneNumber: &miscPhoneNum},
 			},
 		},
 		{
 			Name: "Someone else",
 			Components: []keybase1.ContactComponent{
-				keybase1.ContactComponent{Email: &miscEmailAddr},
+				{Email: &miscEmailAddr},
 			},
 		},
 	}

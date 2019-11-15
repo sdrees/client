@@ -2,9 +2,8 @@ import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
 import {StyleOverride} from '../../common-adapters/markdown'
-import {isMobile} from '../../constants/platform'
 
-const styleOverride = Styles.styleSheetCreate({
+const styleOverride: StyleOverride = Styles.styleSheetCreate(() => ({
   del: {
     color: Styles.globalColors.black,
   },
@@ -20,7 +19,7 @@ const styleOverride = Styles.styleSheetCreate({
   strong: {
     color: Styles.globalColors.black,
   },
-})
+}))
 
 type Props = {
   memo: string
@@ -38,17 +37,19 @@ const MarkdownMemo = (props: Props) =>
       style={Styles.collapseStyles([props.style, styles.container])}
     >
       {!props.hideDivider && <Kb.Divider vertical={true} style={styles.quoteMarker} />}
-      <Kb.Markdown
-        style={styles.memo}
-        styleOverride={Styles.collapseStyles([isMobile ? styleOverride : undefined, props.styleOverride])}
-        allowFontScaling={true}
-      >
-        {props.memo}
-      </Kb.Markdown>
+      <Kb.Text type="Body" style={styles.memo}>
+        <Kb.Markdown
+          style={styles.memo}
+          styleOverride={{...styleOverride, ...props.styleOverride}}
+          allowFontScaling={true}
+        >
+          {props.memo}
+        </Kb.Markdown>
+      </Kb.Text>
     </Kb.Box2>
   ) : null
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   container: {
     marginBottom: Styles.globalMargins.xxtiny,
     marginTop: Styles.globalMargins.xxtiny,
@@ -65,9 +66,12 @@ const styles = Styles.styleSheetCreate({
       userSelect: 'text',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
+    } as const,
+    isMobile: {
+      ...Styles.globalStyles.flexBoxColumn,
     },
   }),
   quoteMarker: {maxWidth: 3, minWidth: 3},
-})
+}))
 
 export default MarkdownMemo

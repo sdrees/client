@@ -1,21 +1,40 @@
 import * as React from 'react'
-import * as Kb from '../common-adapters/index'
+import * as Kb from '../common-adapters'
 import * as Styles from '../styles'
 import * as Container from '../util/container'
+import * as Constants from '../constants/team-building'
 import TeamBox from './team-box'
-import ServiceTabBar from './service-tab-bar'
-import UserResult, {userResultHeight} from './user-result'
+import Input from './input'
+import {ServiceTabBar} from './service-tab-bar'
 import Flags from '../util/feature-flags'
-import {serviceIdToAccentColor, serviceIdToIconFont, serviceIdToLabel} from './shared'
-import {ServiceIdWithContact, FollowingState} from '../constants/types/team-building'
 import {Props as OriginalRolePickerProps} from '../teams/role-picker'
 import {TeamRoleType} from '../constants/types/teams'
 import {memoize} from '../util/memoize'
-import {throttle} from 'lodash-es'
+import throttle from 'lodash/throttle'
+import PhoneSearch from './phone-search'
+import AlphabetIndex from './alphabet-index'
+import EmailSearch from './email-search'
+import PeopleResult from './search-result/people-result'
+import UserResult from './search-result/user-result'
+import {userResultHeight} from './search-result/common-result'
+import {
+  serviceIdToAccentColor,
+  serviceIdToIconFont,
+  serviceIdToLabel,
+  serviceIdToSearchPlaceholder,
+} from './shared'
+import {
+  AllowedNamespace,
+  ServiceIdWithContact,
+  FollowingState,
+  SelectedUser,
+  User,
+} from '../constants/types/team-building'
 
 export const numSectionLabel = '0-9'
 
 export type SearchResult = {
+  contact: boolean
   userId: string
   username: string
   prettyName: string
@@ -30,11 +49,22 @@ export type ImportContactsEntry = {
   isImportButton: true
 }
 
+export type SearchHintEntry = {
+  isSearchHint: true
+}
+
+export type ResultData = SearchResult | ImportContactsEntry | SearchHintEntry
+
 export type SearchRecSection = {
   label: string
   shortcut: boolean
-  data: Array<SearchResult | ImportContactsEntry>
+  data: Array<ResultData>
 }
+
+const isImportContactsEntry = (x: ResultData): x is ImportContactsEntry =>
+  'isImportButton' in x && x.isImportButton
+
+const isSearchHintEntry = (x: ResultData): x is SearchHintEntry => 'isSearchHint' in x && x.isSearchHint
 
 export type RolePickerProps = {
   onSelectRole: (role: TeamRoleType) => void
@@ -54,12 +84,16 @@ type ContactProps = {
   onAskForContactsLater: () => void
   onImportContacts: () => void
   onLoadContactsSetting: () => void
+  selectedService: ServiceIdWithContact
 }
 
 export type Props = ContactProps & {
+  filterServices?: Array<ServiceIdWithContact>
   fetchUserRecs: () => void
+  focusInputCounter: number
   includeContacts: boolean
   highlightedIndex: number | null
+  namespace: AllowedNamespace
   onAdd: (userId: string) => void
   onBackspace: () => void
   onChangeService: (newService: ServiceIdWithContact) => void
@@ -71,21 +105,22 @@ export type Props = ContactProps & {
   onRemove: (userId: string) => void
   onSearchForMore: () => void
   onUpArrowKeyDown: () => void
+  onClear: () => void
+  onClose: () => void
   recommendations: Array<SearchRecSection> | null
+  search: (query: string, service: ServiceIdWithContact) => void
   searchResults: Array<SearchResult> | null
   searchString: string
-  selectedService: ServiceIdWithContact
   serviceResultCount: {[K in ServiceIdWithContact]?: number | null}
   showRecs: boolean
+  showResults: boolean
   showServiceResultCount: boolean
-  teamSoFar: Array<{
-    userId: string
-    prettyName: string
-    service: ServiceIdWithContact
-    username: string
-  }>
+  teamBuildingSearchResults: {[query: string]: {[service in ServiceIdWithContact]: Array<User>}}
+  teamSoFar: Array<SelectedUser>
+  teamname: string
   waitingForCreate: boolean
   rolePickerProps?: RolePickerProps
+  title: string
 }
 
 const ContactsBanner = (props: ContactProps & {onRedoSearch: () => void; onRedoRecs: () => void}) => {
@@ -111,6 +146,7 @@ const ContactsBanner = (props: ContactProps & {onRedoSearch: () => void; onRedoR
   // then there's nothing for us to do.
   if (
     props.contactsImported === null ||
+    props.selectedService !== 'keybase' ||
     props.contactsImported ||
     props.isImportPromptDismissed ||
     props.contactsPermissionStatus === 'never_ask_again'
@@ -121,23 +157,22 @@ const ContactsBanner = (props: ContactProps & {onRedoSearch: () => void; onRedoR
     <Kb.Box2 direction="horizontal" fullWidth={true} alignItems="center" style={styles.banner}>
       <Kb.Icon type="icon-fancy-user-card-mobile-120-149" style={styles.bannerIcon} />
       <Kb.Box2 direction="vertical" style={styles.bannerTextContainer}>
-        <Kb.Text type="BodyBig" negative={true} style={styles.bannerText}>
+        <Kb.Text type="BodySmallSemibold" negative={true} style={styles.bannerText}>
           Import your phone contacts and start encrypted chats with your friends.
         </Kb.Text>
-        <Kb.Box2 direction="horizontal" style={styles.bannerButtonContainer}>
+        <Kb.Box2 direction="horizontal" gap="tiny" style={styles.bannerButtonContainer}>
           <Kb.Button
             label="Import contacts"
             backgroundColor="blue"
             onClick={props.onImportContacts}
-            style={styles.bannerImportButton}
             small={true}
+            style={styles.importContactsButton}
           />
           <Kb.Button
-            label="Later"
+            label="Skip"
             backgroundColor="blue"
             mode="Secondary"
             onClick={props.onAskForContactsLater}
-            style={styles.bannerLaterButton}
             small={true}
           />
         </Kb.Box2>
@@ -151,6 +186,7 @@ const ContactsImportButton = (props: ContactProps) => {
   if (
     props.contactsImported === null ||
     props.contactsImported ||
+    !props.isImportPromptDismissed ||
     props.contactsPermissionStatus === 'never_ask_again'
   )
     return null
@@ -161,61 +197,117 @@ const ContactsImportButton = (props: ContactProps) => {
         direction="horizontal"
         fullWidth={true}
         alignItems="center"
+        gap="small"
         style={styles.importContactsContainer}
       >
-        <Kb.Icon type="iconfont-phone-contact" fontSize={24} />
+        <Kb.Icon type="iconfont-contact-book" color={Styles.globalColors.black} />
         <Kb.Text type="BodyBig" lineClamp={1}>
           Import your phone contacts
         </Kb.Text>
-        <Kb.Icon type="iconfont-arrow-right" fontSize={24} />
+        <Kb.Icon type="iconfont-arrow-right" sizeType="Small" color={Styles.globalColors.black} />
       </Kb.Box2>
     </Kb.ClickableBox>
   )
 }
 
-class TeamBuilding extends React.PureComponent<Props, {}> {
+const SearchHintText = () => (
+  <Kb.Box2 direction="vertical" style={{padding: Styles.globalMargins.small}}>
+    <Kb.Text type="BodySmall">Search anyone on Keybase by typing a username or a full name.</Kb.Text>
+  </Kb.Box2>
+)
+
+const FilteredServiceTabBar = (
+  props: Omit<React.ComponentPropsWithoutRef<typeof ServiceTabBar>, 'services'> & {
+    filterServices?: Array<ServiceIdWithContact>
+  }
+) => {
+  const services = React.useMemo(
+    () =>
+      props.filterServices
+        ? Constants.allServices.filter(
+            serviceId => props.filterServices && props.filterServices.includes(serviceId)
+          )
+        : Constants.allServices,
+    [props.filterServices]
+  )
+
+  return services.length === 1 && services[0] === 'keybase' ? null : (
+    <ServiceTabBar
+      services={services}
+      selectedService={props.selectedService}
+      onChangeService={props.onChangeService}
+      serviceResultCount={props.serviceResultCount}
+      showServiceResultCount={props.showServiceResultCount}
+      servicesShown={props.servicesShown}
+      minimalBorder={props.minimalBorder}
+      offset={props.offset}
+    />
+  )
+}
+
+const EmptyResultText = (props: {selectedService: ServiceIdWithContact; action: string}) => (
+  <Kb.Box2
+    alignSelf="center"
+    centerChildren={!Styles.isMobile}
+    direction="vertical"
+    fullWidth={true}
+    gap="tiny"
+    style={styles.emptyContainer}
+  >
+    {!Styles.isMobile && (
+      <Kb.Icon
+        fontSize={Styles.isMobile ? 48 : 64}
+        type={serviceIdToIconFont(props.selectedService)}
+        style={Styles.collapseStyles([
+          !!props.selectedService && {color: serviceIdToAccentColor(props.selectedService)},
+        ])}
+      />
+    )}
+    {!Styles.isMobile && (
+      <Kb.Text center={true} type="BodyBig">
+        Enter a {serviceIdToLabel(props.selectedService)} username above.
+      </Kb.Text>
+    )}
+    <Kb.Text center={true} style={styles.emptyServiceText} type="BodySmall">
+      {props.action} anyone on {serviceIdToLabel(props.selectedService)}, even if they don’t have a Keybase
+      account.
+    </Kb.Text>
+  </Kb.Box2>
+)
+
+const SectionList = Styles.isMobile ? Kb.ReAnimated.createAnimatedComponent(Kb.SectionList) : Kb.SectionList
+
+class TeamBuilding extends React.PureComponent<Props> {
+  private offset: any = Styles.isMobile ? new Kb.ReAnimated.Value(0) : undefined
+
   sectionListRef = React.createRef<Kb.SectionList>()
   componentDidMount = () => {
     this.props.fetchUserRecs()
   }
 
   _alphabetIndex = () => {
-    const showNumSection =
-      this.props.recommendations &&
-      this.props.recommendations[this.props.recommendations.length - 1].label === numSectionLabel
+    let showNumSection = false
+    let labels: Array<string> = []
+    if (this.props.recommendations && this.props.recommendations.length > 0) {
+      showNumSection =
+        this.props.recommendations[this.props.recommendations.length - 1].label === numSectionLabel
+      labels = this.props.recommendations
+        .filter(r => r.shortcut && r.label !== numSectionLabel)
+        .map(r => r.label)
+    }
+    if (!labels.length) {
+      return null
+    }
     return (
-      <Kb.Box2 direction="vertical" centerChildren={true} style={styles.alphabetIndex}>
-        {this.props.recommendations &&
-          this.props.recommendations.map(section =>
-            section.label.length === 1 ? (
-              <Kb.ClickableBox
-                key={section.label}
-                onClick={() => this._onScrollToSection(section.label)}
-                style={styles.gapAlphaIndices}
-              >
-                <Kb.Text
-                  key={section.label}
-                  type="BodyTiny"
-                  onClick={() => this._onScrollToSection(section.label)}
-                >
-                  {section.label}
-                </Kb.Text>
-              </Kb.ClickableBox>
-            ) : null
-          )}
-        {showNumSection &&
-          ['0', '•', '9'].map(char => (
-            <Kb.ClickableBox
-              key={char}
-              onClick={() => this._onScrollToSection(numSectionLabel)}
-              style={styles.gapAlphaIndices}
-            >
-              <Kb.Text key={char} type="BodyTiny">
-                {char}
-              </Kb.Text>
-            </Kb.ClickableBox>
-          ))}
-      </Kb.Box2>
+      <>
+        <AlphabetIndex
+          labels={labels}
+          showNumSection={showNumSection}
+          onScroll={this._onScrollToSection}
+          style={styles.alphabetIndex}
+          measureKey={!!this.props.teamSoFar.length}
+        />
+      </>
     )
   }
 
@@ -224,15 +316,19 @@ class TeamBuilding extends React.PureComponent<Props, {}> {
       const ref = this.sectionListRef.current
       const sectionIndex =
         (this.props.recommendations &&
-          this.props.recommendations.findIndex(section => section.label === label)) ||
+          (label === 'numSection'
+            ? this.props.recommendations.length - 1
+            : this.props.recommendations.findIndex(section => section.label === label))) ||
         -1
       if (sectionIndex >= 0 && Styles.isMobile) {
-        // @ts-ignore due to no RN types
-        ref.scrollToLocation({
-          animated: false,
-          itemIndex: 0,
-          sectionIndex,
-        })
+        // @ts-ignore RN type not plumbed. see section-list.d.ts
+        const node = ref.getNode()
+        node &&
+          node.scrollToLocation({
+            animated: false,
+            itemIndex: 0,
+            sectionIndex,
+          })
       }
     }
   }
@@ -295,44 +391,52 @@ class TeamBuilding extends React.PureComponent<Props, {}> {
     }
   )
 
+  _searchInput = () => (
+    <Input
+      onChangeText={this.props.onChangeText}
+      onClear={
+        this.props.namespace === 'people' && !this.props.searchString
+          ? this.props.onClose
+          : this.props.onClear
+      }
+      onDownArrowKeyDown={this.props.onDownArrowKeyDown}
+      onUpArrowKeyDown={this.props.onUpArrowKeyDown}
+      onEnterKeyDown={this.props.onEnterKeyDown}
+      onBackspace={this.props.onBackspace}
+      placeholder={'Search ' + serviceIdToSearchPlaceholder(this.props.selectedService)}
+      searchString={this.props.searchString}
+      focusOnMount={!Styles.isMobile || this.props.selectedService !== 'keybase'}
+      focusCounter={this.props.focusInputCounter}
+    />
+  )
+
   _listBody = () => {
-    const showRecPending = !this.props.searchString && !this.props.recommendations
+    const ResultRow = this.props.namespace === 'people' ? PeopleResult : UserResult
+    const showRecPending =
+      !this.props.searchString && !this.props.recommendations && this.props.selectedService === 'keybase'
     const showLoading = !!this.props.searchString && !this.props.searchResults
     if (showRecPending || showLoading) {
       return (
-        <Kb.Box2 direction="vertical" fullWidth={true} gap="xtiny" style={styles.loadingContainer}>
-          <Kb.Icon style={Kb.iconCastPlatformStyles(styles.loadingIcon)} type="icon-progress-grey-animated" />
-          <Kb.Text type="BodySmallSemibold">Loading</Kb.Text>
+        <Kb.Box2
+          direction="vertical"
+          fullWidth={true}
+          fullHeight={true}
+          gap="xtiny"
+          centerChildren={true}
+          style={styles.loadingContainer}
+        >
+          {showLoading && <Kb.Animation animationType="spinner" style={styles.loadingAnimation} />}
         </Kb.Box2>
       )
     }
-    if (!this.props.showRecs && !this.props.showServiceResultCount && !!this.props.selectedService) {
-      return (
-        <Kb.Box2
-          alignSelf="center"
-          centerChildren={true}
-          direction="vertical"
-          fullHeight={true}
-          fullWidth={true}
-          gap="tiny"
-          style={styles.emptyContainer}
-        >
-          <Kb.Icon
-            fontSize={Styles.isMobile ? 48 : 64}
-            type={serviceIdToIconFont(this.props.selectedService)}
-            style={Styles.collapseStyles([
-              !!this.props.selectedService && {color: serviceIdToAccentColor(this.props.selectedService)},
-            ])}
-          />
-          <Kb.Text center={true} type="BodyBig">
-            Enter a {serviceIdToLabel(this.props.selectedService)} username above.
-          </Kb.Text>
-          <Kb.Text center={true} type="BodySmall">
-            Start a Keybase chat with anyone on {serviceIdToLabel(this.props.selectedService)}, even if they
-            don’t have a Keybase account.
-          </Kb.Text>
-        </Kb.Box2>
-      )
+    if (!this.props.showRecs && !this.props.showResults && !!this.props.selectedService) {
+      if (this.props.namespace === 'people') {
+        return <EmptyResultText selectedService={this.props.selectedService} action="Search for" />
+      } else {
+        return (
+          <EmptyResultText selectedService={this.props.selectedService} action="Start a Keybase chat with" />
+        )
+      }
     }
     if (this.props.showRecs && this.props.recommendations) {
       const highlightDetails = this._listIndexToSectionAndLocalIndex(
@@ -340,74 +444,99 @@ class TeamBuilding extends React.PureComponent<Props, {}> {
         this.props.recommendations
       )
       return (
-        <Kb.Box2
-          direction="vertical"
-          fullWidth={true}
-          style={Styles.collapseStyles([Styles.globalStyles.flexOne, {position: 'relative'}])}
-        >
-          <Kb.SectionList
-            ref={this.sectionListRef}
-            keyboardDismissMode="on-drag"
-            keyboardShouldPersistTaps="handled"
-            selectedIndex={Styles.isMobile ? undefined : this.props.highlightedIndex || 0}
-            sections={this.props.recommendations}
-            getItemLayout={this._getRecLayout}
-            renderItem={({index, item: result, section}) =>
-              result.isImportButton ? (
-                <ContactsImportButton {...this.props} />
-              ) : (
-                <UserResult
-                  resultForService={this.props.selectedService}
-                  username={result.username}
-                  prettyName={result.prettyName}
-                  displayLabel={result.displayLabel}
-                  services={result.services}
-                  inTeam={result.inTeam}
-                  isPreExistingTeamMember={result.isPreExistingTeamMember}
-                  followingState={result.followingState}
-                  highlight={
-                    !Styles.isMobile &&
-                    !!highlightDetails &&
-                    highlightDetails.section === section &&
-                    highlightDetails.index === index
-                  }
-                  onAdd={() => this.props.onAdd(result.userId)}
-                  onRemove={() => this.props.onRemove(result.userId)}
-                />
-              )
-            }
-            renderSectionHeader={({section: {label}}) => <Kb.SectionDivider label={label} />}
-          />
-          {Styles.isMobile && this._alphabetIndex()}
-        </Kb.Box2>
+        <Kb.BoxGrow>
+          <Kb.Box2 direction="vertical" fullWidth={true} style={styles.listContainer}>
+            <SectionList
+              ref={this.sectionListRef}
+              contentContainerStyle={{minHeight: '133%'}}
+              keyboardDismissMode="on-drag"
+              keyboardShouldPersistTaps="handled"
+              stickySectionHeadersEnabled={false}
+              scrollEventThrottle={1}
+              onScroll={this.onScroll}
+              selectedIndex={Styles.isMobile ? undefined : this.props.highlightedIndex || 0}
+              sections={this.props.recommendations}
+              keyExtractor={(item: ResultData, index: number) => {
+                if (!isImportContactsEntry(item) && !isSearchHintEntry(item) && item.contact) {
+                  // Ids for contacts are not guaranteed to be unique
+                  return item.userId + index
+                }
+                return isImportContactsEntry(item)
+                  ? 'Import Contacts'
+                  : isSearchHintEntry(item)
+                  ? 'New User Search Hint'
+                  : item.userId
+              }}
+              getItemLayout={this._getRecLayout}
+              renderItem={({index, item: result, section}) =>
+                result.isImportButton ? (
+                  <ContactsImportButton {...this.props} />
+                ) : result.isSearchHint ? (
+                  <SearchHintText />
+                ) : (
+                  <ResultRow
+                    resultForService={this.props.selectedService}
+                    username={result.username}
+                    prettyName={result.prettyName}
+                    displayLabel={result.displayLabel}
+                    services={result.services}
+                    inTeam={result.inTeam}
+                    isPreExistingTeamMember={result.isPreExistingTeamMember}
+                    followingState={result.followingState}
+                    highlight={
+                      !Styles.isMobile &&
+                      !!highlightDetails &&
+                      this.props.namespace !== 'people' &&
+                      highlightDetails.section === section &&
+                      highlightDetails.index === index
+                    }
+                    onAdd={() => this.props.onAdd(result.userId)}
+                    onRemove={() => this.props.onRemove(result.userId)}
+                  />
+                )
+              }
+              renderSectionHeader={({section: {label}}) =>
+                label && (!Styles.isMobile || label !== 'Recommendations') ? (
+                  <Kb.SectionDivider label={label} />
+                ) : null
+              }
+            />
+            {Styles.isMobile && this._alphabetIndex()}
+          </Kb.Box2>
+        </Kb.BoxGrow>
       )
     }
+
     return (
-      <Kb.List
-        items={this.props.searchResults || []}
-        selectedIndex={this.props.highlightedIndex || 0}
-        style={styles.list}
-        contentContainerStyle={styles.listContentContainer}
-        keyboardShouldPersistTaps="handled"
-        keyProperty={'key'}
-        onEndReached={this._onEndReached}
-        onEndReachedThreshold={0.1}
-        renderItem={(index, result) => (
-          <UserResult
-            resultForService={this.props.selectedService}
-            username={result.username}
-            prettyName={result.prettyName}
-            displayLabel={result.displayLabel}
-            services={result.services}
-            inTeam={result.inTeam}
-            isPreExistingTeamMember={result.isPreExistingTeamMember}
-            followingState={result.followingState}
-            highlight={!Styles.isMobile && index === this.props.highlightedIndex}
-            onAdd={() => this.props.onAdd(result.userId)}
-            onRemove={() => this.props.onRemove(result.userId)}
-          />
-        )}
-      />
+      <>
+        <Kb.List
+          reAnimated={true}
+          items={this.props.searchResults || []}
+          onScroll={this.onScroll}
+          selectedIndex={this.props.highlightedIndex || 0}
+          style={styles.list}
+          contentContainerStyle={styles.listContentContainer}
+          keyboardShouldPersistTaps="handled"
+          keyProperty="key"
+          onEndReached={this._onEndReached}
+          onEndReachedThreshold={0.1}
+          renderItem={(index, result) => (
+            <ResultRow
+              resultForService={this.props.selectedService}
+              username={result.username}
+              prettyName={result.prettyName}
+              displayLabel={result.displayLabel}
+              services={result.services}
+              inTeam={result.inTeam}
+              isPreExistingTeamMember={result.isPreExistingTeamMember}
+              followingState={result.followingState}
+              highlight={!Styles.isMobile && index === this.props.highlightedIndex}
+              onAdd={() => this.props.onAdd(result.userId)}
+              onRemove={() => this.props.onRemove(result.userId)}
+            />
+          )}
+        />
+      </>
     )
   }
 
@@ -415,41 +544,112 @@ class TeamBuilding extends React.PureComponent<Props, {}> {
     this.props.onSearchForMore()
   }, 500)
 
-  render = () => {
+  onScroll = Styles.isMobile
+    ? Kb.ReAnimated.event([{nativeEvent: {contentOffset: {y: this.offset}}}], {useNativeDriver: true})
+    : undefined
+
+  render() {
     const props = this.props
-    return (
-      <Kb.Box2 direction="vertical" style={styles.container} fullWidth={true}>
-        {Styles.isMobile ? (
-          <Kb.Box2 direction="horizontal" fullWidth={true}>
-            <TeamBox
-              allowPhoneEmail={props.selectedService === 'keybase' && props.includeContacts}
-              onChangeText={props.onChangeText}
-              onDownArrowKeyDown={props.onDownArrowKeyDown}
-              onUpArrowKeyDown={props.onUpArrowKeyDown}
-              onEnterKeyDown={props.onEnterKeyDown}
-              onFinishTeamBuilding={props.onFinishTeamBuilding}
-              onRemove={props.onRemove}
-              teamSoFar={props.teamSoFar}
-              onBackspace={props.onBackspace}
-              searchString={props.searchString}
-              rolePickerProps={props.rolePickerProps}
-            />
-          </Kb.Box2>
-        ) : (
-          <TeamBox
-            allowPhoneEmail={props.selectedService === 'keybase' && props.includeContacts}
-            onChangeText={props.onChangeText}
-            onDownArrowKeyDown={props.onDownArrowKeyDown}
-            onUpArrowKeyDown={props.onUpArrowKeyDown}
-            onEnterKeyDown={props.onEnterKeyDown}
-            onFinishTeamBuilding={props.onFinishTeamBuilding}
-            onRemove={props.onRemove}
-            teamSoFar={props.teamSoFar}
-            onBackspace={props.onBackspace}
-            searchString={props.searchString}
-            rolePickerProps={props.rolePickerProps}
+
+    let content: React.ReactNode
+    switch (props.selectedService) {
+      case 'email':
+        content = (
+          <EmailSearch
+            continueLabel={props.teamSoFar.length > 0 ? 'Add' : 'Continue'}
+            namespace={props.namespace}
+            teamBuildingSearchResults={props.teamBuildingSearchResults}
+            search={props.search}
           />
-        )}
+        )
+        break
+      case 'phone':
+        content = (
+          <PhoneSearch
+            continueLabel={props.teamSoFar.length > 0 ? 'Add' : 'Continue'}
+            namespace={props.namespace}
+            search={props.search}
+            teamBuildingSearchResults={props.teamBuildingSearchResults}
+          />
+        )
+        break
+      default:
+        content = (
+          <>
+            {this._searchInput()}
+            {props.namespace === 'people' && !Styles.isMobile && (
+              <FilteredServiceTabBar
+                filterServices={props.filterServices}
+                selectedService={props.selectedService}
+                onChangeService={props.onChangeService}
+                serviceResultCount={props.serviceResultCount}
+                showServiceResultCount={props.showServiceResultCount}
+                servicesShown={5} // wider bar, show more services
+                minimalBorder={true} // only show bottom border on icon when active
+                offset={1}
+              />
+            )}
+            {this._listBody()}
+            {props.waitingForCreate && (
+              <Kb.Box2 direction="vertical" style={styles.waiting} alignItems="center">
+                <Kb.ProgressIndicator type="Small" white={true} style={styles.waitingProgress} />
+              </Kb.Box2>
+            )}
+          </>
+        )
+    }
+    const teamBox = !!props.teamSoFar.length && (
+      <TeamBox
+        allowPhoneEmail={props.selectedService === 'keybase' && props.includeContacts}
+        onChangeText={props.onChangeText}
+        onDownArrowKeyDown={props.onDownArrowKeyDown}
+        onUpArrowKeyDown={props.onUpArrowKeyDown}
+        onEnterKeyDown={props.onEnterKeyDown}
+        onFinishTeamBuilding={props.onFinishTeamBuilding}
+        onRemove={props.onRemove}
+        teamSoFar={props.teamSoFar}
+        onBackspace={props.onBackspace}
+        searchString={props.searchString}
+        rolePickerProps={props.rolePickerProps}
+      />
+    )
+
+    // Handle when team-building is making a new chat v.s. adding members to a team.
+    const chatHeader =
+      props.namespace === 'people' ? null : props.rolePickerProps ? (
+        <Kb.Box2 direction="vertical" alignItems="center" style={styles.headerContainer}>
+          <Kb.Avatar teamname={props.teamname} size={32} style={styles.teamAvatar} />
+          <Kb.Text type="Header">{props.title}</Kb.Text>
+          <Kb.Text type="BodyTiny">Add as many members as you would like.</Kb.Text>
+        </Kb.Box2>
+      ) : (
+        <Kb.Box2 direction="vertical" alignItems="center">
+          <Kb.Text type="Header" style={styles.newChatHeader}>
+            {props.title}
+          </Kb.Text>
+        </Kb.Box2>
+      )
+
+    // If there are no filterServices or if the filterServices has a phone
+    const showContactsBanner =
+      Styles.isMobile && (!props.filterServices || props.filterServices.includes('phone'))
+
+    const containerStyle = Styles.collapseStyles([
+      styles.container,
+      props.namespace !== 'people' ? styles.fixedWidthContainer : null,
+    ])
+
+    return (
+      <Kb.Box2 direction="vertical" style={containerStyle} fullWidth={true}>
+        {Styles.isMobile ? null : chatHeader}
+        {teamBox &&
+          (Styles.isMobile ? (
+            <Kb.Box2 direction="horizontal" fullWidth={true}>
+              {teamBox}
+            </Kb.Box2>
+          ) : (
+            teamBox
+          ))}
         {!!props.teamSoFar.length && Flags.newTeamBuildingForChatAllowMakeTeam && (
           <Kb.Text type="BodySmall">
             Add up to 14 more people. Need more?
@@ -459,141 +659,165 @@ class TeamBuilding extends React.PureComponent<Props, {}> {
             </Kb.Text>
           </Kb.Text>
         )}
-        <ServiceTabBar
-          selectedService={props.selectedService}
-          onChangeService={props.onChangeService}
-          serviceResultCount={props.serviceResultCount}
-          showServiceResultCount={props.showServiceResultCount}
-        />
-        {Styles.isMobile && (
+        {(props.namespace !== 'people' || Styles.isMobile) && (
+          <FilteredServiceTabBar
+            filterServices={props.filterServices}
+            selectedService={props.selectedService}
+            onChangeService={props.onChangeService}
+            serviceResultCount={props.serviceResultCount}
+            showServiceResultCount={props.showServiceResultCount}
+            offset={this.offset}
+          />
+        )}
+        {showContactsBanner && (
           <ContactsBanner
             {...props}
             onRedoSearch={() => props.onChangeText(props.searchString)}
             onRedoRecs={props.fetchUserRecs}
           />
         )}
-        {this._listBody()}
-        {props.waitingForCreate && (
-          <Kb.Box2 direction="vertical" style={styles.waiting} alignItems="center">
-            <Kb.ProgressIndicator type="Small" white={true} style={styles.waitingProgress} />
-          </Kb.Box2>
-        )}
+        {content}
       </Kb.Box2>
     )
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  alphabetIndex: {
-    maxHeight: '80%',
-    position: 'absolute',
-    right: 0,
-    top: Styles.globalMargins.large,
-  },
-  banner: {
-    backgroundColor: Styles.globalColors.blue,
-    padding: Styles.globalMargins.tiny,
-  },
-  bannerButtonContainer: {
-    flexWrap: 'wrap',
-    marginBottom: Styles.globalMargins.xsmall,
-    marginTop: Styles.globalMargins.xsmall,
-  },
-  bannerIcon: {
-    maxHeight: 112,
-  },
-  bannerImportButton: {
-    marginBottom: Styles.globalMargins.tiny,
-    marginRight: Styles.globalMargins.small,
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-  },
-  bannerLaterButton: {
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-  },
-  bannerText: {
-    flexWrap: 'wrap',
-    marginTop: Styles.globalMargins.xsmall,
-  },
-  bannerTextContainer: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  container: Styles.platformStyles({
-    common: {
-      flex: 1,
-      minHeight: 200,
-      position: 'relative',
-    },
-    isElectron: {
-      borderRadius: 4,
-      height: 434,
-      overflow: 'hidden',
-      width: 470,
-    },
-  }),
-  emptyContainer: Styles.platformStyles({
-    common: {
-      flex: 1,
-    },
-    isElectron: {
-      maxWidth: 290,
-      paddingBottom: 40,
-    },
-    isMobile: {
-      maxWidth: '80%',
-    },
-  }),
-  gapAlphaIndices: {
-    ...Styles.padding(2, 6, 2, 2),
-    flexShrink: 1,
-  },
-  importContactsContainer: {
-    justifyContent: 'space-between',
-    padding: Styles.globalMargins.xsmall,
-  },
-  list: Styles.platformStyles({
-    common: {
-      paddingBottom: Styles.globalMargins.small,
-    },
-    isElectron: {
-      marginLeft: Styles.globalMargins.small,
-      marginRight: Styles.globalMargins.small,
-    },
-  }),
-  listContentContainer: Styles.platformStyles({
-    isMobile: {
-      paddingTop: Styles.globalMargins.xtiny,
-    },
-  }),
-  loadingContainer: {
-    alignItems: 'center',
-    flex: 1,
-    justifyContent: 'center',
-  },
-  loadingIcon: Styles.platformStyles({
-    isElectron: {
-      height: 32,
-      width: 32,
-    },
-    isMobile: {
-      height: 48,
-      width: 48,
-    },
-  }),
-  mobileFlex: Styles.platformStyles({
-    isMobile: {flex: 1},
-  }),
-  shrinkingGap: {flexShrink: 1, height: Styles.globalMargins.xtiny},
-  waiting: {
-    ...Styles.globalStyles.fillAbsolute,
-    backgroundColor: Styles.globalColors.black_20,
-  },
-  waitingProgress: {
-    height: 48,
-    width: 48,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      alphabetIndex: {
+        maxHeight: '80%',
+        position: 'absolute',
+        right: 0,
+        top: Styles.globalMargins.large,
+      },
+      banner: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.blue,
+          paddingBottom: Styles.globalMargins.xtiny,
+          paddingRight: Styles.globalMargins.tiny,
+          paddingTop: Styles.globalMargins.xtiny,
+        },
+        isMobile: {zIndex: -1}, // behind ServiceTabBar
+      }),
+      bannerButtonContainer: {
+        alignSelf: 'flex-start',
+        flexWrap: 'wrap',
+        marginBottom: Styles.globalMargins.tiny,
+        marginTop: Styles.globalMargins.tiny,
+      },
+      bannerIcon: {maxHeight: 112},
+      bannerText: {
+        flexWrap: 'wrap',
+        marginTop: Styles.globalMargins.tiny,
+      },
+      bannerTextContainer: {
+        flex: 1,
+        justifyContent: 'center',
+      },
+      container: Styles.platformStyles({
+        common: {
+          position: 'relative',
+        },
+        isElectron: {
+          borderRadius: 4,
+          flex: 1,
+          height: 560,
+          maxHeight: 560,
+          minHeight: 200,
+          overflow: 'visible',
+        },
+        isMobile: {
+          flexGrow: 1,
+          height: '100%',
+        },
+      }),
+      emptyContainer: Styles.platformStyles({
+        common: {flex: 1},
+        isElectron: {
+          maxWidth: 290,
+          paddingBottom: 40,
+        },
+        isMobile: {maxWidth: '80%'},
+      }),
+      emptyServiceText: Styles.platformStyles({
+        isMobile: {
+          padding: Styles.globalMargins.small,
+        },
+      }),
+      fixedWidthContainer: Styles.platformStyles({
+        isElectron: {
+          width: 400,
+        },
+      }),
+      headerContainer: Styles.platformStyles({
+        isElectron: {
+          marginBottom: Styles.globalMargins.xtiny,
+          marginTop: Styles.globalMargins.small + 2,
+        },
+      }),
+      importContactsButton: {
+        marginBottom: Styles.globalMargins.tiny,
+      },
+      importContactsContainer: {
+        justifyContent: 'flex-start',
+        padding: Styles.globalMargins.xsmall,
+      },
+      list: Styles.platformStyles({
+        common: {paddingBottom: Styles.globalMargins.small},
+      }),
+      listContainer: Styles.platformStyles({
+        common: {
+          position: 'relative',
+        },
+        isElectron: {flex: 1, height: '100%', overflow: 'hidden'},
+        isMobile: {
+          flexGrow: 1,
+          width: '100%',
+        },
+      }),
+      listContentContainer: Styles.platformStyles({
+        isMobile: {paddingTop: Styles.globalMargins.xtiny},
+      }),
+      loadingAnimation: Styles.platformStyles({
+        isElectron: {
+          height: 32,
+          width: 32,
+        },
+        isMobile: {
+          height: 48,
+          width: 48,
+        },
+      }),
+      loadingContainer: {
+        flex: 1,
+        justifyContent: 'flex-start',
+      },
+      mobileFlex: Styles.platformStyles({
+        isMobile: {flex: 1},
+      }),
+      newChatHeader: Styles.platformStyles({
+        isElectron: {
+          margin: Styles.globalMargins.xsmall,
+        },
+      }),
+      shrinkingGap: {flexShrink: 1, height: Styles.globalMargins.xtiny},
+      teamAvatar: Styles.platformStyles({
+        isElectron: {
+          alignSelf: 'center',
+          position: 'absolute',
+          top: -16,
+        },
+      }),
+      waiting: {
+        ...Styles.globalStyles.fillAbsolute,
+        backgroundColor: Styles.globalColors.black_20,
+      },
+      waitingProgress: {
+        height: 48,
+        width: 48,
+      },
+    } as const)
+)
 
 export default TeamBuilding

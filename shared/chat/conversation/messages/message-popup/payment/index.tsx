@@ -1,5 +1,6 @@
 import * as React from 'react'
-import {toUpper, upperFirst} from 'lodash-es'
+import toUpper from 'lodash/toUpper'
+import upperFirst from 'lodash/upperFirst'
 import * as Styles from '../../../../../styles'
 
 import {Position} from '../../../../../common-adapters/relative-popup-hoc.types'
@@ -191,10 +192,10 @@ const PaymentPopup = (props: Props) => {
   const header = {
     title: 'header',
     view: (
-      <React.Fragment>
+      <>
         <Header {...headerProps} />
         {!!items.length && <Kb.Divider />}
-      </React.Fragment>
+      </>
     ),
   }
   return (
@@ -212,82 +213,85 @@ const PaymentPopup = (props: Props) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  errorDetails: {
-    maxWidth: 200,
-    paddingLeft: Styles.globalMargins.tiny,
-    paddingRight: Styles.globalMargins.tiny,
-  },
-  headerIcon: Styles.platformStyles({
-    common: {height: headerIconHeight},
-    isAndroid: {
-      marginTop: Styles.globalMargins.tiny,
-    },
-    isElectron: {marginBottom: Styles.globalMargins.small},
-    isMobile: {
-      marginBottom: Styles.globalMargins.small,
-      marginTop: Styles.globalMargins.small,
-    },
-  }),
-  headerTextNotPending: {color: Styles.globalColors.white},
-  headerTextPending: {color: Styles.globalColors.black_50},
-  headerTop: Styles.platformStyles({
-    common: {
-      alignItems: 'center',
-      backgroundColor: Styles.globalColors.purpleDark,
-      paddingBottom: Styles.globalMargins.small,
-    },
-    isElectron: {
-      paddingTop: Styles.globalMargins.small,
-    },
-  }),
-  loadingHeaderTop: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.purpleDark,
-    },
-    isElectron: {
-      height: 133,
-    },
-    isMobile: {
-      height: 215,
-    },
-  }),
-  loadingIndicator: {
-    height: 80,
-    width: 80,
-  },
-  messageInfoContainer: {
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-  },
-  pendingHeaderIcon: Styles.platformStyles({
-    common: {height: pendingIconSize},
-    isAndroid: {
-      marginTop: Styles.globalMargins.tiny,
-    },
-    isElectron: {
-      display: 'inline-block',
-      marginBottom: Styles.globalMargins.small,
-    },
-    isMobile: {
-      marginBottom: Styles.globalMargins.small,
-      marginTop: Styles.globalMargins.small,
-    },
-  }),
-  pendingHeaderTop: Styles.platformStyles({
-    common: {
-      alignItems: 'center',
-      backgroundColor: Styles.globalColors.black_05,
-      paddingBottom: Styles.globalMargins.small,
-    },
-    isElectron: {
-      paddingTop: Styles.globalMargins.small,
-    },
-  }),
-  popupContainer: Styles.platformStyles({
-    isElectron: {maxWidth: 240, minWidth: 200},
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      errorDetails: {
+        maxWidth: 200,
+        paddingLeft: Styles.globalMargins.tiny,
+        paddingRight: Styles.globalMargins.tiny,
+      },
+      headerIcon: Styles.platformStyles({
+        common: {height: headerIconHeight},
+        isAndroid: {
+          marginTop: Styles.globalMargins.tiny,
+        },
+        isElectron: {marginBottom: Styles.globalMargins.small},
+        isMobile: {
+          marginBottom: Styles.globalMargins.small,
+          marginTop: Styles.globalMargins.small,
+        },
+      }),
+      headerTextNotPending: {color: Styles.globalColors.white},
+      headerTextPending: {color: Styles.globalColors.black_50},
+      headerTop: Styles.platformStyles({
+        common: {
+          alignItems: 'center',
+          backgroundColor: Styles.globalColors.purpleDark,
+          paddingBottom: Styles.globalMargins.small,
+        },
+        isElectron: {
+          paddingTop: Styles.globalMargins.small,
+        },
+      }),
+      loadingHeaderTop: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.purpleDark,
+        },
+        isElectron: {
+          height: 133,
+        },
+        isMobile: {
+          height: 215,
+        },
+      }),
+      loadingIndicator: {
+        height: 80,
+        width: 80,
+      },
+      messageInfoContainer: {
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+      },
+      pendingHeaderIcon: Styles.platformStyles({
+        common: {height: pendingIconSize},
+        isAndroid: {
+          marginTop: Styles.globalMargins.tiny,
+        },
+        isElectron: {
+          display: 'inline-block',
+          marginBottom: Styles.globalMargins.small,
+        },
+        isMobile: {
+          marginBottom: Styles.globalMargins.small,
+          marginTop: Styles.globalMargins.small,
+        },
+      }),
+      pendingHeaderTop: Styles.platformStyles({
+        common: {
+          alignItems: 'center',
+          backgroundColor: Styles.globalColors.black_05,
+          paddingBottom: Styles.globalMargins.small,
+        },
+        isElectron: {
+          paddingTop: Styles.globalMargins.small,
+        },
+      }),
+      popupContainer: Styles.platformStyles({
+        isElectron: {maxWidth: 240, minWidth: 200},
+      }),
+    } as const)
+)
 
 const headerTop = (props: HeaderProps) => {
   return props.status === 'pending' ? styles.pendingHeaderTop : styles.headerTop

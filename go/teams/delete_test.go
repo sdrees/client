@@ -49,7 +49,8 @@ func TestDeleteSubteamAdmin(t *testing.T) {
 	assertRole(tc, sub, admin.Username, keybase1.TeamRole_ADMIN)
 
 	// switch to `admin` user
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	if err := admin.Login(tc.G); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,8 @@ func TestDeleteSubteamImpliedAdmin(t *testing.T) {
 	assertRole(tc, sub, admin.Username, keybase1.TeamRole_NONE)
 
 	// switch to `admin` user
-	tc.G.Logout(context.TODO())
+	err := tc.Logout()
+	require.NoError(t, err)
 	if err := admin.Login(tc.G); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func TestDeleteSubteamImpliedAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := GetTeamByNameForTest(context.Background(), tc.G, sub, false, false)
+	_, err = GetTeamByNameForTest(context.Background(), tc.G, sub, false, false)
 	if err == nil {
 		t.Fatal("no error getting deleted team")
 	}
@@ -110,7 +112,8 @@ func TestRecreateSubteam(t *testing.T) {
 	defer tc.Cleanup()
 
 	// switch to `admin` user
-	tc.G.Logout(context.TODO())
+	err := tc.Logout()
+	require.NoError(t, err)
 	if err := admin.Login(tc.G); err != nil {
 		t.Fatal(err)
 	}
@@ -187,4 +190,22 @@ func (t *teamsUI) ConfirmRootTeamDelete(context.Context, keybase1.ConfirmRootTea
 
 func (t *teamsUI) ConfirmSubteamDelete(context.Context, keybase1.ConfirmSubteamDeleteArg) (bool, error) {
 	return true, nil
+}
+
+func TestDoubleTombstone(t *testing.T) {
+	tc, _, teamname := memberSetup(t)
+	defer tc.Cleanup()
+	name, err := keybase1.TeamNameFromString(teamname)
+	require.NoError(t, err)
+
+	id, err := ResolveNameToID(context.TODO(), tc.G, name)
+	require.NoError(t, err)
+
+	mctx := libkb.NewMetaContextForTest(tc)
+
+	err = TombstoneTeam(mctx, id)
+	require.NoError(t, err)
+
+	err = TombstoneTeam(mctx, id)
+	require.NoError(t, err, "errored on trying to tombstone a tombstoned team")
 }

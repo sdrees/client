@@ -7,6 +7,7 @@ import * as RouteTreeGen from '../../../actions/route-tree-gen'
 import {isDarwin} from '../../../constants/platform'
 import Normal from '.'
 import {compose, connect, isMobile, withStateHandlers} from '../../../util/container'
+import {indefiniteArticle} from '../../../util/string'
 
 type OwnProps = {
   conversationIDKey: Types.ConversationIDKey
@@ -23,11 +24,12 @@ const mapStateToProps = (state, {conversationIDKey}) => {
     Constants.waitingKeyThreadLoad(conversationIDKey),
     Constants.waitingKeyInboxSyncStarted
   )
-  const meta = Constants.getMeta(state, conversationIDKey)
+  const showThreadSearch = Constants.getThreadSearchInfo(state, conversationIDKey).visible
   return {
+    _meta: Constants.getMeta(state, conversationIDKey),
     conversationIDKey,
     showLoader,
-    threadLoadedOffline: meta.offline,
+    showThreadSearch,
   }
 }
 
@@ -62,24 +64,28 @@ const hotkeys = [`${isDarwin ? 'command' : 'ctrl'}+f`]
 const mergeProps = (stateProps, dispatchProps, _: OwnProps) => {
   return {
     conversationIDKey: stateProps.conversationIDKey,
+    dragAndDropRejectReason: stateProps._meta.cannotWrite
+      ? `You must be at least ${indefiniteArticle(stateProps._meta.minWriterRole)} ${
+          stateProps._meta.minWriterRole
+        } to post.`
+      : undefined,
     hotkeys,
     jumpToRecent: dispatchProps.jumpToRecent,
-    onAttach: (paths: Array<string>) => dispatchProps._onAttach(stateProps.conversationIDKey, paths),
+    onAttach: stateProps._meta.cannotWrite
+      ? null
+      : (paths: Array<string>) => dispatchProps._onAttach(stateProps.conversationIDKey, paths),
     onHotkey: dispatchProps.onHotkey,
     onPaste: (data: Buffer) => dispatchProps._onPaste(stateProps.conversationIDKey, data),
     onShowTracker: dispatchProps.onShowTracker,
     onToggleInfoPanel: dispatchProps.onToggleInfoPanel,
     showLoader: stateProps.showLoader,
-    threadLoadedOffline: stateProps.threadLoadedOffline,
+    showThreadSearch: stateProps.showThreadSearch,
+    threadLoadedOffline: stateProps._meta.threadLoadedOffline,
   }
 }
 
 export default compose(
-  connect(
-    mapStateToProps,
-    mapDispatchToProps,
-    mergeProps
-  ),
+  connect(mapStateToProps, mapDispatchToProps, mergeProps),
   withStateHandlers(
     {focusInputCounter: 0, scrollListDownCounter: 0, scrollListToBottomCounter: 0, scrollListUpCounter: 0},
     {

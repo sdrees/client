@@ -1,12 +1,12 @@
 // Meta manages the metadata about a conversation. Participants, isMuted, reset people, etc. Things that drive the inbox
-import * as I from 'immutable'
 import * as RPCChatTypes from '../types/rpc-chat-gen'
 import * as RPCTypes from '../types/rpc-gen'
 import * as WalletConstants from '../wallets'
 import * as Types from '../types/chat2'
 import * as TeamConstants from '../teams'
+import * as Message from './message'
 import {memoize} from '../../util/memoize'
-import {_ConversationMeta} from '../types/chat2/meta'
+import {ConversationMeta, PinnedMessageInfo} from '../types/chat2/meta'
 import {TypedState} from '../reducer'
 import {formatTimeForConversationList} from '../../util/timestamp'
 import {globalColors} from '../../styles'
@@ -15,6 +15,7 @@ import {toByteArray} from 'base64-js'
 import {noConversationIDKey, isValidConversationIDKey} from '../types/chat2/common'
 import {getFullname} from '../users'
 import {AllowedColors} from '../../common-adapters/text'
+import shallowEqual from 'shallowequal'
 
 const conversationMemberStatusToMembershipType = (m: RPCChatTypes.ConversationMemberStatus) => {
   switch (m) {
@@ -31,7 +32,9 @@ const conversationMemberStatusToMembershipType = (m: RPCChatTypes.ConversationMe
 const supersededConversationIDToKey = (id: string | Buffer): string =>
   typeof id === 'string' ? Buffer.from(toByteArray(id)).toString('hex') : id.toString('hex')
 
-export const unverifiedInboxUIItemToConversationMeta = (i: RPCChatTypes.UnverifiedInboxUIItem) => {
+export const unverifiedInboxUIItemToConversationMeta = (
+  i: RPCChatTypes.UnverifiedInboxUIItem
+): ConversationMeta | null => {
   // Private chats only
   if (i.visibility !== RPCTypes.TLFVisibility.private) {
     return null
@@ -43,17 +46,18 @@ export const unverifiedInboxUIItemToConversationMeta = (i: RPCChatTypes.Unverifi
   }
 
   // We only treat implicit adhoc teams as having resetParticipants
-  const resetParticipants = I.Set(
+  const resetParticipants: Set<string> = new Set(
     i.localMetadata &&
-      (i.membersType === RPCChatTypes.ConversationMembersType.impteamnative ||
-        i.membersType === RPCChatTypes.ConversationMembersType.impteamupgrade) &&
-      i.localMetadata.resetParticipants
+    (i.membersType === RPCChatTypes.ConversationMembersType.impteamnative ||
+      i.membersType === RPCChatTypes.ConversationMembersType.impteamupgrade) &&
+    i.localMetadata.resetParticipants
       ? i.localMetadata.resetParticipants
       : []
   )
 
-  const participants = I.List(i.localMetadata ? i.localMetadata.writerNames || [] : (i.name || '').split(','))
   const isTeam = i.membersType === RPCChatTypes.ConversationMembersType.team
+  const participants =
+    i.localMetadata && isTeam ? i.localMetadata.writerNames || [] : (i.name || '').split(',')
   const channelname = isTeam && i.localMetadata ? i.localMetadata.channelName : ''
 
   const supersededBy = conversationMetadataToMetaSupersedeInfo(i.supersededBy)
@@ -67,7 +71,8 @@ export const unverifiedInboxUIItemToConversationMeta = (i: RPCChatTypes.Unverifi
     notificationsMobile,
   } = parseNotificationSettings(i.notifications)
 
-  return makeConversationMeta({
+  return {
+    ...makeConversationMeta(),
     channelname,
     commands: i.commands,
     conversationIDKey: Types.stringToConversationIDKey(i.convID),
@@ -76,10 +81,12 @@ export const unverifiedInboxUIItemToConversationMeta = (i: RPCChatTypes.Unverifi
     draft: i.draft || '',
     inboxLocalVersion: i.localVersion,
     inboxVersion: i.version,
+    isEmpty: false,
     isMuted: i.status === RPCChatTypes.ConversationStatus.muted,
     maxMsgID: i.maxMsgID,
     maxVisibleMsgID: i.maxVisibleMsgID,
     membershipType: conversationMemberStatusToMembershipType(i.memberStatus),
+    nameParticipants: participants,
     notificationsDesktop,
     notificationsGlobalIgnoreMentions,
     notificationsMobile,
@@ -92,6 +99,7 @@ export const unverifiedInboxUIItemToConversationMeta = (i: RPCChatTypes.Unverifi
     status: i.status,
     supersededBy: supersededBy ? Types.stringToConversationIDKey(supersededBy) : noConversationIDKey,
     supersedes: supersedes ? Types.stringToConversationIDKey(supersedes) : noConversationIDKey,
+    teamID: i.tlfID,
     teamRetentionPolicy,
     teamType: getTeamType(i),
     teamname,
@@ -99,7 +107,7 @@ export const unverifiedInboxUIItemToConversationMeta = (i: RPCChatTypes.Unverifi
     tlfname: i.name,
     trustedState: 'untrusted',
     wasFinalizedBy: i.finalizeInfo ? i.finalizeInfo.resetUser : '',
-  })
+  }
 }
 
 const conversationMetadataToMetaSupersedeInfo = (metas?: Array<RPCChatTypes.ConversationMetadata> | null) => {
@@ -143,15 +151,26 @@ export const updateMeta = (
       (newMeta.trustedState === 'trusted' && oldMeta.trustedState !== 'trusted') ||
       newMeta.inboxLocalVersion > oldMeta.inboxLocalVersion
     ) {
-      // prettier-ignore
-      return newMeta.withMutations(nm => {
-        // keep immutable stuff to reduce render thrashing
-        I.is(oldMeta.participants, nm.participants) && nm.set('participants', oldMeta.participants)
-        I.is(oldMeta.rekeyers, nm.rekeyers) && nm.set('rekeyers', oldMeta.rekeyers)
-        I.is(oldMeta.resetParticipants, nm.resetParticipants) && nm.set('resetParticipants', oldMeta.resetParticipants)
-        I.is(oldMeta.retentionPolicy, nm.retentionPolicy) && nm.set('retentionPolicy', oldMeta.retentionPolicy)
-        I.is(oldMeta.teamRetentionPolicy, nm.teamRetentionPolicy) && nm.set('teamRetentionPolicy', oldMeta.teamRetentionPolicy)
-      })
+      const merged = {...newMeta}
+      if (shallowEqual(merged.participants, oldMeta.participants)) {
+        merged.participants = oldMeta.participants
+      }
+      if (shallowEqual(merged.nameParticipants, oldMeta.nameParticipants)) {
+        merged.nameParticipants = oldMeta.nameParticipants
+      }
+      if (shallowEqual([...merged.rekeyers], [...oldMeta.rekeyers])) {
+        merged.rekeyers = oldMeta.rekeyers
+      }
+      if (shallowEqual([...merged.resetParticipants], [...oldMeta.resetParticipants])) {
+        merged.resetParticipants = oldMeta.resetParticipants
+      }
+      if (shallowEqual(merged.retentionPolicy, oldMeta.retentionPolicy)) {
+        merged.retentionPolicy = oldMeta.retentionPolicy
+      }
+      if (shallowEqual(merged.teamRetentionPolicy, oldMeta.teamRetentionPolicy)) {
+        merged.teamRetentionPolicy = oldMeta.teamRetentionPolicy
+      }
+      return merged
     }
     return oldMeta
   }
@@ -207,11 +226,12 @@ export const updateMetaWithNotificationSettings = (
     notificationsGlobalIgnoreMentions,
     notificationsMobile,
   } = parseNotificationSettings(notifications)
-  return old.merge({
+  return {
+    ...old,
     notificationsDesktop: notificationsDesktop,
     notificationsGlobalIgnoreMentions: notificationsGlobalIgnoreMentions,
     notificationsMobile: notificationsMobile,
-  }) as Types.ConversationMeta
+  } as Types.ConversationMeta
 }
 
 const UIItemToRetentionPolicies = (
@@ -236,7 +256,11 @@ const UIItemToRetentionPolicies = (
   return {retentionPolicy, teamRetentionPolicy}
 }
 
-export const inboxUIItemToConversationMeta = (i: RPCChatTypes.InboxUIItem, allowEmpty?: boolean) => {
+export const inboxUIItemToConversationMeta = (
+  state: TypedState,
+  i: RPCChatTypes.InboxUIItem,
+  allowEmpty?: boolean
+): ConversationMeta | null => {
   // Private chats only
   if (i.visibility !== RPCTypes.TLFVisibility.private) {
     return null
@@ -251,10 +275,10 @@ export const inboxUIItemToConversationMeta = (i: RPCChatTypes.InboxUIItem, allow
   }
 
   // We only treat implied adhoc teams as having resetParticipants
-  const resetParticipants = I.Set(
+  const resetParticipants = new Set(
     (i.membersType === RPCChatTypes.ConversationMembersType.impteamnative ||
       i.membersType === RPCChatTypes.ConversationMembersType.impteamupgrade) &&
-      i.resetParticipants
+    i.resetParticipants
       ? i.resetParticipants
       : []
   )
@@ -273,43 +297,65 @@ export const inboxUIItemToConversationMeta = (i: RPCChatTypes.InboxUIItem, allow
 
   const minWriterRoleEnum =
     i.convSettings && i.convSettings.minWriterRoleInfo ? i.convSettings.minWriterRoleInfo.role : undefined
-  let minWriterRole = minWriterRoleEnum ? TeamConstants.teamRoleByEnum[minWriterRoleEnum] : 'reader'
+  let minWriterRole = (minWriterRoleEnum && TeamConstants.teamRoleByEnum[minWriterRoleEnum]) || 'reader'
   if (minWriterRole === 'none') {
     // means nothing. set it to reader.
     minWriterRole = 'reader'
   }
 
-  let cannotWrite =
+  const cannotWrite =
     i.convSettings && i.convSettings.minWriterRoleInfo ? i.convSettings.minWriterRoleInfo.cannotWrite : false
-
-  return makeConversationMeta({
+  const conversationIDKey = Types.stringToConversationIDKey(i.convID)
+  let pinnedMsg: PinnedMessageInfo | undefined
+  if (i.pinnedMsg) {
+    const message = Message.uiMessageToMessage(state, conversationIDKey, i.pinnedMsg.message)
+    if (message) {
+      pinnedMsg = {
+        message,
+        pinnerUsername: i.pinnedMsg.pinnerUsername,
+      }
+    }
+  }
+  const participants = i.participants || []
+  return {
+    ...makeConversationMeta(),
     botCommands: i.botCommands,
     cannotWrite,
     channelname: (isTeam && i.channel) || '',
     commands: i.commands,
-    conversationIDKey: Types.stringToConversationIDKey(i.convID),
+    conversationIDKey,
     description: i.headline,
     descriptionDecorated: i.headlineDecorated,
     draft: i.draft || '',
     inboxLocalVersion: i.localVersion,
     inboxVersion: i.version,
+    isEmpty: i.isEmpty,
     isMuted: i.status === RPCChatTypes.ConversationStatus.muted,
     maxMsgID: i.maxMsgID,
     maxVisibleMsgID: i.maxVisibleMsgID,
     membershipType: conversationMemberStatusToMembershipType(i.memberStatus),
     minWriterRole,
+    nameParticipants: (i.participants || []).reduce<Array<string>>((l, part) => {
+      if (part.inConvName) {
+        l.push(part.assertion)
+      }
+      return l
+    }, []),
     notificationsDesktop,
     notificationsGlobalIgnoreMentions,
     notificationsMobile,
-    participantToContactName: I.Map(
-      (i.participants || []).reduce<{[key: string]: string}>((map, part) => {
-        if (part.contactName) {
-          map[part.assertion] = part.contactName
-        }
-        return map
-      }, {})
-    ),
-    participants: I.List((i.participants || []).map(part => part.assertion)),
+    participantToContactName: participants
+      ? new Map(
+          participants.reduce<Array<[string, string]>>((arr, part) => {
+            if (part.contactName) {
+              arr.push([part.assertion, part.contactName])
+            }
+            return arr
+          }, [])
+        )
+      : new Map(),
+    participants: (i.participants || []).map(part => part.assertion),
+    pinnedMsg,
     readMsgID: i.readMsgID,
     resetParticipants,
     retentionPolicy,
@@ -318,6 +364,7 @@ export const inboxUIItemToConversationMeta = (i: RPCChatTypes.InboxUIItem, allow
     status: i.status,
     supersededBy: supersededBy ? Types.stringToConversationIDKey(supersededBy) : noConversationIDKey,
     supersedes: supersedes ? Types.stringToConversationIDKey(supersedes) : noConversationIDKey,
+    teamID: i.tlfID,
     teamRetentionPolicy,
     teamType: getTeamType(i),
     teamname: (isTeam && i.name) || '',
@@ -325,10 +372,10 @@ export const inboxUIItemToConversationMeta = (i: RPCChatTypes.InboxUIItem, allow
     tlfname: i.name,
     trustedState: 'trusted',
     wasFinalizedBy: i.finalizeInfo ? i.finalizeInfo.resetUser : '',
-  })
+  }
 }
 
-export const makeConversationMeta = I.Record<_ConversationMeta>({
+export const makeConversationMeta = (): Types.ConversationMeta => ({
   botCommands: {} as RPCChatTypes.ConversationCommandGroups,
   cannotWrite: false,
   channelname: '',
@@ -339,26 +386,30 @@ export const makeConversationMeta = I.Record<_ConversationMeta>({
   draft: '',
   inboxLocalVersion: -1,
   inboxVersion: -1,
+  isEmpty: false,
   isMuted: false,
   maxMsgID: -1,
   maxVisibleMsgID: -1,
-  membershipType: 'active' as Types.MembershipType,
-  minWriterRole: 'reader' as Types.TeamRoleType,
-  notificationsDesktop: 'never' as Types.NotificationsType,
+  membershipType: 'active' as const,
+  minWriterRole: 'reader' as const,
+  nameParticipants: [],
+  notificationsDesktop: 'never' as const,
   notificationsGlobalIgnoreMentions: false,
-  notificationsMobile: 'never' as Types.NotificationsType,
+  notificationsMobile: 'never' as const,
   offline: false,
-  participantToContactName: I.Map(),
-  participants: I.List<string>(),
+  participantToContactName: new Map(),
+  participants: [],
+  pinnedMsg: undefined,
   readMsgID: -1,
-  rekeyers: I.Set(),
-  resetParticipants: I.Set(),
+  rekeyers: new Set(),
+  resetParticipants: new Set(),
   retentionPolicy: TeamConstants.makeRetentionPolicy(),
   snippet: '',
   snippetDecoration: '',
   status: RPCChatTypes.ConversationStatus.unfiled as RPCChatTypes.ConversationStatus,
   supersededBy: noConversationIDKey,
   supersedes: noConversationIDKey,
+  teamID: '',
   teamRetentionPolicy: TeamConstants.makeRetentionPolicy(),
   teamType: 'adhoc' as Types.TeamType,
   teamname: '',
@@ -370,19 +421,19 @@ export const makeConversationMeta = I.Record<_ConversationMeta>({
 
 const emptyMeta = makeConversationMeta()
 export const getMeta = (state: TypedState, id: Types.ConversationIDKey) =>
-  state.chat2.metaMap.get(id, emptyMeta)
+  state.chat2.metaMap.get(id) || emptyMeta
 
 // we want the memoized function to have access to state but not have it be a part of the memoization else it'll fail always
 let _unmemoizedState: TypedState
 const _getParticipantSuggestionsMemoized = memoize(
-  (participants: I.List<string>, teamType: Types.TeamType) => {
-    let suggestions = participants.map(username => ({
+  (participants: Array<string>, teamType: Types.TeamType) => {
+    const suggestions = participants.map(username => ({
       fullName: getFullname(_unmemoizedState, username) || '',
       username,
     }))
     if (teamType !== 'adhoc') {
       const fullName = teamType === 'small' ? 'Everyone in this team' : 'Everyone in this channel'
-      suggestions = suggestions.push({fullName, username: 'channel'}, {fullName, username: 'here'})
+      suggestions.push({fullName, username: 'channel'}, {fullName, username: 'here'})
     }
     return suggestions
   }
@@ -396,7 +447,7 @@ export const getParticipantSuggestions = (state: TypedState, id: Types.Conversat
 
 export const getChannelSuggestions = (state: TypedState, teamname: string) => {
   if (!teamname) {
-    return I.List()
+    return []
   }
   // First try channelinfos (all channels in a team), then try inbox (the
   // partial list of channels that you have joined).
@@ -406,34 +457,42 @@ export const getChannelSuggestions = (state: TypedState, teamname: string) => {
       .toIndexedSeq()
       .toList()
       .map(conv => conv.channelname)
+      .toArray()
   }
-  return state.chat2.metaMap
-    .filter(v => v.teamname === teamname)
-    .map(v => v.channelname)
-    .toList()
+  return [...state.chat2.metaMap.values()].filter(v => v.teamname === teamname).map(v => v.channelname)
 }
 
-export const getAllChannels = (state: TypedState) => {
-  return state.chat2.metaMap
+let _getAllChannelsRet: Array<{channelname: string; teamname: string}> = []
+// TODO why do this for all teams?
+const _getAllChannelsMemo = memoize((mm: TypedState['chat2']['metaMap']) =>
+  [...mm.values()]
     .filter(v => v.teamname && v.channelname && v.teamType === 'big')
     .map(({channelname, teamname}) => ({channelname, teamname}))
-    .toList()
+)
+export const getAllChannels = (state: TypedState) => {
+  const ret = _getAllChannelsMemo(state.chat2.metaMap)
+
+  if (shallowEqual(ret, _getAllChannelsRet)) {
+    return _getAllChannelsRet
+  }
+  _getAllChannelsRet = ret
+  return _getAllChannelsRet
 }
 
 export const getChannelForTeam = (state: TypedState, teamname: string, channelname: string) =>
-  state.chat2.metaMap.find(
-    m => m.teamname === teamname && m.channelname === channelname,
-    undefined,
-    emptyMeta
-  )
+  [...state.chat2.metaMap.values()].find(m => m.teamname === teamname && m.channelname === channelname) ||
+  emptyMeta
 
 const blankCommands: Array<RPCChatTypes.ConversationCommand> = []
 
-export const getCommands = (state: TypedState, id: Types.ConversationIDKey) => {
+export const getCommands = (
+  state: TypedState,
+  id: Types.ConversationIDKey
+): Array<RPCChatTypes.ConversationCommand> => {
   const {commands} = getMeta(state, id)
-  if (commands.typ === RPCChatTypes.ConversationCommandGroupsTyp.builtin && commands.builtin) {
+  if (commands.typ === RPCChatTypes.ConversationCommandGroupsTyp.builtin) {
     return state.chat2.staticConfig
-      ? state.chat2.staticConfig.builtinCommands[commands.builtin]
+      ? state.chat2.staticConfig.builtinCommands[commands.builtin] || blankCommands
       : blankCommands
   } else {
     return blankCommands
@@ -442,7 +501,7 @@ export const getCommands = (state: TypedState, id: Types.ConversationIDKey) => {
 
 export const getBotCommands = (state: TypedState, id: Types.ConversationIDKey) => {
   const {botCommands} = getMeta(state, id)
-  if (botCommands.typ === RPCChatTypes.ConversationCommandGroupsTyp.custom && botCommands.custom) {
+  if (botCommands.typ === RPCChatTypes.ConversationCommandGroupsTyp.custom) {
     return botCommands.custom.commands || blankCommands
   } else {
     return blankCommands
@@ -458,21 +517,18 @@ export const shouldShowWalletsIcon = (state: TypedState, id: Types.ConversationI
   return (
     !sendDisabled &&
     meta.teamType === 'adhoc' &&
-    meta.participants.filter(u => u !== state.config.username).size === 1
+    meta.nameParticipants.filter(u => u !== state.config.username).length === 1
   )
 }
 
-export const getRowStyles = (meta: Types.ConversationMeta, isSelected: boolean, hasUnread: boolean) => {
-  const isError = meta.trustedState === 'error'
+export const getRowStyles = (isSelected: boolean, hasUnread: boolean) => {
   const backgroundColor = isSelected
     ? globalColors.blue
     : isMobile
     ? globalColors.fastBlank
     : globalColors.blueGrey
   const showBold = !isSelected && hasUnread
-  const subColor: AllowedColors = isError
-    ? globalColors.redDark
-    : isSelected
+  const subColor: AllowedColors = isSelected
     ? globalColors.white
     : hasUnread
     ? globalColors.black
@@ -491,11 +547,11 @@ export const getRowStyles = (meta: Types.ConversationMeta, isSelected: boolean, 
 
 export const getConversationIDKeyMetasToLoad = (
   conversationIDKeys: Array<Types.ConversationIDKey>,
-  metaMap: I.Map<Types.ConversationIDKey, Types.ConversationMeta>
+  metaMap: Map<Types.ConversationIDKey, Types.ConversationMeta>
 ) =>
   conversationIDKeys.reduce((arr: Array<string>, id) => {
     if (id && isValidConversationIDKey(id)) {
-      const trustedState = metaMap.getIn([id, 'trustedState'])
+      const trustedState = (metaMap.get(id) || {trustedState: undefined}).trustedState
       if (trustedState !== 'requesting' && trustedState !== 'trusted') {
         arr.push(id)
       }
@@ -504,9 +560,9 @@ export const getConversationIDKeyMetasToLoad = (
   }, [])
 
 export const getRowParticipants = (meta: Types.ConversationMeta, username: string) =>
-  meta.participants
+  meta.nameParticipants
     // Filter out ourselves unless it's our 1:1 conversation
-    .filter((participant, _, list) => (list.size === 1 ? true : participant !== username))
+    .filter((participant, _, list) => (list.length === 1 ? true : participant !== username))
 
 export const timestampToString = (meta: Types.ConversationMeta) =>
   formatTimeForConversationList(meta.timestamp)
@@ -523,7 +579,7 @@ export const isDecryptingSnippet = (meta: Types.ConversationMeta) =>
   meta.trustedState === 'requesting' || meta.trustedState === 'untrusted'
 
 export const getTeams = (metaMap: Types.MetaMap) =>
-  metaMap.reduce((l: Array<string>, meta) => {
+  [...metaMap.values()].reduce<Array<string>>((l, meta) => {
     if (meta.teamname && meta.channelname === 'general') {
       l.push(meta.teamname)
     }

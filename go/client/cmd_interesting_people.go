@@ -22,7 +22,6 @@ func (c *CmdInterestingPeople) ParseArgv(ctx *cli.Context) error {
 }
 
 func (c *CmdInterestingPeople) Run() error {
-
 	cli, err := GetUserClient(c.G())
 	if err != nil {
 		return err
@@ -34,8 +33,9 @@ func (c *CmdInterestingPeople) Run() error {
 	}
 
 	for _, user := range users {
-		c.G().UI.GetTerminalUI().Output(user.Username + "\n")
+		_ = c.G().UI.GetTerminalUI().Output(user.Username + "\n")
 	}
+
 	return nil
 }
 func NewCmdInterestingPeopleRunner(g *libkb.GlobalContext) *CmdInterestingPeople {

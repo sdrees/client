@@ -3,7 +3,7 @@ import * as I from 'immutable'
 import * as Kb from '../../../../common-adapters'
 import * as Types from '../../../../constants/types/wallets'
 import * as Styles from '../../../../styles'
-import {Props} from './index.types'
+import {Props} from '.'
 
 const headerKey = '_header'
 
@@ -56,19 +56,22 @@ const DisplayCurrencyDropdown = (props: Props) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  container: {alignItems: 'center', justifyContent: 'flex-start'},
-  dropdown: {
-    alignItems: 'center',
-    flexShrink: 1,
-    marginBottom: Styles.globalMargins.xtiny,
-  },
-  dropdownHeader: {padding: Styles.globalMargins.xsmall},
-  itemSelected: {color: Styles.globalColors.blueDark},
-  progressIndicator: {
-    height: 17,
-    width: 17,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: {alignItems: 'center', justifyContent: 'flex-start'},
+      dropdown: {
+        alignItems: 'center',
+        flexShrink: 1,
+        marginBottom: Styles.globalMargins.xtiny,
+      },
+      dropdownHeader: {padding: Styles.globalMargins.xsmall},
+      itemSelected: {color: Styles.globalColors.blueDark},
+      progressIndicator: {
+        height: 17,
+        width: 17,
+      },
+    } as const)
+)
 
 export default DisplayCurrencyDropdown

@@ -2,9 +2,9 @@
 
 protocol chatUi {
 
-  import idl "github.com/keybase/client/go/protocol/keybase1" as keybase1;
-  import idl "github.com/keybase/client/go/protocol/gregor1" as gregor1;
-  import idl "github.com/keybase/client/go/protocol/stellar1" as stellar1;
+  import idl "../keybase1" as keybase1;
+  import idl "../gregor1" as gregor1;
+  import idl "../stellar1" as stellar1;
   import idl "common.avdl";
   import idl "unfurl.avdl";
   import idl "commands.avdl";
@@ -14,6 +14,53 @@ protocol chatUi {
     string previous;
     int num;
     boolean last;
+  }
+
+  record UIInboxSmallTeamRow {
+    string convID;
+    string name;
+    gregor1.Time time;
+    union { null, string } snippet;
+    union { null, string } snippetDecoration;
+    union { null, string } draft;
+    boolean isMuted;
+    boolean isTeam;
+  }
+
+  enum UIInboxBigTeamRowTyp {
+    LABEL_1,
+    CHANNEL_2
+  }
+
+  record UIInboxBigTeamChannelRow {
+    string convID;
+    string teamname;
+    string channelname;
+    union { null, string } draft;
+    boolean isMuted;
+  }
+
+  record UIInboxBigTeamLabelRow {
+    string name;
+    string id;
+  }
+
+  variant UIInboxBigTeamRow switch (UIInboxBigTeamRowTyp state) {
+    case LABEL: UIInboxBigTeamLabelRow;
+    case CHANNEL: UIInboxBigTeamChannelRow;
+  }
+
+  record UIInboxReselectInfo {
+     // we use this to defeat any race conditions, the UI can double check it actually has this selected
+    string oldConvID;
+    union { null, string } newConvID;
+  }
+
+  record UIInboxLayout {
+    array<UIInboxSmallTeamRow> smallTeams;
+    array<UIInboxBigTeamRow> bigTeams;
+    union { null, UIInboxReselectInfo } reselectInfo;
+    array<UIInboxSmallTeamRow> widgetList;
   }
 
   record UnverifiedInboxUIItemMetadata {
@@ -28,6 +75,7 @@ protocol chatUi {
 
   record UnverifiedInboxUIItem {
     string convID;
+    string tlfID;
     TopicType topicType;
     boolean isPublic;
     string name;
@@ -61,7 +109,7 @@ protocol chatUi {
     boolean offline;
   }
 
-    enum UIParticipantType {
+  enum UIParticipantType {
     NONE_0,
     USER_1, // Keybase or SBS
     PHONENO_2,
@@ -71,12 +119,19 @@ protocol chatUi {
   record UIParticipant {
     UIParticipantType type;
     string assertion;
+    boolean inConvName;
     union { null, string } fullName;
     union { null, string } contactName; // if set this is an imptofu conversation with someone in our contacts
   }
 
+  record UIPinnedMessage {
+    UIMessage message;
+    string pinnerUsername;
+  }
+
   record InboxUIItem {
     string convID;
+    string tlfID;
     TopicType topicType;
     boolean isPublic;
     boolean isEmpty;
@@ -114,6 +169,9 @@ protocol chatUi {
     // Command support
     ConversationCommandGroups commands;
     ConversationCommandGroups botCommands;
+
+    // Pinned message
+    union { null, UIPinnedMessage} pinnedMsg;
   }
 
   record InboxUIItemError {
@@ -214,6 +272,9 @@ protocol chatUi {
     boolean isDeleteable;
     boolean isEditable;
     union { null, UIMessage } replyTo;
+    union { null, MessageID} pinnedMessageID;
+    // Non-empty if this message is keyed for a bot
+    string botUsername;
   }
 
   record UIMessageOutbox {
@@ -234,11 +295,18 @@ protocol chatUi {
     union { null, MakePreviewRes } preview;
   }
 
+  record UIMessageJourneycard {
+    double ordinal; // Position in conversation. A float like {msgID:4,offset:1} -> "4.001"
+    JourneycardType cardType;
+    MessageID highlightMsgID; // Message ID to highlight in MSG_ATTENTION
+  }
+
   enum MessageUnboxedState {
     VALID_1,
     ERROR_2,
     OUTBOX_3,
-    PLACEHOLDER_4
+    PLACEHOLDER_4,
+    JOURNEYCARD_5
   }
 
   variant UIMessage switch (MessageUnboxedState state) {
@@ -246,6 +314,7 @@ protocol chatUi {
     case ERROR: MessageUnboxedError;
     case OUTBOX: UIMessageOutbox;
     case PLACEHOLDER: MessageUnboxedPlaceholder;
+    case JOURNEYCARD: UIMessageJourneycard;
   }
 
   record UIMessages {
@@ -268,7 +337,8 @@ protocol chatUi {
     CHANNELNAMEMENTION_2,
     MAYBEMENTION_3,
     LINK_4,
-    MAILTO_5
+    MAILTO_5,
+    KBFSPATH_6
   }
 
   enum UIMaybeMentionStatus {
@@ -281,6 +351,7 @@ protocol chatUi {
   record UILinkDecoration {
     string display;
     string url;
+    string punycode;
   }
 
   variant UIMaybeMentionInfo switch (UIMaybeMentionStatus status) {
@@ -297,14 +368,16 @@ protocol chatUi {
     case MAYBEMENTION: MaybeMention;
     case LINK: UILinkDecoration;
     case MAILTO: UILinkDecoration;
+    case KBFSPATH: KBFSPath;
   }
 
   void chatAttachmentDownloadStart(int sessionID);
   void chatAttachmentDownloadProgress(int sessionID, long bytesComplete, long bytesTotal) oneway;
   void chatAttachmentDownloadDone(int sessionID);
 
-  void chatInboxUnverified(int sessionID, string inbox);
-  void chatInboxConversation(int sessionID, string conv);
+  void chatInboxLayout(int sessionID, string layout); // layout is JSON of UIInboxLayout
+  void chatInboxUnverified(int sessionID, string inbox); // inbox is JSON of array<UnverifiedInboxUIItems>
+  void chatInboxConversation(int sessionID, string convs); // convs is JSON of array<InboxUIItem>
   void chatInboxFailed(int sessionID, ConversationID convID, InboxUIItemError error);
 
   enum UIChatThreadStatusTyp {
@@ -319,7 +392,7 @@ protocol chatUi {
     case VALIDATING: int;
     case VALIDATED: void;
   }
-  void chatThreadCached(int sessionID, union { null, string } thread);
+  void chatThreadCached(int sessionID, union { null, string } thread); // thread is JSON of UIMessages
   void chatThreadFull(int sessionID, string thread);
   void chatThreadStatus(int sessionID, UIChatThreadStatus status);
 
@@ -462,7 +535,11 @@ protocol chatUi {
 
   // Location support
   @typedef("uint64") @lint("ignore") record LocationWatchID {}
-  LocationWatchID chatWatchPosition(int sessionID, ConversationID convID);
+  enum UIWatchPositionPerm {
+    BASE_0,
+    ALWAYS_1
+  }
+  LocationWatchID chatWatchPosition(int sessionID, ConversationID convID, UIWatchPositionPerm perm);
   void chatClearWatch(int sessionID, LocationWatchID id);
 
   // Slash command feedback
@@ -482,4 +559,6 @@ protocol chatUi {
     BLANK_3
   }
   void chatBotCommandsUpdateStatus(int sessionID, string convID, UIBotCommandsUpdateStatus status);
+
+  void triggerContactSync(int sessionID);
 }

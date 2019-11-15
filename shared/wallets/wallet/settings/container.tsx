@@ -3,7 +3,7 @@ import * as Container from '../../../util/container'
 import {anyWaiting} from '../../../constants/waiting'
 import * as I from 'immutable'
 import * as Constants from '../../../constants/wallets'
-import {IconType} from '../../../common-adapters/icon.constants'
+import {IconType} from '../../../common-adapters/icon.constants-gen'
 import * as IconUtils from '../../../common-adapters/icon.shared'
 import * as Types from '../../../constants/types/wallets'
 import * as WalletsGen from '../../../actions/wallets-gen'
@@ -63,7 +63,6 @@ const mapStateToProps = (state: Container.TypedState) => {
   const mobileOnlyMode = state.wallets.mobileOnlyMap.get(accountID, false)
   const mobileOnlyWaiting = anyWaiting(state, Constants.setAccountMobileOnlyWaitingKey(accountID))
   const canSubmitTx = account.canSubmitTx
-  const inflationDest = Constants.getInflationDestination(state, accountID)
   const externalPartners = Constants.getExternalPartners(state)
   return {
     accountID,
@@ -72,10 +71,6 @@ const mapStateToProps = (state: Container.TypedState) => {
     currency,
     currencyWaiting,
     externalPartners,
-    inflationDestination:
-      inflationDest === Constants.noAccountInflationDestination
-        ? ''
-        : inflationDest.name || inflationDest.accountID,
     isDefault: account.isDefault,
     mobileOnlyEditable,
     mobileOnlyMode,
@@ -108,11 +103,8 @@ const mapDispatchToProps = (dispatch: Container.TypedDispatch) => ({
     ),
   _onSetDisplayCurrency: (accountID: Types.AccountID, code: Types.CurrencyCode) =>
     dispatch(WalletsGen.createChangeDisplayCurrency({accountID, code})),
-  _onSetupInflation: (accountID: Types.AccountID) =>
-    dispatch(RouteTreeGen.createNavigateAppend({path: [{props: {accountID}, selected: 'setInflation'}]})),
   _refresh: (accountID: Types.AccountID) => {
     dispatch(WalletsGen.createLoadDisplayCurrencies())
-    dispatch(WalletsGen.createLoadInflationDestination({accountID}))
     dispatch(WalletsGen.createLoadDisplayCurrency({accountID}))
     dispatch(WalletsGen.createLoadMobileOnlyMode({accountID}))
     dispatch(WalletsGen.createLoadExternalPartners())
@@ -145,7 +137,6 @@ export default Container.compose(
         ? () => dispatchProps._onSecretKeySeen(stateProps.accountID)
         : undefined,
       onSetDefault: () => dispatchProps._onSetDefault(stateProps.accountID),
-      onSetupInflation: () => dispatchProps._onSetupInflation(stateProps.accountID),
       refresh: () => dispatchProps._refresh(stateProps.accountID),
     }),
 

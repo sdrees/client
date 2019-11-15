@@ -16,7 +16,7 @@ const commands = {
   },
   'update-icon-constants': {
     code: updateIconConstants,
-    help: 'Update icon.constants.js and icon.css with new/removed files',
+    help: 'Update icon.constants-gen.tsx and icon.css with new/removed files',
   },
   'unused-assets': {
     code: unusedAssetes,
@@ -26,13 +26,22 @@ const commands = {
 
 const paths = {
   iconfont: path.resolve(__dirname, '../../images/iconfont'),
-  iconpng: path.resolve(__dirname, '../../images/icons'),
+  iconPng: path.resolve(__dirname, '../../images/icons'),
+  illustrationPng: path.resolve(__dirname, '../../images/illustrations'),
+  releasePng: path.resolve(__dirname, '../../images/releases'),
   fonts: path.resolve(__dirname, '../../fonts'),
   webFonts: path.resolve(__dirname, '../../fonts-for-web'),
   webFontsCss: path.resolve(__dirname, '../../fonts-for-web/fonts_custom.styl'),
-  iconConstants: path.resolve(__dirname, '../../common-adapters/icon.constants.tsx'),
+  iconConstants: path.resolve(__dirname, '../../common-adapters/icon.constants-gen.tsx'),
   iconCss: path.resolve(__dirname, '../../common-adapters/icon.css'),
 }
+
+// Locations of all PNG assets to include in icon.constants.gen
+const pngAssetDirPaths = [
+  {assetDirPath: paths.iconPng, insertFn: insertIconAssets},
+  {assetDirPath: paths.illustrationPng, insertFn: insertIllustrationAssets},
+  {assetDirPath: paths.releasePng, insertFn: insertReleaseAssets},
+]
 
 const fontHeight = 1024
 const descentFraction = 16 // Source: https://icomoon.io/#docs/font-metrics
@@ -40,6 +49,7 @@ const descent = fontHeight / descentFraction
 const baseCharCode = 0xe900
 
 const iconfontRegex = /^(\d+)-kb-iconfont-(.*)-(\d+).svg$/
+const computeCounter = counter => baseCharCode + counter - 1
 const mapPaths = skipUnmatchedFile => path => {
   const match = path.match(iconfontRegex)
   if (!match || match.length !== 4) {
@@ -104,6 +114,25 @@ function updateIconFont(web) {
     throw e
   }
   const svgFilePaths = getSvgPaths(true /* print skipped */)
+  const svgFilenames = getSvgNames(false /* print skipped */)
+  /*
+   * NOTE: Since icon counters can be non-sequential, we need to tell our font generator which codepoint to use for each icon.
+   * This is done by setting `codepoints` object where the keys are character codes (hexidecimal) and the values are icon names
+   *
+   * { [name of svg file]: charCode }
+   *
+   * Example
+   * { "127-kb-iconfont-nav-2-files-24": "0xe97e" }
+   */
+  const codepointsMap = svgFilenames.reduce((pointsMap, {counter, filePath}) => {
+    // Character code value converted from decimal to hexidecimal
+    const charCodeHex = computeCounter(counter).toString(16)
+    const {name} = path.parse(filePath)
+    return {
+      ...pointsMap,
+      [name]: `0x${charCodeHex}`,
+    }
+  }, {})
 
   if (web) {
     try {
@@ -114,7 +143,7 @@ function updateIconFont(web) {
   webfontsGenerator(
     {
       // An intermediate svgfont will be generated and then converted to TTF by webfonts-generator
-      types: web ? ['ttf', 'woff', 'svg'] : ['ttf'],
+      types: web ? ['svg', 'ttf', 'woff'] : ['ttf'],
       files: svgFilePaths,
       dest: paths.fonts,
       startCodepoint: baseCharCode,
@@ -123,6 +152,7 @@ function updateIconFont(web) {
       css: false,
       html: false,
       writeFiles: false,
+      codepoints: codepointsMap,
       formatOptions: {
         ttf: {ts: 0, version: `${Date.now()}.0`}, // MUST use a unique version else windows installer does the WRONG THING
         // Setting descent to zero on font generation will prevent the final
@@ -153,7 +183,7 @@ const fontsGeneratedSuccess = (web, result) => {
 const generateWebCSS = result => {
   const svgFilenames = getSvgNames(false /* print skipped */)
   const rules = svgFilenames.reduce((map, {counter, name}) => {
-    map[`kb-iconfont-${name}`] = baseCharCode + counter - 1
+    map[`kb-iconfont-${name}`] = computeCounter(counter)
     return map
   }, {})
 
@@ -218,8 +248,7 @@ ${Object.keys(rules)
   content: "\\${rules[name].toString(16)}";
 }`
   )
-  .join('\n')}
-`
+  .join('\n')}`
 
   try {
     fs.writeFileSync(paths.webFontsCss, css, 'utf8')
@@ -235,22 +264,94 @@ const fontsGeneratedError = error => {
   process.exit(1)
 }
 
-function updateIconConstants() {
-  console.log('Generating icon constants')
-
+function insertIconAssets(iconFiles) {
   const icons = {}
 
-  // Build constants for the png assests.
-  fs.readdirSync(paths.iconpng)
-    .filter(i => i.indexOf('@') === -1 && i.startsWith('icon-'))
+  // light
+  iconFiles
+    .filter(i => i.startsWith('icon-'))
     .forEach(i => {
       const shortName = i.slice(0, -4)
       icons[shortName] = {
         extension: i.slice(-3),
+        imagesDir: `'icons'`,
         isFont: false,
+        nameDark: undefined,
         require: `'../images/icons/${i}'`,
+        requireDark: undefined,
       }
     })
+
+  // dark
+  iconFiles
+    .filter(i => i.startsWith('icon-dark-'))
+    .forEach(i => {
+      const shortName = i.slice(0, -4)
+      const lightName = shortName.replace(/^icon-dark-/, 'icon-')
+      if (!icons[lightName]) {
+        console.error(`Found a dark icon without a matching light icon! ${lightName} ${i}`)
+        process.exit(1)
+      }
+      icons[lightName].nameDark = `'${shortName}'`
+      icons[lightName].requireDark = `'../images/icons/${i}'`
+    })
+
+  return icons
+}
+
+function insertIllustrationAssets(illustrationFiles) {
+  return illustrationFiles.reduce((prevIcons, i) => {
+    const shortName = i.slice(0, -4)
+    return {
+      ...prevIcons,
+      [shortName]: {
+        extension: i.slice(-3),
+        imagesDir: `'illustrations'`,
+        isFont: false,
+        nameDark: undefined,
+        require: `'../images/illustrations/${i}'`,
+        requireDark: undefined,
+      },
+    }
+  }, {})
+}
+
+function insertReleaseAssets(releaseFiles) {
+  return releaseFiles.reduce((prevIcons, i) => {
+    const shortName = i.slice(0, -4)
+    return {
+      ...prevIcons,
+      [shortName]: {
+        extension: i.slice(-3),
+        imagesDir: `'releases'`,
+        isFont: false,
+        nameDark: undefined,
+        require: `'../images/releases/${i}'`,
+        requireDark: undefined,
+      },
+    }
+  }, {})
+}
+
+function updateIconConstants() {
+  console.log('Generating icon constants (from the following directories)')
+  console.log('\t*' + pngAssetDirPaths.map(({assetDirPath}) => assetDirPath).join('\n\t*'))
+
+  // Build constants for the png assests.
+  const icons = pngAssetDirPaths.reduce((prevIcons, {assetDirPath, insertFn}) => {
+    // Don't include @2x and @3x assets in icon-constants-gen.
+    // They are included later in srcSet generation by icon.*.tsx
+    //
+    // On macOS (10.12+) Finder.app will no longer display .DS_Store files. Make sure they are not included here.
+    const iconFiles = fs
+      .readdirSync(assetDirPath)
+      .filter(i => i.indexOf('@') === -1 && i.indexOf('DS_Store') === -1)
+    const newIcons = insertFn(iconFiles)
+    return {
+      ...prevIcons,
+      ...newIcons,
+    }
+  }, {})
 
   // Build constants for iconfont svgs
   const svgFilenames = getSvgNames(false /* print skipped */)
@@ -258,7 +359,7 @@ function updateIconConstants() {
     return (icons[`iconfont-${name}`] = {
       isFont: true,
       gridSize: size,
-      charCode: baseCharCode + counter - 1,
+      charCode: computeCounter(counter),
     })
   }, {})
 
@@ -268,7 +369,10 @@ function updateIconConstants() {
     gridSize?: number
     extension?: string
     charCode?: number
+    nameDark?: string
+    imagesDir?: string
     require?: string
+    requireDark?: string
   }
 
   const iconMeta_ = {
@@ -281,9 +385,12 @@ function updateIconConstants() {
         const meta = [
           icon.charCode ? [`charCode: 0x${icons[name].charCode.toString(16)}`] : [],
           icon.extension ? [`extension: '${icons[name].extension}'`] : [],
+          icon.imagesDir ? [`imagesDir: ${icons[name].imagesDir}`] : [],
           icon.gridSize ? [`gridSize: ${icons[name].gridSize}`] : [],
           `isFont: ${icon.isFont}`,
-          icon.require ? [`require: require(${icons[name].require})`] : [],
+          icon.nameDark ? [`nameDark: ${icons[name].nameDark}`] : [],
+          icon.require ? [`get require() {return require(${icons[name].require})}`] : [],
+          icon.requireDark ? [`get requireDark() {return require(${icons[name].requireDark})}`] : [],
         ]
 
         return `'${name}': {
@@ -416,7 +523,7 @@ const setFontMetrics = () => {
 }
 
 function unusedAssetes() {
-  const allFiles = fs.readdirSync(paths.iconpng)
+  const allFiles = fs.readdirSync(paths.iconPng)
 
   // map of root name => [files]
   const images = {}
@@ -439,7 +546,7 @@ function unusedAssetes() {
   })
 
   Object.keys(images).forEach(image => {
-    const command = `ag --ignore "./common-adapters/icon.constants.js" "${image}"`
+    const command = `ag --ignore "./common-adapters/icon.constants-gen.tsx" "${image}"`
     try {
       execSync(command, {encoding: 'utf8', env: process.env})
     } catch (e) {

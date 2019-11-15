@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keybase/client/go/chat/utils"
 	"github.com/keybase/client/go/protocol/keybase1"
 
 	"github.com/keybase/client/go/libkb"
@@ -20,29 +21,35 @@ import (
 )
 
 const (
-	methodList              = "list"
-	methodRead              = "read"
-	methodGet               = "get"
-	methodSend              = "send"
-	methodEdit              = "edit"
-	methodReaction          = "reaction"
-	methodDelete            = "delete"
-	methodAttach            = "attach"
-	methodDownload          = "download"
-	methodSetStatus         = "setstatus"
-	methodMark              = "mark"
-	methodSearchInbox       = "searchinbox"
-	methodSearchRegexp      = "searchregexp"
-	methodNewConv           = "newconv"
-	methodListConvsOnName   = "listconvsonname"
-	methodJoin              = "join"
-	methodLeave             = "leave"
-	methodLoadFlip          = "loadflip"
-	methodGetUnfurlSettings = "getunfurlsettings"
-	methodSetUnfurlSettings = "setunfurlsettings"
-	methodAdvertiseCommands = "advertisecommands"
-	methodClearCommands     = "clearcommands"
-	methodListCommands      = "listcommands"
+	methodList                = "list"
+	methodRead                = "read"
+	methodGet                 = "get"
+	methodSend                = "send"
+	methodEdit                = "edit"
+	methodReaction            = "reaction"
+	methodDelete              = "delete"
+	methodAttach              = "attach"
+	methodDownload            = "download"
+	methodSetStatus           = "setstatus"
+	methodMark                = "mark"
+	methodSearchInbox         = "searchinbox"
+	methodSearchRegexp        = "searchregexp"
+	methodNewConv             = "newconv"
+	methodListConvsOnName     = "listconvsonname"
+	methodJoin                = "join"
+	methodLeave               = "leave"
+	methodAddToChannel        = "addtochannel"
+	methodLoadFlip            = "loadflip"
+	methodGetUnfurlSettings   = "getunfurlsettings"
+	methodSetUnfurlSettings   = "setunfurlsettings"
+	methodAdvertiseCommands   = "advertisecommands"
+	methodClearCommands       = "clearcommands"
+	methodListCommands        = "listcommands"
+	methodPin                 = "pin"
+	methodUnpin               = "unpin"
+	methodGetResetConvMembers = "getresetconvmembers"
+	methodAddResetConvMember  = "addresetconvmember"
+	methodGetDeviceInfo       = "getdeviceinfo"
 )
 
 // ChatAPIHandler can handle all of the chat json api methods.
@@ -64,12 +71,18 @@ type ChatAPIHandler interface {
 	ListConvsOnNameV1(context.Context, Call, io.Writer) error
 	JoinV1(context.Context, Call, io.Writer) error
 	LeaveV1(context.Context, Call, io.Writer) error
+	AddToChannelV1(context.Context, Call, io.Writer) error
 	LoadFlipV1(context.Context, Call, io.Writer) error
 	GetUnfurlSettingsV1(context.Context, Call, io.Writer) error
 	SetUnfurlSettingsV1(context.Context, Call, io.Writer) error
 	AdvertiseCommandsV1(context.Context, Call, io.Writer) error
 	ClearCommandsV1(context.Context, Call, io.Writer) error
 	ListCommandsV1(context.Context, Call, io.Writer) error
+	PinV1(context.Context, Call, io.Writer) error
+	UnpinV1(context.Context, Call, io.Writer) error
+	GetResetConvMembersV1(context.Context, Call, io.Writer) error
+	AddResetConvMemberV1(context.Context, Call, io.Writer) error
+	GetDeviceInfoV1(context.Context, Call, io.Writer) error
 }
 
 // ChatAPI implements ChatAPIHandler and contains a ChatServiceHandler
@@ -456,6 +469,26 @@ func (o leaveOptionsV1) Check() error {
 	return nil
 }
 
+type addToChannelOptionsV1 struct {
+	Channel        ChatChannel
+	ConversationID string   `json:"conversation_id"`
+	Usernames      []string `json:"usernames"`
+}
+
+func (o addToChannelOptionsV1) Check() error {
+	if err := checkChannelConv(methodAddToChannel, o.Channel, o.ConversationID); err != nil {
+		return err
+	}
+	if len(o.Usernames) == 0 {
+		return ErrInvalidOptions{
+			version: 1,
+			method:  methodAddToChannel,
+			err:     errors.New("addtochannel needs at least one user"),
+		}
+	}
+	return nil
+}
+
 type loadFlipOptionsV1 struct {
 	ConversationID     string          `json:"conversation_id"`
 	FlipConversationID string          `json:"flip_conversation_id"`
@@ -514,15 +547,20 @@ func (o setUnfurlSettingsOptionsV1) Check() error {
 	return nil
 }
 
-type advertisementParam struct {
-	Typ      string `json:"type"`
-	Commands []chat1.UserBotCommandInput
-	TeamName string `json:"team_name,omitempty"`
+type getDeviceInfoOptionsV1 struct {
+	Username string `json:"username"`
+}
+
+func (o getDeviceInfoOptionsV1) Check() error {
+	if len(o.Username) == 0 {
+		return errors.New("username required")
+	}
+	return nil
 }
 
 type advertiseCommandsOptionsV1 struct {
 	Alias          string `json:"alias,omitempty"`
-	Advertisements []advertisementParam
+	Advertisements []chat1.AdvertiseCommandAPIParam
 }
 
 func (a advertiseCommandsOptionsV1) Check() error {
@@ -544,6 +582,31 @@ type listCommandsOptionsV1 struct {
 
 func (o listCommandsOptionsV1) Check() error {
 	if err := checkChannelConv(methodListCommands, o.Channel, o.ConversationID); err != nil {
+		return err
+	}
+	return nil
+}
+
+type pinOptionsV1 struct {
+	Channel        ChatChannel
+	ConversationID string          `json:"conversation_id"`
+	MessageID      chat1.MessageID `json:"message_id"`
+}
+
+func (o pinOptionsV1) Check() error {
+	if err := checkChannelConv(methodPin, o.Channel, o.ConversationID); err != nil {
+		return err
+	}
+	return nil
+}
+
+type unpinOptionsV1 struct {
+	Channel        ChatChannel
+	ConversationID string `json:"conversation_id"`
+}
+
+func (o unpinOptionsV1) Check() error {
+	if err := checkChannelConv(methodUnpin, o.Channel, o.ConversationID); err != nil {
 		return err
 	}
 	return nil
@@ -680,7 +743,7 @@ func (a *ChatAPI) AttachV1(ctx context.Context, c Call, w io.Writer) error {
 	}
 
 	// opts are valid for attach v1
-	return a.encodeReply(c, a.svcHandler.AttachV1(ctx, opts, NewChatAPIUI(), NewChatAPINotifications()), w)
+	return a.encodeReply(c, a.svcHandler.AttachV1(ctx, opts, NewChatAPIUI(), utils.DummyChatNotifications{}), w)
 }
 
 func (a *ChatAPI) DownloadV1(ctx context.Context, c Call, w io.Writer) error {
@@ -824,6 +887,20 @@ func (a *ChatAPI) LeaveV1(ctx context.Context, c Call, w io.Writer) error {
 	return a.encodeReply(c, a.svcHandler.LeaveV1(ctx, opts), w)
 }
 
+func (a *ChatAPI) AddToChannelV1(ctx context.Context, c Call, w io.Writer) error {
+	if len(c.Params.Options) == 0 {
+		return ErrInvalidOptions{version: 1, method: methodAddToChannel, err: errors.New("empty options")}
+	}
+	var opts addToChannelOptionsV1
+	if err := json.Unmarshal(c.Params.Options, &opts); err != nil {
+		return err
+	}
+	if err := opts.Check(); err != nil {
+		return err
+	}
+	return a.encodeReply(c, a.svcHandler.AddToChannelV1(ctx, opts), w)
+}
+
 func (a *ChatAPI) LoadFlipV1(ctx context.Context, c Call, w io.Writer) error {
 	if len(c.Params.Options) == 0 {
 		return ErrInvalidOptions{version: 1, method: methodLoadFlip, err: errors.New("empty options")}
@@ -889,6 +966,85 @@ func (a *ChatAPI) ListCommandsV1(ctx context.Context, c Call, w io.Writer) error
 		return err
 	}
 	return a.encodeReply(c, a.svcHandler.ListCommandsV1(ctx, opts), w)
+}
+
+func (a *ChatAPI) PinV1(ctx context.Context, c Call, w io.Writer) error {
+	if len(c.Params.Options) == 0 {
+		return ErrInvalidOptions{version: 1, method: methodPin,
+			err: errors.New("empty options")}
+	}
+	var opts pinOptionsV1
+	if err := json.Unmarshal(c.Params.Options, &opts); err != nil {
+		return err
+	}
+	if err := opts.Check(); err != nil {
+		return err
+	}
+	return a.encodeReply(c, a.svcHandler.PinV1(ctx, opts), w)
+}
+
+func (a *ChatAPI) UnpinV1(ctx context.Context, c Call, w io.Writer) error {
+	if len(c.Params.Options) == 0 {
+		return ErrInvalidOptions{version: 1, method: methodUnpin,
+			err: errors.New("empty options")}
+	}
+	var opts unpinOptionsV1
+	if err := json.Unmarshal(c.Params.Options, &opts); err != nil {
+		return err
+	}
+	if err := opts.Check(); err != nil {
+		return err
+	}
+	return a.encodeReply(c, a.svcHandler.UnpinV1(ctx, opts), w)
+}
+
+type addResetConvMemberOptionsV1 struct {
+	ConversationID string `json:"conversation_id"`
+	Username       string `json:"username"`
+}
+
+func (o addResetConvMemberOptionsV1) Check() error {
+	if len(o.ConversationID) == 0 || len(o.Username) == 0 {
+		return ErrInvalidOptions{
+			version: 1,
+			method:  methodAddResetConvMember,
+			err:     errors.New("must specify a user and conversation"),
+		}
+	}
+	return nil
+}
+
+func (a *ChatAPI) GetResetConvMembersV1(ctx context.Context, c Call, w io.Writer) error {
+	return a.encodeReply(c, a.svcHandler.GetResetConvMembersV1(ctx), w)
+}
+
+func (a *ChatAPI) AddResetConvMemberV1(ctx context.Context, c Call, w io.Writer) error {
+	if len(c.Params.Options) == 0 {
+		return ErrInvalidOptions{version: 1, method: methodAddResetConvMember,
+			err: errors.New("empty options")}
+	}
+	var opts addResetConvMemberOptionsV1
+	if err := json.Unmarshal(c.Params.Options, &opts); err != nil {
+		return err
+	}
+	if err := opts.Check(); err != nil {
+		return err
+	}
+	return a.encodeReply(c, a.svcHandler.AddResetConvMemberV1(ctx, opts), w)
+}
+
+func (a *ChatAPI) GetDeviceInfoV1(ctx context.Context, c Call, w io.Writer) error {
+	if len(c.Params.Options) == 0 {
+		return ErrInvalidOptions{version: 1, method: methodGetDeviceInfo, err: errors.New("empty options")}
+	}
+	var opts getDeviceInfoOptionsV1
+	if err := json.Unmarshal(c.Params.Options, &opts); err != nil {
+		return err
+	}
+	if err := opts.Check(); err != nil {
+		return err
+	}
+	return a.encodeReply(c, a.svcHandler.GetDeviceInfoV1(ctx, opts), w)
 }
 
 func (a *ChatAPI) encodeReply(call Call, reply Reply, w io.Writer) error {

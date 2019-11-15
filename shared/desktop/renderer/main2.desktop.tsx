@@ -12,14 +12,27 @@ import configureStore from '../../store/configure-store'
 import * as SafeElectron from '../../util/safe-electron.desktop'
 import {makeEngine} from '../../engine'
 import {disable as disableDragDrop} from '../../util/drag-drop'
-import {merge} from 'lodash-es'
-import {setupContextMenu} from '../app/menu-helper.desktop'
 import flags from '../../util/feature-flags'
 import {dumpLogs} from '../../actions/platform-specific/index.desktop'
 import {initDesktopStyles} from '../../styles/index.desktop'
+import {_setDarkModePreference} from '../../styles/dark-mode'
 import {isDarwin} from '../../constants/platform'
 import {useSelector} from '../../util/container'
 import {isDarkMode} from '../../constants/config'
+import {TypedActions} from '../../actions/typed-actions-gen'
+
+// node side plumbs through initial pref so we avoid flashes
+const darkModeFromNode = window.location.search.match(/darkModePreference=(alwaysLight|alwaysDark|system)/)
+
+if (darkModeFromNode) {
+  const dm = darkModeFromNode[1]
+  switch (dm) {
+    case 'alwaysLight':
+    case 'alwaysDark':
+    case 'system':
+      _setDarkModePreference(dm)
+  }
+}
 
 // Top level HMR accept
 if (module.hot) {
@@ -52,49 +65,35 @@ const setupApp = (store, runSagas) => {
   runSagas && runSagas()
   eng.sagasAreReady()
 
-  setupContextMenu(SafeElectron.getRemote().getCurrentWindow())
-
-  // Listen for the menubarWindowID
-  SafeElectron.getIpcRenderer().on('updateMenubarWindowID', (_, id) => {
-    store.dispatch(ConfigGen.createUpdateMenubarWindowID({id}))
-  })
-
-  SafeElectron.getIpcRenderer().on('dispatchAction', (_, action) => {
+  SafeElectron.getApp().on('KBdispatchAction' as any, (_: string, action: TypedActions) => {
     // we MUST convert this else we'll run into issues with redux. See https://github.com/rackt/redux/issues/830
     // This is because this is touched due to the remote proxying. We get a __proto__ which causes the _.isPlainObject check to fail. We use
-    // _.merge() to get a plain object back out which we can send
-    setImmediate(() => {
+    setTimeout(() => {
       try {
-        store.dispatch(merge({}, action))
+        store.dispatch({
+          payload: action.payload,
+          type: action.type,
+        })
       } catch (_) {}
-    })
+    }, 0)
   })
-
-  SafeElectron.getIpcRenderer().send('mainWindowWantsMenubarWindowID')
 
   // See if we're connected, and try starting keybase if not
-  setImmediate(() => {
+  setTimeout(() => {
     if (!eng.hasEverConnected()) {
-      SafeElectron.getIpcRenderer().send('kb-service-check')
+      SafeElectron.getApp().emit('KBkeybase', '', {type: 'requestStartService'})
     }
-  })
+  }, 0)
 
   // After a delay dump logs in case some startup stuff happened
   setTimeout(() => {
     dumpLogs()
   }, 5 * 1000)
 
-  // Run installer
-  SafeElectron.getIpcRenderer().on('installed', () => {
-    store.dispatch(ConfigGen.createInstallerRan())
-  })
-  SafeElectron.getIpcRenderer().send('install-check')
-
   // Handle notifications from the service
   store.dispatch(NotificationsGen.createListenForNotifications())
 
-  // Check for a startup URL
-  SafeElectron.getIpcRenderer().send('reduxLaunched')
+  SafeElectron.getApp().emit('KBkeybase', '', {type: 'appStartedUp'})
 }
 
 const FontLoader = () => (
@@ -114,11 +113,17 @@ const FontLoader = () => (
 let store
 
 const DarkCSSInjector = () => {
-  const className = useSelector(state => isDarkMode(state.config)) ? 'darkMode' : ''
+  const isDark = useSelector(state => isDarkMode(state.config))
   React.useEffect(() => {
     // inject it in body so modals get darkMode also
-    document.body.className = className
-  }, [className])
+    if (isDark) {
+      document.body.classList.add('darkMode')
+      document.body.classList.remove('lightMode')
+    } else {
+      document.body.classList.remove('darkMode')
+      document.body.classList.add('lightMode')
+    }
+  }, [isDark])
   return null
 }
 
@@ -165,7 +170,7 @@ const setupDarkMode = () => {
       () => {
         store.dispatch(
           ConfigGen.createSetSystemDarkMode({
-            dark: isDarwin && SafeElectron.getSystemPreferences().isDarkMode(),
+            dark: SafeElectron.workingIsDarkMode(),
           })
         )
       }

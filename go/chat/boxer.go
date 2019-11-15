@@ -93,7 +93,7 @@ func (b *Boxer) log() logger.Logger {
 
 func (b *Boxer) makeErrorMessageFromPieces(ctx context.Context, err types.UnboxingError,
 	msgID chat1.MessageID, msgType chat1.MessageType, ctime gregor1.Time,
-	sender gregor1.UID, senderDevice gregor1.DeviceID,
+	sender gregor1.UID, senderDevice gregor1.DeviceID, botUID *gregor1.UID,
 	isEphemeral, isEphemeralExpired bool, etime gregor1.Time) chat1.MessageUnboxed {
 	e := chat1.MessageUnboxedError{
 		ErrType:            err.ExportType(),
@@ -108,6 +108,7 @@ func (b *Boxer) makeErrorMessageFromPieces(ctx context.Context, err types.Unboxi
 		IsEphemeral:        isEphemeral,
 		IsEphemeralExpired: isEphemeralExpired,
 		Etime:              etime,
+		BotUsername:        b.getBotInfoLocal(ctx, botUID),
 	}
 	e.SenderUsername, e.SenderDeviceName, e.SenderDeviceType = b.getSenderInfoLocal(ctx,
 		sender, senderDevice)
@@ -117,6 +118,7 @@ func (b *Boxer) makeErrorMessageFromPieces(ctx context.Context, err types.Unboxi
 func (b *Boxer) makeErrorMessage(ctx context.Context, msg chat1.MessageBoxed, err types.UnboxingError) chat1.MessageUnboxed {
 	return b.makeErrorMessageFromPieces(ctx, err, msg.GetMessageID(), msg.GetMessageType(),
 		msg.ServerHeader.Ctime, msg.ClientHeader.Sender, msg.ClientHeader.SenderDevice,
+		msg.ClientHeader.BotUID,
 		msg.IsEphemeral(), msg.IsEphemeralExpired(b.clock.Now()), msg.Etime())
 }
 
@@ -126,6 +128,8 @@ func (b *Boxer) detectPermanentError(err error, tlfName string) types.UnboxingEr
 		switch keybase1.StatusCode(aerr.Code) {
 		case keybase1.StatusCode_SCTeamNotFound:
 			return NewPermanentUnboxingError(err)
+		default:
+			// Nothing to do.
 		}
 	}
 	// Check if we have a permanent or tranissent team read error. Transient
@@ -267,6 +271,8 @@ func (b *Boxer) getEffectiveMembersType(ctx context.Context, boxed chat1.Message
 			b.Debug(ctx, "getEffectiveMembersType: overruling %v conv with KBFS keys", convMembersType)
 			return chat1.ConversationMembersType_KBFS
 		}
+	default:
+		// Nothing to do for other conv types.
 	}
 	return convMembersType
 }
@@ -294,6 +300,7 @@ func (b *Boxer) getEffectiveMembersType(ctx context.Context, boxed chat1.Message
 // whereas temporary errors are transient failures.
 func (b *Boxer) UnboxMessage(ctx context.Context, boxed chat1.MessageBoxed, conv types.UnboxConversationInfo,
 	info *types.BoxerEncryptionInfo) (m chat1.MessageUnboxed, uberr types.UnboxingError) {
+	ctx = libkb.WithLogTag(ctx, "CHTUNBOX")
 	defer b.Trace(ctx, func() error { return uberr }, "UnboxMessage(%s, %d)", conv.GetConvID(),
 		boxed.GetMessageID())()
 
@@ -504,8 +511,6 @@ func (b *Boxer) headerUnsupported(ctx context.Context, headerVersion chat1.Heade
 func (b *Boxer) bodyUnsupported(ctx context.Context, bodyVersion chat1.BodyPlaintextVersion,
 	body chat1.BodyPlaintext) chat1.BodyPlaintextUnsupported {
 	switch bodyVersion {
-	case chat1.BodyPlaintextVersion_V2:
-		return body.V2()
 	case chat1.BodyPlaintextVersion_V3:
 		return body.V3()
 	case chat1.BodyPlaintextVersion_V4:
@@ -688,6 +693,7 @@ func (b *Boxer) unboxV1(ctx context.Context, boxed chat1.MessageBoxed,
 		ChannelMention:        chanMention,
 		ChannelNameMentions:   channelNameMentions,
 		MaybeMentions:         maybeRes,
+		BotUsername:           b.getBotInfoLocal(ctx, clientHeader.BotUID),
 	}, nil
 }
 
@@ -762,7 +768,8 @@ func (b *Boxer) ResolveSkippedUnboxed(ctx context.Context, msg chat1.MessageUnbo
 		if ierr.IsPermanent() {
 			return b.makeErrorMessageFromPieces(ctx, ierr, msg.GetMessageID(), msg.GetMessageType(),
 				msg.Valid().ServerHeader.Ctime, msg.Valid().ClientHeader.Sender,
-				msg.Valid().ClientHeader.SenderDevice, msg.Valid().IsEphemeral(),
+				msg.Valid().ClientHeader.SenderDevice,
+				msg.Valid().ClientHeader.BotUID, msg.Valid().IsEphemeral(),
 				msg.Valid().IsEphemeralExpired(b.clock.Now()), msg.Valid().Etime()), true, nil
 		}
 		return msg, false, ierr
@@ -957,6 +964,7 @@ func (b *Boxer) unboxV2orV3orV4(ctx context.Context, boxed chat1.MessageBoxed,
 		ChannelMention:        chanMention,
 		ChannelNameMentions:   channelNameMentions,
 		MaybeMentions:         maybeRes,
+		BotUsername:           b.getBotInfoLocal(ctx, clientHeader.BotUID),
 	}, nil
 }
 
@@ -1019,6 +1027,8 @@ func (b *Boxer) unversionBody(ctx context.Context, bodyVersioned chat1.BodyPlain
 	switch bodyVersion {
 	case chat1.BodyPlaintextVersion_V1:
 		return bodyVersioned.V1().MessageBody, nil
+	case chat1.BodyPlaintextVersion_V2:
+		return bodyVersioned.V2().MessageBody, nil
 	// NOTE: When adding new versions here, you must also update
 	// chat1/extras.go so MessageUnboxedError.ParseableVersion understands the
 	// new max version
@@ -1225,6 +1235,19 @@ func (b *Boxer) getSenderInfoLocal(ctx context.Context, uid1 gregor1.UID, device
 		}
 	}
 	return username, deviceName, deviceType
+}
+
+func (b *Boxer) getBotInfoLocal(ctx context.Context, uid *gregor1.UID) string {
+	if uid == nil {
+		return ""
+	}
+	kbuid := keybase1.UID(uid.String())
+	username, err := b.getUsername(ctx, kbuid)
+	if err != nil {
+		b.Debug(ctx, "failed to fetch bot username: %v", err)
+		return ""
+	}
+	return username
 }
 
 func (b *Boxer) getAtMentionInfo(ctx context.Context, tlfID chat1.TLFID, topicType chat1.TopicType,
@@ -1635,7 +1658,7 @@ func makeOnePairwiseMAC(private libkb.NaclDHKeyPrivate, public libkb.NaclDHKeyPu
 		panic(err) // key derivation should never fail
 	}
 	hmacState := hmac.New(sha256.New, derivedShared[:])
-	hmacState.Write(input)
+	_, _ = hmacState.Write(input)
 	return hmacState.Sum(nil)
 }
 
@@ -1659,6 +1682,19 @@ func (b *Boxer) makeAllPairwiseMACs(ctx context.Context, headerSealed chat1.Sign
 		pairwiseMACs[recipientKID] = makeOnePairwiseMAC(*deviceKeyNacl.Private, recipientKeyNacl.Public, headerHash)
 	}
 	return pairwiseMACs, nil
+}
+
+func (b *Boxer) versionBody(ctx context.Context, messagePlaintext chat1.MessagePlaintext) chat1.BodyPlaintext {
+	switch messagePlaintext.ClientHeader.MessageType {
+	case chat1.MessageType_PIN:
+		return chat1.NewBodyPlaintextWithV2(chat1.BodyPlaintextV2{
+			MessageBody: messagePlaintext.MessageBody,
+		})
+	default:
+		return chat1.NewBodyPlaintextWithV1(chat1.BodyPlaintextV1{
+			MessageBody: messagePlaintext.MessageBody,
+		})
+	}
 }
 
 // V3 is just V2 but with exploding messages support. V4 is just V3, but it
@@ -1689,9 +1725,7 @@ func (b *Boxer) boxV2orV3orV4(ctx context.Context, messagePlaintext chat1.Messag
 		messagePlaintext.ClientHeader.EphemeralMetadata.Generation = ephemeralKey.Generation()
 	}
 
-	bodyVersioned := chat1.NewBodyPlaintextWithV1(chat1.BodyPlaintextV1{
-		MessageBody: messagePlaintext.MessageBody,
-	})
+	bodyVersioned := b.versionBody(ctx, messagePlaintext)
 	bodyEncrypted, err := b.seal(bodyVersioned, bodyEncryptionKey)
 	if err != nil {
 		return res, err
@@ -1771,7 +1805,7 @@ func (b *Boxer) seal(data interface{}, key libkb.NaclSecretBoxKey) (*chat1.Encry
 
 	var encKey [libkb.NaclSecretBoxKeySize]byte = key
 
-	sealed := secretbox.Seal(nil, []byte(s), &nonce, &encKey)
+	sealed := secretbox.Seal(nil, s, &nonce, &encKey)
 	enc := &chat1.EncryptedData{
 		V: 1,
 		E: sealed,
@@ -1941,6 +1975,8 @@ func (b *Boxer) verifyMessageHeaderV1(ctx context.Context, header chat1.HeaderPl
 		if ierr != nil {
 			return verifyMessageRes{}, ierr
 		}
+	default:
+		// Nothing to do.
 	}
 
 	// check signature

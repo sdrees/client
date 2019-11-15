@@ -2,11 +2,12 @@
  * File to stash local debug changes to. Never check this in with changes
  */
 import {NativeModules, YellowBox} from 'react-native'
-import {noop} from 'lodash-es'
+import noop from 'lodash/noop'
+
 const nativeBridge = NativeModules.KeybaseEngine || {test: 'fallback'}
 
 // Uncomment this to disable yellowboxes
-// console.disableYellowBox = true
+console.disableYellowBox = false
 //
 // Ignore some yellowboxes on 3rd party libs we can't control
 YellowBox.ignoreWarnings([
@@ -32,13 +33,16 @@ let config = {
   allowMultipleInstances: false,
   enableActionLogging: true, // Log actions to the log
   enableStoreLogging: false, // Log full store changes
-  featureFlagsOverride: '', // Override feature flags
+  featureFlagsOverride: 'whatsNew', // Override feature flags
   filterActionLogs: null, // Filter actions in log
   forceImmediateLogging: false, // Don't wait for idle to log
   ignoreDisconnectOverlay: false,
   immediateStateLogging: false, // Don't wait for idle to log state
   isDevApplePushToken: false, // Use a dev push token
-  isTesting: nativeBridge.test === '1' || (NativeModules.Storybook && NativeModules.Storybook.isStorybook), // Is running a unit test
+  isTesting:
+    (__DEV__ && nativeBridge.test === '1') ||
+    (NativeModules.Storybook && NativeModules.Storybook.isStorybook), // Is running a unit test
+  partyMode: false,
   printOutstandingRPCs: false, // Periodically print rpcs we're waiting for
   printOutstandingTimerListeners: false, // Periodically print listeners to the second clock
   printRPC: false, // Print rpc traffic
@@ -57,7 +61,7 @@ let config = {
 // Developer settings
 if (__DEV__) {
   config.enableActionLogging = true
-  config.enableStoreLogging = true
+  config.enableStoreLogging = false
   config.immediateStateLogging = false
   // Move this outside the if statement to get notifications working
   // with a "Profile" build on a phone.
@@ -66,6 +70,7 @@ if (__DEV__) {
   config.printOutstandingTimerListeners = true
   config.printRPCWaitingSession = false
   config.printRPC = true
+  // TODO is this even used?
   config.printRPCStats = true
   config.reduxSagaLoggerMasked = false
   config.userTimings = false
@@ -124,6 +129,7 @@ export const {
   immediateStateLogging,
   isDevApplePushToken,
   isTesting,
+  partyMode,
   printOutstandingRPCs,
   printOutstandingTimerListeners,
   printRPC,

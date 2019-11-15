@@ -34,15 +34,17 @@ type clTask struct {
 
 type jobQueue struct {
 	sync.Mutex
-	queue   *list.List
-	waitChs []chan struct{}
-	maxSize int
+	queue    *list.List
+	waitChs  []chan struct{}
+	queueMap map[string]bool
+	maxSize  int
 }
 
 func newJobQueue(maxSize int) *jobQueue {
 	return &jobQueue{
-		queue:   list.New(),
-		maxSize: maxSize,
+		queue:    list.New(),
+		queueMap: make(map[string]bool),
+		maxSize:  maxSize,
 	}
 }
 
@@ -59,28 +61,35 @@ func (j *jobQueue) Wait() <-chan struct{} {
 	return ch
 }
 
-func (j *jobQueue) Push(task clTask) error {
+func (j *jobQueue) Push(task clTask) (queued bool, err error) {
 	j.Lock()
 	defer j.Unlock()
 	if j.queue.Len() >= j.maxSize {
-		return errors.New("job queue full")
+		return false, errors.New("job queue full")
 	}
 	defer func() {
+		if !queued {
+			return
+		}
 		// Notify waiters we have some stuff for them now
 		for _, w := range j.waitChs {
 			close(w)
 		}
 		j.waitChs = nil
 	}()
+	if task.job.Uniqueness == types.ConvLoaderGeneric && j.queueMap[task.job.String()] {
+		return false, nil
+	}
+	j.queueMap[task.job.String()] = true
 	for e := j.queue.Front(); e != nil; e = e.Next() {
 		eval := e.Value.(clTask)
 		if task.job.HigherPriorityThan(eval.job) {
 			j.queue.InsertBefore(task, e)
-			return nil
+			return true, nil
 		}
 	}
 	j.queue.PushBack(task)
-	return nil
+	return true, nil
 }
 
 func (j *jobQueue) PopFront() (res clTask, ok bool) {
@@ -92,6 +101,7 @@ func (j *jobQueue) PopFront() (res clTask, ok bool) {
 	el := j.queue.Front()
 	res = el.Value.(clTask)
 	j.queue.Remove(el)
+	delete(j.queueMap, res.job.String())
 	return res, true
 }
 
@@ -117,6 +127,7 @@ type BackgroundConvLoader struct {
 
 	clock      clockwork.Clock
 	resumeWait time.Duration
+	loadWait   time.Duration
 
 	activeLoads  map[string]activeLoad
 	suspendCount int
@@ -139,11 +150,12 @@ func NewBackgroundConvLoader(g *globals.Context) *BackgroundConvLoader {
 		identNotifier: NewCachingIdentifyNotifier(g),
 		clock:         clockwork.NewRealClock(),
 		resumeWait:    time.Second,
+		loadWait:      time.Second,
 		activeLoads:   make(map[string]activeLoad),
 	}
 	b.identNotifier.ResetOnGUIConnect()
 	b.newQueue()
-	go b.monitorAppState()
+	go func() { _ = b.monitorAppState() }()
 
 	return b
 }
@@ -165,23 +177,21 @@ func (b *BackgroundConvLoader) monitorAppState() error {
 	suspended := false
 	state := keybase1.MobileAppState_FOREGROUND
 	for {
-		select {
-		case state = <-b.G().MobileAppState.NextUpdate(&state):
-			switch state {
-			case keybase1.MobileAppState_FOREGROUND, keybase1.MobileAppState_BACKGROUNDACTIVE:
-				b.Debug(ctx, "monitorAppState: active state: %v", state)
-				// Only resume if we had suspended earlier (frontend can spam us with these)
-				if suspended {
-					b.Debug(ctx, "monitorAppState: resuming load thread")
-					b.Resume(ctx)
-					suspended = false
-				}
-			case keybase1.MobileAppState_BACKGROUND:
-				b.Debug(ctx, "monitorAppState: backgrounded, suspending load thread")
-				if !suspended {
-					b.Suspend(ctx)
-					suspended = true
-				}
+		state = <-b.G().MobileAppState.NextUpdate(&state)
+		switch state {
+		case keybase1.MobileAppState_FOREGROUND, keybase1.MobileAppState_BACKGROUNDACTIVE:
+			b.Debug(ctx, "monitorAppState: active state: %v", state)
+			// Only resume if we had suspended earlier (frontend can spam us with these)
+			if suspended {
+				b.Debug(ctx, "monitorAppState: resuming load thread")
+				b.Resume(ctx)
+				suspended = false
+			}
+		case keybase1.MobileAppState_BACKGROUND:
+			b.Debug(ctx, "monitorAppState: backgrounded, suspending load thread")
+			if !suspended {
+				b.Suspend(ctx)
+				suspended = true
 			}
 		}
 		if b.appStateCh != nil {
@@ -221,7 +231,7 @@ func (b *BackgroundConvLoader) Stop(ctx context.Context) chan struct{} {
 		b.stopCh = make(chan struct{})
 		b.started = false
 		go func() {
-			b.eg.Wait()
+			_ = b.eg.Wait()
 			close(ch)
 		}()
 	} else {
@@ -308,11 +318,24 @@ func (b *BackgroundConvLoader) Resume(ctx context.Context) bool {
 	return false
 }
 
+func (b *BackgroundConvLoader) isSuspended() bool {
+	b.Lock()
+	defer b.Unlock()
+	return b.suspendCount > 0
+}
+
 func (b *BackgroundConvLoader) enqueue(ctx context.Context, task clTask) error {
 	b.Lock()
 	defer b.Unlock()
 	b.Debug(ctx, "enqueue: adding task: %s", task.job)
-	return b.queue.Push(task)
+	queued, err := b.queue.Push(task)
+	if err != nil {
+		return err
+	}
+	if !queued {
+		b.Debug(ctx, "enqueue: skipped queueing job: %s", task.job)
+	}
+	return nil
 }
 
 func (b *BackgroundConvLoader) loop(uid gregor1.UID, stopCh chan struct{}) error {
@@ -391,17 +414,24 @@ func (b *BackgroundConvLoader) loop(uid gregor1.UID, stopCh chan struct{}) error
 func (b *BackgroundConvLoader) loadLoop(uid gregor1.UID, stopCh chan struct{}) error {
 	bgctx := context.Background()
 	b.Debug(bgctx, "loadLoop: starting for uid: %s", uid)
-
 	for {
 		select {
 		case task := <-b.loadCh:
-			b.Debug(bgctx, "loadLoop: running task: %s", task.job)
-			nextTask := b.load(bgctx, *task, uid)
-			if nextTask != nil {
-				if err := b.enqueue(bgctx, *nextTask); err != nil {
+			if b.isSuspended() {
+				b.Debug(bgctx, "loadLoop: suspended, re-enqueueing task: %s", task.job)
+				if err := b.enqueue(bgctx, *task); err != nil {
 					b.Debug(bgctx, "enqueue error %s", err)
 				}
+			} else {
+				b.Debug(bgctx, "loadLoop: running task: %s", task.job)
+				nextTask := b.load(bgctx, *task, uid)
+				if nextTask != nil {
+					if err := b.enqueue(bgctx, *nextTask); err != nil {
+						b.Debug(bgctx, "enqueue error %s", err)
+					}
+				}
 			}
+			b.clock.Sleep(b.loadWait)
 		case <-stopCh:
 			return nil
 		}
@@ -416,15 +446,15 @@ func (b *BackgroundConvLoader) retriableError(err error) bool {
 	if IsOfflineError(err) != OfflineErrorKindOnline {
 		return true
 	}
-	switch err {
-	case context.Canceled:
+	if err == context.Canceled {
 		return true
 	}
 	switch err.(type) {
 	case storage.AbortedError:
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
 func (b *BackgroundConvLoader) IsBackgroundActive() bool {
@@ -455,28 +485,31 @@ func (b *BackgroundConvLoader) load(ictx context.Context, task clTask, uid grego
 	}()
 
 	job := task.job
-	query := job.Query
-	if query == nil {
-		query = &chat1.GetThreadQuery{MarkAsRead: false}
-	}
+	query := &chat1.GetThreadQuery{MarkAsRead: false}
 	pagination := job.Pagination
 	if pagination == nil {
 		pagination = &chat1.Pagination{Num: 50}
 	}
-	tv, err := b.G().ConvSource.Pull(ctx, job.ConvID, uid,
-		chat1.GetThreadReason_BACKGROUNDCONVLOAD, query, pagination)
-	if err != nil {
-		b.Debug(ctx, "load: ConvSource.Pull error: %s (%T)", err, err)
-		if b.retriableError(err) && task.attempt+1 < bgLoaderMaxAttempts {
-			b.Debug(ctx, "transient error, retrying")
-			task.attempt++
-			task.lastAttemptAt = time.Now()
-			return &task
+	var tv chat1.ThreadView
+	if pagination.Num > 0 {
+		var err error
+		tv, err = b.G().ConvSource.Pull(ctx, job.ConvID, uid,
+			chat1.GetThreadReason_BACKGROUNDCONVLOAD, query, pagination)
+		if err != nil {
+			b.Debug(ctx, "load: ConvSource.Pull error: %s (%T)", err, err)
+			if b.retriableError(err) && task.attempt+1 < bgLoaderMaxAttempts {
+				b.Debug(ctx, "transient error, retrying")
+				task.attempt++
+				task.lastAttemptAt = time.Now()
+				return &task
+			}
+			b.Debug(ctx, "load: failed to load job: %s", job)
+			return nil
 		}
-		b.Debug(ctx, "load: failed to load job: %s", job)
-		return nil
+		b.Debug(ctx, "load: loaded job: %s", job)
+	} else {
+		b.Debug(ctx, "load: skipped job load because of 0 pagination")
 	}
-	b.Debug(ctx, "load: loaded job: %s", job)
 	if job.PostLoadHook != nil {
 		b.Debug(ctx, "load: invoking post load hook on job: %s", job)
 		job.PostLoadHook(ctx, tv, job)

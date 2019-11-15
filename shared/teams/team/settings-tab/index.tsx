@@ -10,6 +10,7 @@ import {pluralize} from '../../../util/string'
 import RetentionPicker from './retention/container'
 
 type Props = {
+  canShowcase: boolean
   isBigTeam: boolean
   ignoreAccessRequests: boolean
   publicityAnyMember: boolean
@@ -30,7 +31,7 @@ type RolePickerProps = {
   onOpenRolePicker: () => void
   onSelectRole: (role: Types.TeamRoleType) => void
   newOpenTeamRole: Types.TeamRoleType
-  disabledReasonsForRolePicker: {[K in Types.TeamRoleType]: string}
+  disabledReasonsForRolePicker: {[K in Types.TeamRoleType]?: string}
 }
 
 type NewSettings = {
@@ -60,19 +61,19 @@ const SetMemberShowcase = (props: SettingProps) => (
   <Box style={{...globalStyles.flexBoxColumn, alignItems: 'flex-start', paddingRight: globalMargins.small}}>
     <Checkbox
       checked={props.newPublicityMember}
-      disabled={!props.yourOperations.setMemberShowcase}
+      disabled={!props.canShowcase}
       labelComponent={
         <Box style={{...globalStyles.flexBoxColumn}}>
           <Text
             style={{
-              color: props.yourOperations.setMemberShowcase ? globalColors.black : globalColors.black_50,
+              color: props.canShowcase ? globalColors.black : globalColors.black_50,
             }}
             type="Body"
           >
             Publish team on your own profile
           </Text>
           <Text type="BodySmall">
-            {props.yourOperations.setMemberShowcase
+            {props.canShowcase
               ? 'Your profile will mention this team. Team description and number of members will be public.'
               : props.yourOperations.joinTeam
               ? 'You must join this team to publish it on your profile.'
@@ -160,7 +161,7 @@ const OpenTeam = (props: SettingProps & RolePickerProps) => {
                 floatingContainerStyle={styles.floatingRolePicker}
                 onConfirm={props.onConfirmRolePicker}
                 onCancel={props.onCancelRolePicker}
-                position={'bottom center'}
+                position="bottom center"
                 open={props.isRolePickerOpen}
                 disabledRoles={props.disabledReasonsForRolePicker}
               >
@@ -309,7 +310,7 @@ export class Settings extends React.Component<Props, State> {
         {(this.props.yourOperations.changeOpenTeam ||
           this.props.yourOperations.setTeamShowcase ||
           this.props.yourOperations.setPublicityAny) && (
-          <React.Fragment>
+          <>
             <Box style={{...globalStyles.flexBoxRow, paddingTop: globalMargins.small}}>
               <Text type="Header">Team</Text>
             </Box>
@@ -322,7 +323,7 @@ export class Settings extends React.Component<Props, State> {
               setBoolSettings={this.setBoolSettings}
             />
             <IgnoreAccessRequests {...this.props} {...this.state} setBoolSettings={this.setBoolSettings} />
-          </React.Fragment>
+          </>
         )}
         {this.props.yourOperations.chat && (
           <RetentionPicker
@@ -361,7 +362,7 @@ const stylesPublicitySettingsBox = {
   paddingTop: globalMargins.small,
 }
 
-const styles = styleSheetCreate({
+const styles = styleSheetCreate(() => ({
   floatingRolePicker: platformStyles({
     isElectron: {
       position: 'relative',
@@ -373,4 +374,4 @@ const styles = styleSheetCreate({
       paddingRight: 2,
     },
   }),
-})
+}))

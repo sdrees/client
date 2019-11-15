@@ -2,17 +2,29 @@
 import * as React from 'react'
 import * as Styles from '../styles'
 import * as Constants from '../constants/waiting'
+import * as RouteTreeGen from '../actions/route-tree-gen'
 import {Box2} from './box'
 import HeaderHoc from './header-hoc'
 import ScrollView from './scroll-view'
 import Text from './text'
 import Button from './button'
 import Icon from './icon'
-import {namedConnect} from '../util/container'
+import {namedConnect, isNetworkErr} from '../util/container'
 import {RPCError} from '../util/errors'
+import {settingsTab} from '../constants/tabs'
+import {feedbackTab} from '../constants/settings'
+
+const Kb = {
+  Box2,
+  Button,
+  Icon,
+  ScrollView,
+  Text,
+}
 
 type ReloadProps = {
   onBack?: () => void
+  onFeedback: () => void
   onReload: () => void
   reason: string
   title?: string
@@ -28,24 +40,26 @@ class Reload extends React.PureComponent<
   _toggle = () => this.setState(p => ({expanded: !p.expanded}))
   render() {
     return (
-      <Box2 direction="vertical" centerChildren={true} style={styles.reload} gap="small">
-        <Icon type="icon-skull-64" />
-        <Text center={true} type="Header">
+      <Kb.Box2 direction="vertical" centerChildren={true} style={styles.reload} gap="small">
+        <Icon type="icon-illustration-zen-240-180" />
+        <Kb.Text center={true} type="Header">
           We're having a hard time loading this page.
-        </Text>
+        </Kb.Text>
         {this.state.expanded && (
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInside}>
-            <Text type="Terminal" style={styles.details}>
+          <Kb.ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInside}>
+            <Kb.Text type="Terminal" style={styles.details}>
               {this.props.reason}
-            </Text>
-          </ScrollView>
+            </Kb.Text>
+          </Kb.ScrollView>
         )}
-        <Text type="BodySecondaryLink" onClick={this._toggle}>
+        <Kb.Text type="BodySecondaryLink" onClick={this._toggle}>
           {this.state.expanded ? 'Hide details' : 'Show details'}
-        </Text>
-
-        <Button label="Retry" onClick={this.props.onReload} />
-      </Box2>
+        </Kb.Text>
+        <Kb.Box2 direction="horizontal" gap="tiny">
+          <Kb.Button label="Retry" mode="Secondary" onClick={this.props.onReload} />
+          <Kb.Button label="Feedback" mode="Primary" onClick={this.props.onFeedback} />
+        </Kb.Box2>
+      </Kb.Box2>
     )
   }
 }
@@ -57,6 +71,7 @@ export type Props = {
   needsReload: boolean
   onBack?: () => void
   onReload: () => void
+  onFeedback: () => void
   reason: string
   reloadOnMount?: boolean
   title?: string
@@ -74,17 +89,18 @@ class Reloadable extends React.PureComponent<Props> {
     return this.props.onBack ? (
       <ReloadWithHeader
         onBack={this.props.onBack}
+        onFeedback={this.props.onFeedback}
         onReload={this.props.onReload}
         reason={this.props.reason}
         title={this.props.title}
       />
     ) : (
-      <Reload onReload={this.props.onReload} reason={this.props.reason} />
+      <Reload onReload={this.props.onReload} onFeedback={this.props.onFeedback} reason={this.props.reason} />
     )
   }
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   details: Styles.platformStyles({
     common: {
       flexGrow: 1,
@@ -119,7 +135,7 @@ const styles = Styles.styleSheetCreate({
     maxWidth: '100%',
     width: '100%',
   },
-})
+}))
 
 export type OwnProps = {
   children: React.ReactNode
@@ -133,19 +149,39 @@ export type OwnProps = {
 
 const mapStateToProps = (state, ownProps: OwnProps) => {
   let error = Constants.anyErrors(state, ownProps.waitingKeys)
+
+  // make sure reloadable only responds to network-related errors
+  error = error && isNetworkErr(error.code) ? error : undefined
+
   if (error && ownProps.errorFilter) {
-    error = ownProps.errorFilter(error) ? error : null
+    error = ownProps.errorFilter(error) ? error : undefined
   }
   return {
+    _loggedIn: state.config.loggedIn,
     needsReload: !!error,
     reason: (error && error.message) || '',
   }
 }
-const mapDispatchToProps = () => ({})
-const mergeProps = (stateProps, _, ownProps: OwnProps) => ({
+const mapDispatchToProps = dispatch => ({
+  _onFeedback: (loggedIn: boolean) => {
+    if (loggedIn) {
+      dispatch(RouteTreeGen.createNavigateAppend({path: [settingsTab]}))
+      dispatch(
+        RouteTreeGen.createNavigateAppend({
+          path: [{props: {heading: 'Oh no, a bug!'}, selected: feedbackTab}],
+        })
+      )
+    } else {
+      dispatch(RouteTreeGen.createNavigateAppend({path: ['feedback']}))
+    }
+  },
+})
+
+const mergeProps = (stateProps, dispatchProps, ownProps: OwnProps) => ({
   children: ownProps.children,
   needsReload: stateProps.needsReload,
   onBack: ownProps.onBack,
+  onFeedback: () => dispatchProps._onFeedback(stateProps._loggedIn),
   onReload: ownProps.onReload,
   reason: stateProps.reason,
   reloadOnMount: ownProps.reloadOnMount,

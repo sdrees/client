@@ -3,7 +3,8 @@ import * as Kb from '../../../../common-adapters'
 import * as TeamTypes from '../../../../constants/types/teams'
 import * as TeamConstants from '../../../../constants/teams'
 import * as Style from '../../../../styles'
-import {upperFirst} from 'lodash-es'
+import upperFirst from 'lodash/upperFirst'
+import {indefiniteArticle} from '../../../../util/string'
 
 type Props = {
   canSetMinWriterRole: boolean
@@ -80,7 +81,7 @@ const _Dropdown = ({
   showingMenu,
   toggleShowingMenu,
 }: DropdownProps) => (
-  <React.Fragment>
+  <>
     <Kb.ClickableBox
       style={styles.dropdown}
       ref={Style.isMobile ? null : setAttachmentRef}
@@ -107,55 +108,58 @@ const _Dropdown = ({
       minSavingTimeMs={300}
       savedTimeoutMs={2500}
     />
-  </React.Fragment>
+  </>
 )
 const Dropdown = Kb.OverlayParentHOC(_Dropdown)
 
 const Display = ({minWriterRole}) => (
   <Kb.Text type="BodySmall">
-    You must be at least {'aeiou'.includes(minWriterRole[0]) ? 'an' : 'a'}{' '}
+    You must be at least {indefiniteArticle(minWriterRole)}{' '}
     <Kb.Text type="BodySmallSemibold">“{minWriterRole}”</Kb.Text> to post in this channel.
   </Kb.Text>
 )
 
-const styles = Style.styleSheetCreate({
-  container: {
-    paddingLeft: Style.globalMargins.small,
-    paddingRight: Style.globalMargins.small,
-  },
-  dropdown: Style.platformStyles({
-    common: {
-      ...Style.globalStyles.flexBoxRow,
-      alignItems: 'center',
-      borderColor: Style.globalColors.grey,
-      borderRadius: Style.borderRadius,
-      borderStyle: 'solid',
-      borderWidth: 1,
-      minWidth: 220,
-      paddingRight: Style.globalMargins.small,
-    },
-    isElectron: {
-      marginRight: 45 - 16,
-      width: 'auto',
-    },
-  }),
-  label: {
-    ...Style.globalStyles.flexBoxCenter,
-    minHeight: Style.isMobile ? 40 : 32,
-    width: '100%',
-  },
-  saveIndicator: Style.platformStyles({
-    common: {
-      ...Style.globalStyles.flexBoxRow,
-      alignItems: 'center',
-      height: 17,
-      justifyContent: 'center',
-      marginTop: Style.globalMargins.tiny,
-    },
-    isMobile: {
-      height: Style.globalMargins.medium,
-    },
-  }),
-})
+const styles = Style.styleSheetCreate(
+  () =>
+    ({
+      container: {
+        paddingLeft: Style.globalMargins.small,
+        paddingRight: Style.globalMargins.small,
+      },
+      dropdown: Style.platformStyles({
+        common: {
+          ...Style.globalStyles.flexBoxRow,
+          alignItems: 'center',
+          borderColor: Style.globalColors.grey,
+          borderRadius: Style.borderRadius,
+          borderStyle: 'solid',
+          borderWidth: 1,
+          minWidth: 220,
+          paddingRight: Style.globalMargins.small,
+        },
+        isElectron: {
+          marginRight: 45 - 16,
+          width: 'auto',
+        },
+      }),
+      label: {
+        ...Style.globalStyles.flexBoxCenter,
+        minHeight: Style.isMobile ? 40 : 32,
+        width: '100%',
+      },
+      saveIndicator: Style.platformStyles({
+        common: {
+          ...Style.globalStyles.flexBoxRow,
+          alignItems: 'center',
+          height: 17,
+          justifyContent: 'center',
+          marginTop: Style.globalMargins.tiny,
+        },
+        isMobile: {
+          height: Style.globalMargins.medium,
+        },
+      }),
+    } as const)
+)
 
 export default MinWriterRole

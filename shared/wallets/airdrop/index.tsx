@@ -3,7 +3,7 @@ import * as Kb from '../../common-adapters'
 import * as Constants from '../../constants/wallets'
 import * as Styles from '../../styles'
 import * as Types from '../../constants/types/wallets'
-import {iconMeta} from '../../common-adapters/icon.constants'
+import {iconMeta} from '../../common-adapters/icon.constants-gen'
 import openURL from '../../util/open-url'
 
 export type Props = {
@@ -132,8 +132,12 @@ class Airdrop extends React.Component<Props> {
                 <Kb.Icon type="icon-fancy-airdrop-shining-120" />
               </Kb.Box2>
               <Kb.Box2 direction="vertical" gap="small" style={styles.headerText}>
-                <Kb.Markdown selectable={true} styleOverride={headerOverride}>{p.headerTitle}</Kb.Markdown>
-                <Kb.Markdown selectable={true} styleOverride={bodyOverride}>{p.headerBody}</Kb.Markdown>
+                <Kb.Markdown selectable={true} styleOverride={headerOverride}>
+                  {p.headerTitle}
+                </Kb.Markdown>
+                <Kb.Markdown selectable={true} styleOverride={bodyOverride}>
+                  {p.headerBody}
+                </Kb.Markdown>
                 <Kb.Button
                   backgroundColor="purple"
                   label="See if you qualify"
@@ -163,11 +167,13 @@ class Airdrop extends React.Component<Props> {
                         <Kb.Icon
                           type="iconfont-check"
                           color={Styles.globalColors.green}
-                          sizeType={'Small'}
+                          sizeType="Small"
                           style={styles.bullet}
                         />
                       )}
-                      <Kb.Markdown selectable={true} styleOverride={sectionBodyOverride}>{l.text}</Kb.Markdown>
+                      <Kb.Markdown selectable={true} styleOverride={sectionBodyOverride}>
+                        {l.text}
+                      </Kb.Markdown>
                     </Kb.Box2>
                   ))}
                 </Kb.Box2>
@@ -205,7 +211,7 @@ class Airdrop extends React.Component<Props> {
   }
 }
 
-const headerOverride = {
+const headerOverride = Styles.styleSheetCreate(() => ({
   paragraph: {
     ...Styles.globalStyles.fontSemibold,
     color: Styles.globalColors.white,
@@ -213,102 +219,105 @@ const headerOverride = {
     textAlign: Styles.isMobile ? ('center' as const) : ('left' as const),
   },
   strong: {...Styles.globalStyles.fontExtrabold},
-}
-const bodyOverride = {
+}))
+const bodyOverride = Styles.styleSheetCreate(() => ({
   paragraph: {
     color: Styles.globalColors.white,
     fontSize: Styles.isMobile ? 16 : 13,
     textAlign: Styles.isMobile ? ('center' as const) : ('left' as const),
   },
   strong: {...Styles.globalStyles.fontExtrabold},
-}
-const sectionOverride = {
+}))
+const sectionOverride = Styles.styleSheetCreate(() => ({
   paragraph: {
     ...Styles.globalStyles.fontSemibold,
     fontSize: Styles.isMobile ? 18 : 14,
   },
   strong: {...Styles.globalStyles.fontExtrabold},
-}
-const sectionBodyOverride = {
+}))
+const sectionBodyOverride = Styles.styleSheetCreate(() => ({
   paragraph: {fontSize: Styles.isMobile ? 16 : 13},
-}
+}))
 
-const styles = Styles.styleSheetCreate({
-  bannerButton: {
-    alignSelf: Styles.isMobile ? ('center' as const) : ('flex-start' as const),
-  },
-  body: {
-    paddingLeft: Styles.globalMargins.medium,
-    paddingRight: Styles.globalMargins.medium,
-  },
-  bullet: {
-    marginLeft: Styles.globalMargins.tiny,
-    marginRight: Styles.globalMargins.tiny,
-    marginTop: Styles.globalMargins.xtiny,
-  },
-  friendContainer: {
-    ...Styles.padding(Styles.globalMargins.small, Styles.globalMargins.medium),
-    backgroundColor: Styles.globalColors.blueLighter3,
-    display: 'flex',
-    flexWrap: 'wrap',
-  },
-  friendText: Styles.platformStyles({
-    isElectron: {whiteSpace: 'pre'},
-  }),
-  fullHeight: {height: '100%'},
-  grow: {flexGrow: 1, flexShrink: 1, width: 100},
-  header: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.purple,
-      paddingBottom: Styles.globalMargins.medium,
-    },
-    isElectron: {paddingTop: Styles.globalMargins.medium},
-  }),
-  headerText: Styles.platformStyles({
-    isElectron: {
-      paddingRight: Styles.globalMargins.large,
-    },
-    isMobile: {
-      paddingLeft: Styles.globalMargins.medium,
-      paddingRight: Styles.globalMargins.medium,
-      paddingTop: Styles.globalMargins.small,
-    },
-  }),
-  leaveButtonBar: {marginBottom: Styles.globalMargins.small},
-  link: {color: Styles.globalColors.purpleDark, fontWeight: '600'},
-  progress: {
-    height: 20,
-    width: 20,
-  },
-  qualifyButton: {
-    marginLeft: Styles.globalMargins.tiny,
-    marginRight: Styles.globalMargins.tiny,
-  },
-  scrollView: {
-    height: '100%',
-    width: '100%',
-  },
-  section: {marginBottom: Styles.globalMargins.xxtiny},
-  shrink: {
-    flexShrink: 1,
-  },
-  signedUpHeader: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.greenLighter,
-      borderRadius: Styles.borderRadius,
-      flexShrink: 1,
-      marginLeft: Styles.globalMargins.medium,
-      marginRight: Styles.globalMargins.medium,
-      marginTop: Styles.globalMargins.medium,
-      padding: Styles.globalMargins.tiny,
-    },
-    isElectron: {alignItems: 'center'},
-    isMobile: {alignItems: 'flex-start'},
-  }),
-  yourIn: {
-    color: Styles.globalColors.greenDark,
-    flexShrink: 1,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      bannerButton: {
+        alignSelf: Styles.isMobile ? ('center' as const) : ('flex-start' as const),
+      },
+      body: {
+        paddingLeft: Styles.globalMargins.medium,
+        paddingRight: Styles.globalMargins.medium,
+      },
+      bullet: {
+        marginLeft: Styles.globalMargins.tiny,
+        marginRight: Styles.globalMargins.tiny,
+        marginTop: Styles.globalMargins.xtiny,
+      },
+      friendContainer: {
+        ...Styles.padding(Styles.globalMargins.small, Styles.globalMargins.medium),
+        backgroundColor: Styles.globalColors.blueLighter3,
+        display: 'flex',
+        flexWrap: 'wrap',
+      },
+      friendText: Styles.platformStyles({
+        isElectron: {whiteSpace: 'pre'},
+      }),
+      fullHeight: {height: '100%'},
+      grow: {flexGrow: 1, flexShrink: 1, width: 100},
+      header: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.purple,
+          paddingBottom: Styles.globalMargins.medium,
+        },
+        isElectron: {paddingTop: Styles.globalMargins.medium},
+      }),
+      headerText: Styles.platformStyles({
+        isElectron: {
+          paddingRight: Styles.globalMargins.large,
+        },
+        isMobile: {
+          paddingLeft: Styles.globalMargins.medium,
+          paddingRight: Styles.globalMargins.medium,
+          paddingTop: Styles.globalMargins.small,
+        },
+      }),
+      leaveButtonBar: {marginBottom: Styles.globalMargins.small},
+      link: {color: Styles.globalColors.purpleDark, fontWeight: '600'},
+      progress: {
+        height: 20,
+        width: 20,
+      },
+      qualifyButton: {
+        marginLeft: Styles.globalMargins.tiny,
+        marginRight: Styles.globalMargins.tiny,
+      },
+      scrollView: {
+        height: '100%',
+        width: '100%',
+      },
+      section: {marginBottom: Styles.globalMargins.xxtiny},
+      shrink: {
+        flexShrink: 1,
+      },
+      signedUpHeader: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.greenLighterOrGreenDark,
+          borderRadius: Styles.borderRadius,
+          flexShrink: 1,
+          marginLeft: Styles.globalMargins.medium,
+          marginRight: Styles.globalMargins.medium,
+          marginTop: Styles.globalMargins.medium,
+          padding: Styles.globalMargins.tiny,
+        },
+        isElectron: {alignItems: 'center'},
+        isMobile: {alignItems: 'flex-start'},
+      }),
+      yourIn: {
+        color: Styles.globalColors.greenDarkOrWhite,
+        flexShrink: 1,
+      },
+    } as const)
+)
 
-export default (Styles.isMobile ? Kb.HeaderHoc(Airdrop) : Airdrop)
+export default Airdrop

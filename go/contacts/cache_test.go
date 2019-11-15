@@ -22,14 +22,19 @@ type anotherMockContactsProvider struct {
 	queryCount int
 }
 
+func (c *anotherMockContactsProvider) LookupAllWithToken(mctx libkb.MetaContext, emails []keybase1.EmailAddress,
+	numbers []keybase1.RawPhoneNumber, _ Token) (ContactLookupResults, error) {
+	return c.LookupAll(mctx, emails, numbers)
+}
+
 func (c *anotherMockContactsProvider) LookupAll(mctx libkb.MetaContext, emails []keybase1.EmailAddress,
-	numbers []keybase1.RawPhoneNumber, userRegion keybase1.RegionCode) (ContactLookupResults, error) {
+	numbers []keybase1.RawPhoneNumber) (ContactLookupResults, error) {
 
 	if c.disabled {
 		require.FailNow(c.t, "unexpected call to provider, after being disabled")
 	}
 	c.queryCount += len(emails) + len(numbers)
-	return c.provider.LookupAll(mctx, emails, numbers, userRegion)
+	return c.provider.LookupAll(mctx, emails, numbers)
 }
 
 func (c *anotherMockContactsProvider) FindUsernames(mctx libkb.MetaContext, uids []keybase1.UID) (map[keybase1.UID]ContactUsernameAndFullName, error) {
@@ -38,6 +43,10 @@ func (c *anotherMockContactsProvider) FindUsernames(mctx libkb.MetaContext, uids
 
 func (c *anotherMockContactsProvider) FindFollowing(mctx libkb.MetaContext, uids []keybase1.UID) (map[keybase1.UID]bool, error) {
 	return c.provider.FindFollowing(mctx, uids)
+}
+
+func (c *anotherMockContactsProvider) FindServiceMaps(mctx libkb.MetaContext, uids []keybase1.UID) (map[keybase1.UID]libkb.UserServiceSummary, error) {
+	return c.provider.FindServiceMaps(mctx, uids)
 }
 
 func TestCacheProvider(t *testing.T) {
@@ -50,7 +59,7 @@ func TestCacheProvider(t *testing.T) {
 		Store:    NewContactCacheStore(tc.G),
 	}
 
-	res, err := cacheProvider.LookupAll(libkb.NewMetaContextForTest(tc), []keybase1.EmailAddress{}, []keybase1.RawPhoneNumber{}, keybase1.RegionCode(""))
+	res, err := cacheProvider.LookupAll(libkb.NewMetaContextForTest(tc), []keybase1.EmailAddress{}, []keybase1.RawPhoneNumber{})
 	require.NoError(t, err)
 	require.Len(t, res.Results, 0)
 }
@@ -82,7 +91,7 @@ func TestLookupCache(t *testing.T) {
 	mockProvider := provider.provider
 
 	// Test empty contact list
-	res0, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, []keybase1.Contact{}, keybase1.RegionCode(""))
+	res0, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, []keybase1.Contact{})
 	require.NoError(t, err)
 	require.Len(t, res0, 0)
 
@@ -102,7 +111,7 @@ func TestLookupCache(t *testing.T) {
 	mockProvider.Emails["bob@keyba.se"] = MockLookupUser{UID: keybase1.UID("01ffffffffffffffffffffffffffff00"), Username: "bob"}
 	mockProvider.PhoneNumbers["+199123"] = MockLookupUser{UID: keybase1.UID("02ffffffffffffffffffffffffffff00"), Username: "other_bob"}
 
-	res1, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+	res1, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 	require.NoError(t, err)
 
 	// All components were processed.
@@ -116,7 +125,7 @@ func TestLookupCache(t *testing.T) {
 	// call.
 	provider.disabled = true
 
-	res2, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+	res2, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 	require.NoError(t, err)
 	require.Equal(t, res1, res2)
 
@@ -126,7 +135,7 @@ func TestLookupCache(t *testing.T) {
 
 	contactList[0].Components = append(contactList[0].Components, MakeEmailComponent("E-mail", "tester2@keyba.se"))
 
-	res2, err = ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+	res2, err = ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 	require.NoError(t, err)
 	require.Len(t, res2, 5)
 	require.Equal(t, res1, res2[0:4])                               // first 4 elements are the same
@@ -139,7 +148,7 @@ func TestLookupCache(t *testing.T) {
 	provider.disabled = true
 	provider.queryCount = 0
 
-	res3, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+	res3, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 	require.NoError(t, err)
 	require.Equal(t, res2, res3)
 	require.Equal(t, 0, provider.queryCount) // new email got cached as well
@@ -169,7 +178,7 @@ func TestLookupCacheExpiration(t *testing.T) {
 
 	mockProvider.PhoneNumbers["+1111222"] = MockLookupUser{UID: keybase1.UID("01ffffffffffffffffffffffffffff00"), Username: "bob"}
 
-	res1, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+	res1, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 	require.NoError(t, err)
 
 	// All components were looked up.
@@ -179,7 +188,7 @@ func TestLookupCacheExpiration(t *testing.T) {
 		// Query again with provider disabled, all results should be fetched from cache.
 		provider.disabled = true
 
-		res, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+		res, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 		require.NoError(t, err)
 		require.Equal(t, res1, res)
 
@@ -191,7 +200,7 @@ func TestLookupCacheExpiration(t *testing.T) {
 		// Push us over unresolved contact cache expiration time.
 		clock.Advance(25 * time.Hour) // see *MockContactsProvider::LookupAll for correct value
 
-		res, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+		res, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 		require.NoError(t, err)
 		require.Equal(t, res1, res)
 
@@ -205,7 +214,7 @@ func TestLookupCacheExpiration(t *testing.T) {
 		// Push us over resolved contact cache expiration time.
 		clock.Advance(10*24*time.Hour + time.Hour) // see *MockContactsProvider::LookupAll for correct value
 
-		res, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList, keybase1.RegionCode(""))
+		res, err := ResolveContacts(libkb.NewMetaContextForTest(tc), cacheProvider, contactList)
 		require.NoError(t, err)
 		require.Equal(t, res1, res)
 
@@ -229,7 +238,7 @@ func TestLookupCacheExpiration(t *testing.T) {
 			),
 		}
 
-		res, err := ResolveContacts(mctx, cacheProvider, contactList, keybase1.RegionCode(""))
+		res, err := ResolveContacts(mctx, cacheProvider, contactList)
 		require.NoError(t, err)
 		require.Len(t, res, 1)
 

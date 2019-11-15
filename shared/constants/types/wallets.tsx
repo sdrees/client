@@ -1,6 +1,7 @@
 import * as I from 'immutable'
 import HiddenString from '../../util/hidden-string'
 import * as StellarRPCTypes from './rpc-stellar-gen'
+import * as TeamBuildingTypes from './team-building'
 
 // When accepting the Stellar disclaimer, next path after acceptance
 export type NextScreenAfterAcceptance = 'airdrop' | 'openWallet'
@@ -41,7 +42,11 @@ export const accountIDToString = (accountID: AccountID): string => accountID
 // No account
 export const noAccountID = stringToAccountID('NOACCOUNTID')
 
-export const isValidAccountID = (accountID: AccountID) => accountID && accountID !== noAccountID
+// Airdrop wallet row is selected
+export const airdropAccountID = stringToAccountID('AIRDROP')
+
+export const isValidAccountID = (accountID: AccountID) =>
+  !!accountID && accountID !== noAccountID && accountID !== airdropAccountID
 
 export type PartnerUrl = StellarRPCTypes.PartnerUrl
 
@@ -135,6 +140,7 @@ export type _BuiltPayment = {
   builtBanners: Array<StellarRPCTypes.SendBannerLocal> | null
   from: AccountID
   publicMemoErrMsg: HiddenString
+  publicMemoOverride: HiddenString
   readyToReview: boolean
   readyToSend: string
   secretNoteErrMsg: HiddenString
@@ -293,23 +299,15 @@ export type _Account = {
 }
 export type Account = I.RecordOf<_Account>
 
-export type _InflationDestination = {
-  name: string
-  recommended: boolean
-  address: AccountID
-  link: string
-}
-export type InflationDestination = I.RecordOf<_InflationDestination>
-
-export type _AccountInflationDestination = {
-  accountID: AccountID
-  name: string // if known
-}
-export type AccountInflationDestination = I.RecordOf<_AccountInflationDestination>
-
 export type ValidationState = 'none' | 'waiting' | 'error' | 'valid'
 
-export type AirdropState = 'loading' | 'accepted' | 'qualified' | 'unqualified' | 'needDisclaimer'
+export type AirdropState =
+  | 'loading'
+  | 'accepted'
+  | 'qualified'
+  | 'unqualified'
+  | 'needDisclaimer'
+  | 'rejected'
 
 export type _AirdropQualification = {
   title: string
@@ -404,9 +402,6 @@ export type _State = {
   exportedSecretKey: HiddenString
   exportedSecretKeyAccountID: AccountID
   externalPartners: I.List<PartnerUrl>
-  inflationDestinationError: string
-  inflationDestinationMap: I.Map<AccountID, AccountInflationDestination>
-  inflationDestinations: I.List<InflationDestination>
   lastSentXLM: boolean
   linkExistingAccountError: string
   mobileOnlyMap: I.Map<AccountID, boolean>
@@ -428,7 +423,9 @@ export type _State = {
   sep7ConfirmInfo: SEP7ConfirmInfo | null
   sep7ConfirmPath: BuiltPaymentAdvanced
   sep7ConfirmURI: string
+  sep7SendError: string
   staticConfig: StaticConfig | null
+  teamBuilding: TeamBuildingTypes.TeamBuildingSubState
   trustline: Trustline
   unreadPaymentsMap: I.Map<string, number>
 }

@@ -6,6 +6,7 @@ import * as Types from '../../constants/types/fs'
 export type Props = {
   disableSync: () => void
   enableSync: () => void
+  hideSyncToggle: boolean
   syncConfig?: Types.TlfSyncConfig | null
   waiting: boolean
 } & Kb.OverlayParentProps
@@ -59,7 +60,7 @@ const Confirm = props => (
 )
 
 const SyncToggle = (props: Props) =>
-  props.syncConfig ? (
+  props.syncConfig && !props.hideSyncToggle ? (
     <>
       <Kb.Switch
         align="right"
@@ -68,7 +69,7 @@ const SyncToggle = (props: Props) =>
         }
         on={props.syncConfig.mode === Types.TlfSyncMode.Enabled}
         color="green"
-        label={'Sync on this device'}
+        label="Sync on this device"
         ref={props.setAttachmentRef}
         disabled={props.waiting}
       />
@@ -102,37 +103,40 @@ const SyncToggle = (props: Props) =>
     </>
   ) : null
 
-const styles = Styles.styleSheetCreate({
-  explainText: Styles.platformStyles({
-    isElectron: {
-      marginTop: Styles.globalMargins.xxtiny,
-    },
-    isMobile: {
-      marginTop: Styles.globalMargins.tiny,
-    },
-  }),
-  floating: Styles.platformStyles({
-    isElectron: {
-      marginTop: -38,
-    },
-  }),
-  popupButtonContainer: {
-    marginTop: Styles.globalMargins.xsmall,
-  },
-  popupContainer: Styles.platformStyles({
-    common: {
-      paddingBottom: Styles.globalMargins.small,
-      paddingLeft: Styles.globalMargins.medium,
-      paddingRight: Styles.globalMargins.medium,
-    },
-    isElectron: {
-      paddingTop: Styles.globalMargins.small,
-      width: 235,
-    },
-    isMobile: {
-      paddingTop: Styles.globalMargins.large,
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      explainText: Styles.platformStyles({
+        isElectron: {
+          marginTop: Styles.globalMargins.xxtiny,
+        },
+        isMobile: {
+          marginTop: Styles.globalMargins.tiny,
+        },
+      }),
+      floating: Styles.platformStyles({
+        isElectron: {
+          marginTop: -38,
+        },
+      }),
+      popupButtonContainer: {
+        marginTop: Styles.globalMargins.xsmall,
+      },
+      popupContainer: Styles.platformStyles({
+        common: {
+          paddingBottom: Styles.globalMargins.small,
+          paddingLeft: Styles.globalMargins.medium,
+          paddingRight: Styles.globalMargins.medium,
+        },
+        isElectron: {
+          paddingTop: Styles.globalMargins.small,
+          width: 235,
+        },
+        isMobile: {
+          paddingTop: Styles.globalMargins.large,
+        },
+      }),
+    } as const)
+)
 
 export default Kb.OverlayParentHOC(SyncToggle)

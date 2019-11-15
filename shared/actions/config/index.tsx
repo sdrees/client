@@ -13,15 +13,16 @@ import * as RPCTypes from '../../constants/types/rpc-gen'
 import * as Constants from '../../constants/config'
 import * as ChatConstants from '../../constants/chat2'
 import * as SettingsConstants from '../../constants/settings'
+import * as LoginConstants from '../../constants/login'
 import * as Saga from '../../util/saga'
 import * as PlatformSpecific from '../platform-specific'
 import * as RouteTreeGen from '../route-tree-gen'
 import * as Tabs from '../../constants/tabs'
 import * as Router2 from '../../constants/router2'
 import * as FsTypes from '../../constants/types/fs'
-import * as FsConstants from '../../constants/fs'
 import URL from 'url-parse'
-import {isMobile} from '../../constants/platform'
+import {noVersion} from '../../constants/whats-new'
+import {isAndroid, isMobile, appColorSchemeChanged} from '../../constants/platform'
 import {updateServerConfigLastLoggedIn} from '../../app/server-config'
 import * as Container from '../../util/container'
 
@@ -72,6 +73,20 @@ const onHTTPSrvInfoUpdated = (
     token: action.payload.params.info.token,
   })
 
+const getFollowerInfo = (
+  state: Container.TypedState,
+  action: ConfigGen.LoggedInPayload | ConfigGen.StartupFirstIdlePayload
+) => {
+  const {uid} = state.config
+  if (action.type === ConfigGen.loggedIn && action.payload.causedByStartup) {
+    return
+  }
+  if (uid) {
+    // request follower info in the background
+    RPCTypes.configRequestFollowerInfoRpcPromise({uid: state.config.uid})
+  }
+}
+
 // set to true so we reget status when we're reachable again
 let wasUnreachable = false
 function* loadDaemonBootstrapStatus(
@@ -92,9 +107,7 @@ function* loadDaemonBootstrapStatus(
   }
 
   function* makeCall() {
-    const s: Saga.RPCPromiseType<
-      typeof RPCTypes.configGetBootstrapStatusRpcPromise
-    > = yield RPCTypes.configGetBootstrapStatusRpcPromise()
+    const s: Saga.RPCPromiseType<typeof RPCTypes.configGetBootstrapStatusRpcPromise> = yield RPCTypes.configGetBootstrapStatusRpcPromise()
     const loadedAction = ConfigGen.createBootstrapStatusLoaded({
       deviceID: s.deviceID,
       deviceName: s.deviceName,
@@ -107,8 +120,6 @@ function* loadDaemonBootstrapStatus(
     })
     logger.info(`[Bootstrap] loggedIn: ${loadedAction.payload.loggedIn ? 1 : 0}`)
     yield Saga.put(loadedAction)
-    // request follower info in the background
-    yield RPCTypes.configRequestFollowerInfoRpcPromise({uid: s.uid})
     // set HTTP srv info
     if (s.httpSrvInfo) {
       yield Saga.put(
@@ -216,6 +227,11 @@ function* loadDaemonAccounts(
     | ConfigGen.LoggedOutPayload
     | ConfigGen.LoggedInPayload
 ) {
+  // ignore since we handle handshake
+  if (action.type === ConfigGen.loggedIn && action.payload.causedByStartup) {
+    return
+  }
+
   let handshakeWait = false
   let handshakeVersion = 0
 
@@ -238,9 +254,7 @@ function* loadDaemonAccounts(
       )
     }
 
-    const configuredAccounts: Array<
-      RPCTypes.ConfiguredAccount
-    > = yield RPCTypes.loginGetConfiguredAccountsRpcPromise()
+    const configuredAccounts: Array<RPCTypes.ConfiguredAccount> = yield RPCTypes.loginGetConfiguredAccountsRpcPromise()
     const loadedAction = ConfigGen.createSetAccounts({configuredAccounts})
     yield Saga.put(loadedAction)
 
@@ -271,9 +285,9 @@ function* loadDaemonAccounts(
           })
         )
       }
-      return undefined
     }
   }
+  return
 }
 
 const showDeletedSelfRootPage = () => [
@@ -290,10 +304,13 @@ const switchRouteDef = (
       // only do this if we're not handling the initial loggedIn event, cause its handled by routeToInitialScreenOnce
       return [
         RouteTreeGen.createSwitchLoggedIn({loggedIn: true}),
+        RouteTreeGen.createSwitchTab({tab: Tabs.peopleTab}),
         ...(action.payload.causedBySignup
           ? [RouteTreeGen.createNavigateAppend({path: ['signupEnterPhoneNumber']})]
           : []),
       ]
+    } else if (action.type === ConfigGen.loggedIn) {
+      return RouteTreeGen.createSwitchLoggedIn({loggedIn: true})
     }
   } else {
     return RouteTreeGen.createSwitchLoggedIn({loggedIn: false})
@@ -306,26 +323,26 @@ const resetGlobalStore = (): any => ({payload: {}, type: 'common:resetStore'})
 // Figure out whether we can log out using CanLogout, if so,
 // startLogoutHandshake, else do what's needed - right now only
 // redirect to set password screen.
-const startLogoutHandshakeIfAllowed = (state: Container.TypedState) =>
-  RPCTypes.userCanLogoutRpcPromise().then(canLogoutRes => {
-    if (canLogoutRes.canLogout) {
-      return startLogoutHandshake(state)
+const startLogoutHandshakeIfAllowed = async (state: Container.TypedState) => {
+  const canLogoutRes = await RPCTypes.userCanLogoutRpcPromise()
+  if (canLogoutRes.canLogout) {
+    return startLogoutHandshake(state)
+  } else {
+    const heading = canLogoutRes.reason
+    if (isMobile) {
+      return RouteTreeGen.createNavigateAppend({
+        path: [Tabs.settingsTab, {props: {heading}, selected: SettingsConstants.passwordTab}],
+      })
     } else {
-      const heading = canLogoutRes.reason
-      if (isMobile) {
-        return RouteTreeGen.createNavigateAppend({
-          path: [Tabs.settingsTab, {props: {heading}, selected: SettingsConstants.passwordTab}],
-        })
-      } else {
-        return [
-          RouteTreeGen.createNavigateAppend({path: [Tabs.settingsTab]}),
-          RouteTreeGen.createNavigateAppend({
-            path: [{props: {heading}, selected: 'changePassword'}],
-          }),
-        ]
-      }
+      return [
+        RouteTreeGen.createNavigateAppend({path: [Tabs.settingsTab]}),
+        RouteTreeGen.createNavigateAppend({
+          path: [{props: {heading}, selected: 'changePassword'}],
+        }),
+      ]
     }
-  })
+  }
+}
 
 const startLogoutHandshake = (state: Container.TypedState) =>
   ConfigGen.createLogoutHandshake({version: state.config.logoutHandshakeVersion + 1})
@@ -334,7 +351,7 @@ const startLogoutHandshake = (state: Container.TypedState) =>
 // stuff to trigger this due to a timeout if there's no listeners or something
 function* maybeDoneWithLogoutHandshake(state: Container.TypedState) {
   if (state.config.logoutHandshakeWaiters.size <= 0) {
-    yield RPCTypes.loginLogoutRpcPromise()
+    yield RPCTypes.loginLogoutRpcPromise({force: false, keepSecrets: false})
   }
 }
 
@@ -384,9 +401,13 @@ const routeToInitialScreen = (state: Container.TypedState) => {
 
     // A share
     if (state.config.startupSharePath) {
+      // TODO/FIXME: this seems unused. [ShareDataIntent] in
+      // actions/platform-specific/push.native.tsx happens at cold-start too,
+      // so maybe we can just use that. Though that happens before this
+      // (routeToInitialScreen), so in the end it just routes to the saved tab
+      // which gets rid of the destination-picker modal.
       return [
         RouteTreeGen.createSwitchLoggedIn({loggedIn: true}),
-        RouteTreeGen.createNavigateAppend({path: FsConstants.fsRootRouteForNav1}),
         FsGen.createSetIncomingShareLocalPath({localPath: state.config.startupSharePath}),
         FsGen.createShowIncomingShare({initialDestinationParentPath: FsTypes.stringToPath('/keybase')}),
       ]
@@ -397,7 +418,6 @@ const routeToInitialScreen = (state: Container.TypedState) => {
       return [
         RouteTreeGen.createSwitchLoggedIn({loggedIn: true}),
         RouteTreeGen.createSwitchTab({tab: Tabs.peopleTab}),
-        RouteTreeGen.createNavigateAppend({path: FsConstants.fsRootRouteForNav1}),
         ProfileGen.createShowUserProfile({username: state.config.startupFollowUser}),
       ]
     }
@@ -472,36 +492,35 @@ function* allowLogoutWaiters(_: Container.TypedState, action: ConfigGen.LogoutHa
   )
 }
 
-const updateServerConfig = (state: Container.TypedState) =>
-  RPCTypes.apiserverGetWithSessionRpcPromise({
-    endpoint: 'user/features',
-  })
-    .then(str => {
-      const obj: {
-        features: {
-          admin?: {
-            value: boolean
-          }
+const updateServerConfig = async (state: Container.TypedState) => {
+  try {
+    const str = await RPCTypes.apiserverGetWithSessionRpcPromise({
+      endpoint: 'user/features',
+    })
+    const obj: {
+      features: {
+        admin?: {
+          value: boolean
         }
-      } = JSON.parse(str.body)
-      const features = Object.keys(obj.features).reduce((map, key) => {
-        map[key] = obj.features[key] && obj.features[key].value
-        return map
-      }, {}) as {[K in string]: boolean}
-
-      const serverConfig = {
-        chatIndexProfilingEnabled: !!features.admin,
-        dbCleanEnabled: !!features.admin,
-        printRPCStats: !!features.admin,
       }
+    } = JSON.parse(str.body)
+    const features = Object.keys(obj.features).reduce((map, key) => {
+      map[key] = obj.features[key] && obj.features[key].value
+      return map
+    }, {}) as {[K in string]: boolean}
 
-      logger.info('updateServerConfig', serverConfig)
-      updateServerConfigLastLoggedIn(state.config.username, serverConfig)
-    })
-    .catch(e => {
-      logger.info('updateServerConfig fail', e)
-    })
+    const serverConfig = {
+      chatIndexProfilingEnabled: !!features.admin,
+      dbCleanEnabled: !!features.admin,
+      printRPCStats: !!features.admin,
+    }
 
+    logger.info('updateServerConfig', serverConfig)
+    updateServerConfigLastLoggedIn(state.config.username, serverConfig)
+  } catch (e) {
+    logger.info('updateServerConfig fail', e)
+  }
+}
 const setNavigator = (_: Container.TypedState, action: ConfigGen.SetNavigatorPayload) => {
   const navigator = action.payload.navigator
   Router2._setNavigator(navigator)
@@ -523,12 +542,13 @@ const newNavigation = (
 }
 
 function* criticalOutOfDateCheck() {
+  yield Saga.delay(2 * 60 * 1000) // don't bother checking during startup
   // check every hour
   while (true) {
     try {
-      const s: Saga.RPCPromiseType<
-        typeof RPCTypes.configGetUpdateInfo2RpcPromise
-      > = yield RPCTypes.configGetUpdateInfo2RpcPromise({})
+      const s: Saga.RPCPromiseType<typeof RPCTypes.configGetUpdateInfo2RpcPromise> = yield RPCTypes.configGetUpdateInfo2RpcPromise(
+        {}
+      )
       let status: ConfigGen.UpdateCriticalCheckStatusPayload['payload']['status'] = 'ok'
       let message: string | null = null
       switch (s.status) {
@@ -536,11 +556,11 @@ function* criticalOutOfDateCheck() {
           break
         case RPCTypes.UpdateInfoStatus2.suggested:
           status = 'suggested'
-          message = s.suggested && s.suggested.message
+          message = s.suggested.message
           break
         case RPCTypes.UpdateInfoStatus2.critical:
           status = 'critical'
-          message = s.critical && s.critical.message
+          message = s.critical.message
           break
         default:
           Flow.ifFlowComplainsAboutThisFunctionYouHaventHandledAllCasesInASwitch(s)
@@ -548,6 +568,10 @@ function* criticalOutOfDateCheck() {
       yield Saga.put(ConfigGen.createUpdateCriticalCheckStatus({message: message || '', status}))
     } catch (e) {
       logger.error("Can't call critical check", e)
+    }
+    // We just need this once on mobile. Long timers don't work there.
+    if (isMobile) {
+      return
     }
     yield Saga.delay(3600 * 1000) // 1 hr
   }
@@ -584,7 +608,61 @@ const saveDarkPrefs = async (state: Container.TypedState) => {
   } catch (_) {}
 }
 
-function* configSaga(): Saga.SagaGenerator<any, any> {
+const logoutAndTryToLogInAs = async (
+  state: Container.TypedState,
+  action: ConfigGen.LogoutAndTryToLogInAsPayload
+) => {
+  if (state.config.loggedIn) {
+    await RPCTypes.loginLogoutRpcPromise({force: false, keepSecrets: true}, LoginConstants.waitingKey)
+  }
+  return ConfigGen.createSetDefaultUsername({username: action.payload.username})
+}
+
+const gregorPushState = (_: Container.TypedState, action: GregorGen.PushStatePayload) => {
+  const actions: Array<Container.TypedActions> = []
+  const items = action.payload.state
+  const lastSeenItem = items.find(i => i.item && i.item.category === 'whatsNewLastSeenVersion')
+  if (lastSeenItem) {
+    const {body} = lastSeenItem.item
+    const pushStateLastSeenVersion = body.toString()
+    const lastSeenVersion = pushStateLastSeenVersion || noVersion
+    // Default to 0.0.0 (noVersion) if user has never marked a version as seen
+    actions.push(
+      ConfigGen.createSetWhatsNewLastSeenVersion({
+        lastSeenVersion,
+      })
+    )
+  } else {
+    actions.push(
+      ConfigGen.createSetWhatsNewLastSeenVersion({
+        lastSeenVersion: noVersion,
+      })
+    )
+  }
+  return actions
+}
+
+const loadNixOnLoginStartup = async () => {
+  try {
+    const status =
+      (await RPCTypes.ctlGetNixOnLoginStartupRpcPromise()) === RPCTypes.OnLoginStartupStatus.enabled
+    return ConfigGen.createLoadedNixOnLoginStartup({status})
+  } catch (err) {
+    logger.warn('Error in loading proxy data', err)
+    return null
+  }
+}
+
+const emitStartupFirstIdle = async () => {
+  await Saga.delay(1000)
+  return new Promise<ConfigGen.StartupFirstIdlePayload>(resolve => {
+    requestAnimationFrame(() => {
+      resolve(ConfigGen.createStartupFirstIdle())
+    })
+  })
+}
+
+function* configSaga() {
   // Start the handshake process. This means we tell all sagas we're handshaking with the daemon. If another
   // saga needs to do something before we leave the loading screen they should call daemonHandshakeWait
   yield* Saga.chainAction2([ConfigGen.restartHandshake, ConfigGen.startHandshake], startHandshake)
@@ -613,6 +691,10 @@ function* configSaga(): Saga.SagaGenerator<any, any> {
   // Go to the correct starting screen
   yield* Saga.chainAction2([ConfigGen.daemonHandshakeDone, ConfigGen.setNavigator], routeToInitialScreen2)
 
+  yield* Saga.chainAction2(ConfigGen.daemonHandshakeDone, emitStartupFirstIdle)
+
+  yield* Saga.chainAction2(ConfigGen.logoutAndTryToLogInAs, logoutAndTryToLogInAs, 'logoutAndTryToLogInAs')
+
   yield* Saga.chainAction2(
     [
       RouteTreeGen.navigateAppend,
@@ -639,7 +721,7 @@ function* configSaga(): Saga.SagaGenerator<any, any> {
   // When we're all done lets clean up
   yield* Saga.chainAction2(ConfigGen.loggedOut, resetGlobalStore)
   // Store per user server config info
-  yield* Saga.chainAction2(ConfigGen.loggedIn, updateServerConfig)
+  yield* Saga.chainAction2(ConfigGen.startupFirstIdle, updateServerConfig)
 
   yield* Saga.chainAction2(ConfigGen.setDeletedSelf, showDeletedSelfRootPage)
 
@@ -651,12 +733,25 @@ function* configSaga(): Saga.SagaGenerator<any, any> {
   yield* Saga.chainAction2(EngineGen.keybase1NotifyTrackingTrackingInfo, onTrackingInfo)
   yield* Saga.chainAction2(EngineGen.keybase1NotifyServiceHTTPSrvInfoUpdate, onHTTPSrvInfoUpdated)
 
+  // Listen for updates to `whatsNewLastSeenVersion`
+  yield* Saga.chainAction2(GregorGen.pushState, gregorPushState, 'gregorPushState')
+
   yield* Saga.chainAction2(SettingsGen.loadedSettings, maybeLoadAppLink)
 
   yield* Saga.chainAction2(ConfigGen.setDarkModePreference, saveDarkPrefs)
+  if (isAndroid) {
+    yield* Saga.chainAction2(ConfigGen.setDarkModePreference, (state: Container.TypedState) =>
+      appColorSchemeChanged(state.config.darkModePreference)
+    )
+  }
+
+  yield* Saga.chainAction2([ConfigGen.loggedIn, ConfigGen.startupFirstIdle], getFollowerInfo)
+
   // Kick off platform specific stuff
   yield Saga.spawn(PlatformSpecific.platformConfigSaga)
   yield Saga.spawn(criticalOutOfDateCheck)
+
+  yield* Saga.chainAction2(ConfigGen.loadNixOnLoginStartup, loadNixOnLoginStartup)
 }
 
 export default configSaga

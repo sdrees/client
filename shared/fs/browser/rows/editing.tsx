@@ -3,7 +3,7 @@ import * as Types from '../../../constants/types/fs'
 import * as Styles from '../../../styles'
 import * as Kb from '../../../common-adapters'
 import {rowStyles} from './common'
-import PathItemIcon from '../../common/path-item-icon'
+import flags from '../../../util/feature-flags'
 
 type EditingProps = {
   name: string
@@ -22,14 +22,13 @@ const Editing = (props: EditingProps) => {
     <Kb.ListItem2
       type="Small"
       firstItem={true /* we add divider in Rows */}
+      statusIcon={
+        flags.kbfsOfflineMode ? <Kb.Icon type="iconfont-add" sizeType="Small" padding="xtiny" /> : undefined
+      }
       icon={
-        <PathItemIcon
-          path={props.projectedPath}
-          size={32}
-          type={Types.PathType.Folder}
-          username=""
-          style={rowStyles.pathItemIcon}
-        />
+        <Kb.Box style={rowStyles.pathItemIcon}>
+          <Kb.Icon type="icon-folder-32" />
+        </Kb.Box>
       }
       body={
         <Kb.Box key="main" style={rowStyles.itemBox}>
@@ -75,32 +74,35 @@ const Editing = (props: EditingProps) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  button: {
-    marginLeft: Styles.globalMargins.tiny,
-  },
-  iconCancel: Styles.platformStyles({
-    common: {
-      padding: Styles.globalMargins.tiny,
-      paddingRight: 0,
-    },
-    isMobile: {
-      fontSize: 22,
-    },
-  }),
-  rightBox: {
-    ...Styles.globalStyles.flexBoxRow,
-    alignItems: 'center',
-    flexShrink: 1,
-    justifyContent: 'flex-end',
-  },
-  text: Styles.platformStyles({
-    common: {
-      ...Styles.globalStyles.fontSemibold,
-      maxWidth: '100%',
-    },
-    isMobile: {marginTop: 22},
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      button: {
+        marginLeft: Styles.globalMargins.tiny,
+      },
+      iconCancel: Styles.platformStyles({
+        common: {
+          padding: Styles.globalMargins.tiny,
+          paddingRight: 0,
+        },
+        isMobile: {
+          fontSize: 22,
+        },
+      }),
+      rightBox: {
+        ...Styles.globalStyles.flexBoxRow,
+        alignItems: 'center',
+        flexShrink: 1,
+        justifyContent: 'flex-end',
+      },
+      text: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.fontSemibold,
+          maxWidth: '100%',
+        },
+        isMobile: {marginTop: 22},
+      }),
+    } as const)
+)
 
 export default Editing

@@ -35,8 +35,8 @@ type UPAKLoader interface {
 	ListFollowedUIDs(ctx context.Context, uid keybase1.UID) ([]keybase1.UID, error)
 	PutUserToCache(ctx context.Context, user *User) error
 	LoadV2WithKID(ctx context.Context, uid keybase1.UID, kid keybase1.KID) (*keybase1.UserPlusKeysV2AllIncarnations, error)
-	CheckDeviceForUIDAndUsername(ctx context.Context, uid keybase1.UID, did keybase1.DeviceID, n NormalizedUsername) error
-	Batcher(ctx context.Context, getArg func(int) *LoadUserArg, processResult func(int, *keybase1.UserPlusKeysV2AllIncarnations), window int) (err error)
+	CheckDeviceForUIDAndUsername(ctx context.Context, uid keybase1.UID, did keybase1.DeviceID, n NormalizedUsername, suppressNetworkErrors bool) error
+	Batcher(ctx context.Context, getArg func(int) *LoadUserArg, processResult func(int, *keybase1.UserPlusKeysV2AllIncarnations) error, window int) (err error)
 }
 
 // CachedUPAKLoader is a UPAKLoader implementation that can cache results both
@@ -145,60 +145,60 @@ func (u *CachedUPAKLoader) getCachedUPAKFromDB(ctx context.Context, uid keybase1
 	return &tmp
 }
 
-func (u *CachedUPAKLoader) getCachedUPAKFromDBMaybeTryBothSlots(ctx context.Context, uid keybase1.UID, stubMode StubMode) (ret *keybase1.UserPlusKeysV2AllIncarnations) {
+func (u *CachedUPAKLoader) getCachedUPAKFromDBMaybeTryBothSlots(ctx context.Context, uid keybase1.UID, stubMode StubMode) (ret *keybase1.UserPlusKeysV2AllIncarnations, finalStubMode StubMode) {
 	return pickBetterFromCache(func(stubMode StubMode) *keybase1.UserPlusKeysV2AllIncarnations {
 		return u.getCachedUPAKFromDB(ctx, uid, stubMode)
 	}, stubMode)
 }
 
-func (u *CachedUPAKLoader) getMemCacheMaybeTryBothSlots(ctx context.Context, uid keybase1.UID, stubMode StubMode) (ret *keybase1.UserPlusKeysV2AllIncarnations) {
+func (u *CachedUPAKLoader) getMemCacheMaybeTryBothSlots(ctx context.Context, uid keybase1.UID, stubMode StubMode) (ret *keybase1.UserPlusKeysV2AllIncarnations, finalStubMode StubMode) {
 	return pickBetterFromCache(func(stubMode StubMode) *keybase1.UserPlusKeysV2AllIncarnations {
 		return u.getMemCache(ctx, uid, stubMode)
 	}, stubMode)
 }
 
-func pickBetterFromCache(getter func(stubMode StubMode) *keybase1.UserPlusKeysV2AllIncarnations, stubMode StubMode) (ret *keybase1.UserPlusKeysV2AllIncarnations) {
+func pickBetterFromCache(getter func(stubMode StubMode) *keybase1.UserPlusKeysV2AllIncarnations, stubMode StubMode) (ret *keybase1.UserPlusKeysV2AllIncarnations, finalStubMode StubMode) {
 
 	ret = getter(stubMode)
 	if stubMode == StubModeUnstubbed {
-		return ret
+		return ret, StubModeUnstubbed
 	}
 
 	stubbed := ret
 	unstubbed := getter(StubModeUnstubbed)
 
 	if unstubbed == nil {
-		return stubbed
+		return stubbed, StubModeStubbed
 	}
 	if stubbed == nil {
-		return unstubbed
+		return unstubbed, StubModeUnstubbed
 	}
 	if unstubbed.IsOlderThan(*stubbed) {
-		return stubbed
+		return stubbed, StubModeStubbed
 	}
-	return unstubbed
+	return unstubbed, StubModeUnstubbed
 }
 
 func (u *CachedUPAKLoader) getCachedUPAKTryMemThenDisk(ctx context.Context, uid keybase1.UID, stubMode StubMode, info *CachedUserLoadInfo) *keybase1.UserPlusKeysV2AllIncarnations {
-	upak := u.getMemCacheMaybeTryBothSlots(ctx, uid, stubMode)
+	upak, cacheStubMode := u.getMemCacheMaybeTryBothSlots(ctx, uid, stubMode)
 
 	if upak != nil {
 		// Note that below we check the minor version and then discard the cached object if it's
 		// stale. But no need in memory, since we'll never have the old version in memory.
-		u.G().VDL.CLogf(ctx, VLog0, "| hit memory cache")
+		u.G().VDL.CLogf(ctx, VLog0, "| hit memory cache (%s -> %s)", stubMode, cacheStubMode)
 		if info != nil {
 			info.InCache = true
 		}
 		return upak
 	}
 
-	upak = u.getCachedUPAKFromDBMaybeTryBothSlots(ctx, uid, stubMode)
+	upak, cacheStubMode = u.getCachedUPAKFromDBMaybeTryBothSlots(ctx, uid, stubMode)
 	if upak == nil {
 		u.G().VDL.CLogf(ctx, VLog0, "| missed cache")
 		return nil
 	}
 
-	u.G().VDL.CLogf(ctx, VLog0, "| hit disk cache")
+	u.G().VDL.CLogf(ctx, VLog0, "| hit disk cache (%s -> %s)", stubMode, cacheStubMode)
 	if info != nil {
 		info.InDiskCache = true
 	}
@@ -225,6 +225,10 @@ func (u *CachedUPAKLoader) getCachedUPAK(ctx context.Context, uid keybase1.UID, 
 		u.G().VDL.CLogf(ctx, VLog0, "| cache hit was fresh (cached %s ago)", diff)
 	} else {
 		u.G().VDL.CLogf(ctx, VLog0, "| cache hit was stale (by %s)", u.Freshness-diff)
+	}
+	if upak.Stale {
+		u.G().VDL.CLogf(ctx, VLog0, "| object is stale by persisted stale bit")
+		fresh = false
 	}
 
 	return upak, fresh
@@ -272,7 +276,15 @@ func (u *CachedUPAKLoader) extractDeviceKey(upak keybase1.UserPlusAllKeys, devic
 	return deviceKey, revoked, nil
 }
 
-func (u *CachedUPAKLoader) putUPAKToCache(ctx context.Context, obj *keybase1.UserPlusKeysV2AllIncarnations, stubMode StubMode) error {
+func (u *CachedUPAKLoader) putUPAKToDB(ctx context.Context, uid keybase1.UID, stubMode StubMode, obj keybase1.UserPlusKeysV2AllIncarnations) (err error) {
+	err = u.G().LocalDb.PutObj(culDBKeyV2(uid, stubMode), nil, obj)
+	if err != nil {
+		u.G().Log.CWarningf(ctx, "Error in writing UPAK for %s %s: %s", uid, stubMode, err)
+	}
+	return err
+}
+
+func (u *CachedUPAKLoader) putUPAKToCache(ctx context.Context, obj *keybase1.UserPlusKeysV2AllIncarnations, stubMode StubMode) (err error) {
 
 	if u.noCache {
 		u.G().VDL.CLogf(ctx, VLog0, "| no cache enabled, so not putting UPAK")
@@ -282,6 +294,13 @@ func (u *CachedUPAKLoader) putUPAKToCache(ctx context.Context, obj *keybase1.Use
 	uid := obj.Current.Uid
 	u.G().VDL.CLogf(ctx, VLog0, "| Caching UPAK for %s %s", uid, stubMode)
 
+	// At this point, we've gone to the server, and we checked that the user is fresh, so if we previously had a stale
+	// bit set for this user, we'll turn it off now.
+	if obj.Stale {
+		u.G().VDL.CLogf(ctx, VLog0, "| resetting stale bit to false for %s %s", uid, stubMode)
+		obj.Stale = false
+	}
+
 	existing := u.getMemCache(ctx, uid, stubMode)
 
 	if existing != nil && obj.IsOlderThan(*existing) {
@@ -290,10 +309,7 @@ func (u *CachedUPAKLoader) putUPAKToCache(ctx context.Context, obj *keybase1.Use
 	}
 	u.putMemCache(ctx, uid, stubMode, *obj)
 
-	err := u.G().LocalDb.PutObj(culDBKeyV2(uid, stubMode), nil, *obj)
-	if err != nil {
-		u.G().Log.CWarningf(ctx, "Error in writing UPAK for %s %s: %s", uid, stubMode, err)
-	}
+	err = u.putUPAKToDB(ctx, uid, stubMode, *obj)
 
 	u.deleteV1UPAK(uid)
 	return err
@@ -373,7 +389,7 @@ func (u *CachedUPAKLoader) loadWithInfo(arg LoadUserArg, info *CachedUserLoadInf
 			// Update the full-self cacher after the lock is released, to avoid
 			// any circular locking.
 			if fs := g.GetFullSelfer(); fs != nil && arg.self {
-				fs.Update(ctx, user)
+				_ = fs.Update(ctx, user)
 			}
 		}
 	}()
@@ -401,16 +417,31 @@ func (u *CachedUPAKLoader) loadWithInfo(arg LoadUserArg, info *CachedUserLoadInf
 	if !arg.forceReload {
 		upak, fresh = u.getCachedUPAK(ctx, arg.uid, arg.stubMode, info)
 	}
-	if arg.forcePoll {
-		g.VDL.CLogf(ctx, VLog0, "%s: force-poll required us to repoll (fresh=%v)", culDebug(arg.uid), fresh)
-		fresh = false
+
+	// cached UPAK is fresh or allowed to be stale, and we're not forcing a poll.
+	if upak != nil && !arg.forcePoll && (fresh || arg.staleOK) {
+		return returnUPAK(upak, true)
+	}
+
+	// If we had a cached UPAK we could return, we'd have already returned it.
+	if arg.cachedOnly {
+		var message string
+		if upak == nil {
+			message = "no cached user found"
+		} else {
+			message = "cached user found, but it was stale, and cached only"
+		}
+		return nil, nil, UserNotFoundError{UID: arg.uid, Msg: message}
 	}
 
 	if upak != nil {
-		g.VDL.CLogf(ctx, VLog0, "%s: cache-hit; fresh=%v", culDebug(arg.uid), fresh)
-		if fresh || arg.staleOK {
-			return returnUPAK(upak, true)
+		// At this point, we have a cached UPAK but we are not confident about whether we can return it.
+		// Ask the server whether it is fresh.
+
+		if arg.forcePoll {
+			g.VDL.CLogf(ctx, VLog0, "%s: force-poll required us to repoll (fresh=%v)", culDebug(arg.uid), fresh)
 		}
+
 		if info != nil {
 			info.TimedOut = true
 		}
@@ -420,6 +451,10 @@ func (u *CachedUPAKLoader) loadWithInfo(arg LoadUserArg, info *CachedUserLoadInf
 
 		sigHints, leaf, err = lookupSigHintsAndMerkleLeaf(m, arg.uid, true, arg.ToMerkleOpts())
 		if err != nil {
+			if arg.staleOK {
+				g.VDL.CLogf(ctx, VLog0, "Got error %+v when checking for staleness; using cached UPAK", err)
+				return returnUPAK(upak, true)
+			}
 			return nil, nil, err
 		}
 
@@ -459,8 +494,6 @@ func (u *CachedUPAKLoader) loadWithInfo(arg LoadUserArg, info *CachedUserLoadInf
 		}
 		arg.sigHints = sigHints
 		arg.merkleLeaf = leaf
-	} else if arg.cachedOnly {
-		return nil, nil, UserNotFoundError{UID: arg.uid, Msg: "no cached user found"}
 	}
 
 	g.VDL.CLogf(ctx, VLog0, "%s: LoadUser", culDebug(arg.uid))
@@ -482,7 +515,14 @@ func (u *CachedUPAKLoader) loadWithInfo(arg LoadUserArg, info *CachedUserLoadInf
 	// In some cases, it's OK to have a user object and an error. This comes up in
 	// Identify2 when identifying users who don't have a sigchain. Note that we'll never
 	// hit the cache in this case (for now...)
+	//
+	// Additionally, we might have an error, a cached UPAK, no user object. If
+	// stale is OK, we'll just return the stale data instead of the error.
 	if err != nil {
+		if upak != nil && arg.staleOK {
+			g.VDL.CLogf(ctx, VLog0, "Got error %+v when fetching UPAK, so using cached data", err)
+			return returnUPAK(upak, true)
+		}
 		return ret, user, err
 	}
 
@@ -633,6 +673,18 @@ func (u *CachedUPAKLoader) LoadKeyV2(ctx context.Context, uid keybase1.UID, kid 
 	return nil, nil, nil, NotFoundError{Msg: "Not found: Key for user"}
 }
 
+func (u *CachedUPAKLoader) markStale(ctx context.Context, uid keybase1.UID, mode StubMode) (err error) {
+	u.G().VDL.CLogf(ctx, VLog0, "| CachedUPAKLoader#markStale(%s,%v)", uid, mode)
+	obj := u.getCachedUPAKFromDB(ctx, uid, mode)
+	if obj == nil {
+		u.G().VDL.CLogf(ctx, VLog0, "| markStale: cached user object not found")
+		return nil
+	}
+	obj.Stale = true
+	err = u.putUPAKToDB(ctx, uid, mode, *obj)
+	return err
+}
+
 func (u *CachedUPAKLoader) Invalidate(ctx context.Context, uid keybase1.UID) {
 
 	u.G().VDL.CLogf(ctx, VLog0, "| CachedUPAKLoader#Invalidate(%s)", uid)
@@ -644,15 +696,17 @@ func (u *CachedUPAKLoader) Invalidate(ctx context.Context, uid keybase1.UID) {
 	lock := u.locktab.AcquireOnName(ctx, u.G(), uid.String())
 	defer lock.Release(ctx)
 
-	u.removeMemCache(ctx, uid, StubModeUnstubbed)
-	u.removeMemCache(ctx, uid, StubModeStubbed)
-
 	for _, sm := range []StubMode{StubModeStubbed, StubModeUnstubbed} {
-		err := u.G().LocalDb.Delete(culDBKeyV2(uid, sm))
+		err := u.markStale(ctx, uid, sm)
 		if err != nil {
 			u.G().Log.CWarningf(ctx, "Failed to remove %s from disk cache: %s", uid, err)
 		}
 	}
+
+	// Do this after invalidation, since loading upaks from DB puts them into memory
+	u.removeMemCache(ctx, uid, StubModeUnstubbed)
+	u.removeMemCache(ctx, uid, StubModeStubbed)
+
 	u.deleteV1UPAK(uid)
 }
 
@@ -774,7 +828,7 @@ func (u *CachedUPAKLoader) lookupUsernameAndDeviceWithInfo(ctx context.Context, 
 	for _, b := range staleOK {
 		arg = arg.WithStaleOK(b)
 		found := false
-		u.loadWithInfo(arg, info, func(upak *keybase1.UserPlusKeysV2AllIncarnations) error {
+		_, _, err := u.loadWithInfo(arg, info, func(upak *keybase1.UserPlusKeysV2AllIncarnations) error {
 			if upak == nil {
 				return nil
 			}
@@ -786,18 +840,19 @@ func (u *CachedUPAKLoader) lookupUsernameAndDeviceWithInfo(ctx context.Context, 
 			}
 			return nil
 		}, false)
+		if err != nil {
+			return NormalizedUsername(""), "", "", err
+		}
 		if found {
 			return username, deviceName, deviceType, nil
 		}
 	}
-	if err == nil {
-		err = NotFoundError{fmt.Sprintf("UID/Device pair %s/%s not found", uid, did)}
-	}
+	err = NotFoundError{fmt.Sprintf("UID/Device pair %s/%s not found", uid, did)}
 	return NormalizedUsername(""), "", "", err
 }
 
-func (u *CachedUPAKLoader) CheckDeviceForUIDAndUsername(ctx context.Context, uid keybase1.UID, did keybase1.DeviceID, n NormalizedUsername) (err error) {
-	arg := NewLoadUserByUIDArg(ctx, u.G(), uid).WithForcePoll(true).WithPublicKeyOptional()
+func (u *CachedUPAKLoader) CheckDeviceForUIDAndUsername(ctx context.Context, uid keybase1.UID, did keybase1.DeviceID, n NormalizedUsername, suppressNetworkErrs bool) (err error) {
+	arg := NewLoadUserByUIDArg(ctx, u.G(), uid).WithForcePoll(true).WithPublicKeyOptional().WithStaleOK(suppressNetworkErrs)
 	foundUser := false
 	foundDevice := false
 	isRevoked := false
@@ -919,7 +974,7 @@ func (u *CachedUPAKLoader) purgeMemCache() {
 
 func checkDeviceValidForUID(ctx context.Context, u UPAKLoader, uid keybase1.UID, did keybase1.DeviceID) error {
 	var nnu NormalizedUsername
-	return u.CheckDeviceForUIDAndUsername(ctx, uid, did, nnu)
+	return u.CheckDeviceForUIDAndUsername(ctx, uid, did, nnu, false)
 }
 
 func CheckCurrentUIDDeviceID(m MetaContext) (err error) {
@@ -939,7 +994,7 @@ func CheckCurrentUIDDeviceID(m MetaContext) (err error) {
 // increasing i, until that getArg return nil, in which case the production of UPAK loads is over.
 // UPAKs will be loaded and fed into processResult() as they come in. Both getArg() and processResult()
 // are called in the same mutex to simplify synchronization.
-func (u *CachedUPAKLoader) Batcher(ctx context.Context, getArg func(int) *LoadUserArg, processResult func(int, *keybase1.UserPlusKeysV2AllIncarnations), window int) (err error) {
+func (u *CachedUPAKLoader) Batcher(ctx context.Context, getArg func(int) *LoadUserArg, processResult func(int, *keybase1.UserPlusKeysV2AllIncarnations) error, window int) (err error) {
 	if window == 0 {
 		window = 10
 	}
@@ -956,9 +1011,10 @@ func (u *CachedUPAKLoader) Batcher(ctx context.Context, getArg func(int) *LoadUs
 	var mut sync.Mutex
 
 	// Make a stream of args, and send them down the channel
+	var stopBatch bool
 	eg.Go(func() error {
 		defer close(args)
-		for i := 0; true; i++ {
+		for i := 0; !stopBatch; i++ {
 			mut.Lock()
 			arg := getArg(i)
 			mut.Unlock()
@@ -975,14 +1031,26 @@ func (u *CachedUPAKLoader) Batcher(ctx context.Context, getArg func(int) *LoadUs
 	})
 
 	for i := 0; i < window; i++ {
-		eg.Go(func() error {
+		eg.Go(func() (err error) {
+			// If we receive an error, kill the pipeline
+			defer func() {
+				if err != nil {
+					mut.Lock()
+					defer mut.Unlock()
+					u.G().Log.CDebugf(ctx, "CachedUPAKLoader#Batcher unable to complete batch: %v, setting stopBatch=true", err)
+					stopBatch = true
+				}
+			}()
 			for awi := range args {
 				arg := awi.arg
-				_, _, err := u.loadWithInfo(arg, nil, func(u *keybase1.UserPlusKeysV2AllIncarnations) error {
+				_, _, err = u.loadWithInfo(arg, nil, func(u *keybase1.UserPlusKeysV2AllIncarnations) error {
 					if processResult != nil {
 						mut.Lock()
-						processResult(awi.i, u)
+						err = processResult(awi.i, u)
 						mut.Unlock()
+						if err != nil {
+							return err
+						}
 					}
 					return nil
 				}, false)

@@ -7,7 +7,8 @@ import {isMobile} from '../../../constants/platform'
 export type InviteProps = {
   openShareSheet: () => void
   openSMS: (phoneNumber: string) => void
-  usernameToContactName: {[username: string]: string}
+  onDismiss: () => void
+  usernameToContactName: Map<string, string>
   users: Array<string>
 }
 
@@ -21,6 +22,7 @@ const BannerBox = (props: {
     fullWidth={true}
     style={Styles.collapseStyles([styles.bannerStyle, {backgroundColor: props.color}])}
     gap={props.gap}
+    alignItems="center"
   >
     {props.children}
   </Box2>
@@ -28,44 +30,31 @@ const BannerBox = (props: {
 
 const BannerText = props => <Text center={true} type="BodySmallSemibold" negative={true} {...props} />
 
-const InviteBanner = ({users, openSMS, openShareSheet, usernameToContactName}: InviteProps) => {
+const InviteBanner = ({users, openSMS, openShareSheet, usernameToContactName, onDismiss}: InviteProps) => {
   const theirName =
     users.length === 1
-      ? usernameToContactName[users[0]] || assertionToDisplay(users[0])
+      ? usernameToContactName.get(users[0]) || assertionToDisplay(users[0])
       : `these ${users.length} people`
+  const mobileClickInstall =
+    users.length === 1 && users[0].endsWith('@phone') ? () => openSMS(users[0].slice(0, -6)) : openShareSheet
+  const caption = `Last step: summon ${theirName}!`
 
-  // On mobile, single recipient, a phone number
-  if (isMobile && users.length === 1 && users[0].endsWith('@phone')) {
-    return (
-      <BannerBox color={Styles.globalColors.blue} gap="xtiny">
-        <BannerText>Last step: summon {theirName}!</BannerText>
-        <Button label="Send install link" onClick={() => openSMS(users[0].slice(0, -6))} mode="Secondary" />
-      </BannerBox>
-    )
-  }
-
-  // Any number of recipients, on iOS / Android show the share screen
   if (isMobile) {
     return (
       <BannerBox color={Styles.globalColors.blue} gap="xtiny">
-        <BannerText>Last step: summon {theirName}!</BannerText>
-        <Button label="Send install link" onClick={openShareSheet} mode="Secondary" />
+        <BannerText>{caption}</BannerText>
+        <Box2 direction="horizontal" gap="tiny" fullWidth={true} centerChildren={true}>
+          <Button
+            label="Send install link"
+            onClick={mobileClickInstall}
+            small={true}
+            backgroundColor="blue"
+          />
+          <Button label="Dismiss" mode="Secondary" onClick={onDismiss} small={true} backgroundColor="blue" />
+        </Box2>
       </BannerBox>
     )
   }
-
-  const hasPhoneNumber = users.some(user => user.endsWith('@phone'))
-  const hasEmailAddress = users.some(user => user.endsWith('@email'))
-
-  let caption = 'Your messages will unlock once they join Keybase'
-  if (hasPhoneNumber && hasEmailAddress) {
-    caption += ' and verify their phone number or email address'
-  } else if (hasPhoneNumber) {
-    caption += ' and verify their phone number'
-  } else if (hasEmailAddress) {
-    caption += ' and verify their email address'
-  }
-  caption += '.'
 
   return (
     <BannerBox color={Styles.globalColors.blue}>
@@ -76,6 +65,7 @@ const InviteBanner = ({users, openSMS, openShareSheet, usernameToContactName}: I
           onClickURL="https://keybase.io/app"
           underline={true}
           type="BodySmallPrimaryLink"
+          selectable={true}
           style={{marginLeft: Styles.globalMargins.xtiny}}
         >
           https://keybase.io/app
@@ -85,23 +75,26 @@ const InviteBanner = ({users, openSMS, openShareSheet, usernameToContactName}: I
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  bannerStyle: Styles.platformStyles({
-    common: {
-      ...Styles.globalStyles.flexBoxColumn,
-      alignItems: 'center',
-      backgroundColor: Styles.globalColors.red,
-      flexWrap: 'wrap',
-      justifyContent: 'center',
-      paddingBottom: 8,
-      paddingLeft: 24,
-      paddingRight: 24,
-      paddingTop: 8,
-    },
-    isElectron: {
-      marginBottom: Styles.globalMargins.tiny,
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      bannerStyle: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.flexBoxColumn,
+          alignItems: 'center',
+          backgroundColor: Styles.globalColors.red,
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          paddingBottom: 8,
+          paddingLeft: 24,
+          paddingRight: 24,
+          paddingTop: 8,
+        },
+        isElectron: {
+          marginBottom: Styles.globalMargins.tiny,
+        },
+      }),
+    } as const)
+)
 
 export {InviteBanner}

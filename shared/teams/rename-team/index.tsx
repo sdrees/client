@@ -8,7 +8,7 @@ type Props = {
   error?: string
   onCancel: () => void
   onRename: (newName: string) => void
-  onSuccess: (newName: string) => void
+  onSuccess: () => void
   teamname: string
   title: string
   waiting: boolean
@@ -38,7 +38,7 @@ class RenameTeam extends React.Component<
   componentDidUpdate(prevProps: Props) {
     if (!this.props.waiting && prevProps.waiting && !this.props.error) {
       // finished, go back
-      this.props.onSuccess(this._newFullName())
+      this.props.onSuccess()
     }
   }
 
@@ -150,52 +150,55 @@ class RenameTeam extends React.Component<
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  body: Styles.platformStyles({
-    common: {flex: 1},
-    isElectron: {paddingLeft: Styles.globalMargins.large, paddingRight: Styles.globalMargins.large},
-    isMobile: {paddingLeft: Styles.globalMargins.small, paddingRight: Styles.globalMargins.small},
-  }),
-  button: {
-    flex: 1,
-  },
-  buttonBar: {
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-  },
-  container: Styles.platformStyles({
-    isElectron: {
-      height: 480,
-      width: 560,
-    },
-    isMobile: {
-      height: '100%',
-    },
-  }),
-  error: {
-    color: Styles.globalColors.redDark,
-  },
-  inputContainer: {
-    borderColor: Styles.globalColors.black_10,
-    borderRadius: Styles.borderRadius,
-    borderStyle: 'solid',
-    borderWidth: 1,
-    padding: Styles.globalMargins.tiny,
-  },
-  inputContainerError: {
-    borderColor: Styles.globalColors.red,
-  },
-  prefix: Styles.platformStyles({
-    isMobile: {
-      position: 'relative',
-      top: 1,
-    },
-  }),
-  teamnameHeader: Styles.platformStyles({
-    isElectron: {
-      wordBreak: 'break-word',
-    },
-  }),
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      body: Styles.platformStyles({
+        common: {flex: 1},
+        isElectron: {paddingLeft: Styles.globalMargins.large, paddingRight: Styles.globalMargins.large},
+        isMobile: {paddingLeft: Styles.globalMargins.small, paddingRight: Styles.globalMargins.small},
+      }),
+      button: {
+        flex: 1,
+      },
+      buttonBar: {
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+      },
+      container: Styles.platformStyles({
+        isElectron: {
+          height: 480,
+          width: 560,
+        },
+        isMobile: {
+          height: '100%',
+        },
+      }),
+      error: {
+        color: Styles.globalColors.redDark,
+      },
+      inputContainer: {
+        borderColor: Styles.globalColors.black_10,
+        borderRadius: Styles.borderRadius,
+        borderStyle: 'solid',
+        borderWidth: 1,
+        padding: Styles.globalMargins.tiny,
+      },
+      inputContainerError: {
+        borderColor: Styles.globalColors.red,
+      },
+      prefix: Styles.platformStyles({
+        isMobile: {
+          position: 'relative',
+          top: 1,
+        },
+      }),
+      teamnameHeader: Styles.platformStyles({
+        isElectron: {
+          wordBreak: 'break-word',
+        } as const,
+      }),
+    } as const)
+)
 
 export default Kb.HeaderOrPopupWithHeader(RenameTeam)

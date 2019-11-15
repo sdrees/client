@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"strings"
 
+	"github.com/keybase/client/go/avatars"
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/libkb"
 
@@ -230,7 +231,7 @@ func (p *Packager) packageGiphy(ctx context.Context, uid gregor1.UID, convID cha
 		if err == nil && (imgLength == 0 || vidLength < imgLength) && vidLength < p.maxAssetSize {
 			p.Debug(ctx, "Package: found video: len: %d", vidLength)
 			defer vidBody.Close()
-			asset, err := p.uploadVideoWithBody(ctx, uid, convID, vidBody, int64(vidLength),
+			asset, err := p.uploadVideoWithBody(ctx, uid, convID, vidBody, vidLength,
 				*raw.Giphy().Video)
 			if err != nil {
 				p.Debug(ctx, "Package: failed to get video asset URL: %s", err)
@@ -274,11 +275,21 @@ func (p *Packager) packageMaps(ctx context.Context, uid gregor1.UID, convID chat
 		SiteName:    mapsRaw.SiteName,
 		Description: &mapsRaw.Description,
 	}
+
+	// load user avatar for fancy maps
+	username := p.G().ExternalG().GetEnv().GetUsername().String()
+	avatarReader, _, err := avatars.GetBorderedCircleAvatar(ctx, p.G(), username, 48, 8, 8)
+	if err != nil {
+		return res, err
+	}
+	defer avatarReader.Close()
+
 	// load map
 	var reader io.ReadCloser
 	var length int64
+	var isDone bool
 	mapsURL := mapsRaw.ImageUrl
-	locReader, locLength, err := maps.MapReaderFromURL(ctx, mapsURL)
+	locReader, _, err := maps.MapReaderFromURL(ctx, mapsURL)
 	if err != nil {
 		return res, err
 	}
@@ -289,12 +300,15 @@ func (p *Packager) packageMaps(ctx context.Context, uid gregor1.UID, convID chat
 			return res, err
 		}
 		defer liveReader.Close()
-		if reader, length, err = maps.CombineMaps(ctx, locReader, liveReader); err != nil {
+		if reader, length, err = maps.DecorateMap(ctx, avatarReader, liveReader); err != nil {
 			return res, err
 		}
+		isDone = mapsRaw.LiveLocationDone
 	} else {
-		reader = locReader
-		length = locLength
+		if reader, length, err = maps.DecorateMap(ctx, avatarReader, locReader); err != nil {
+			return res, err
+		}
+		isDone = false
 	}
 	asset, err := p.assetFromURLWithBody(ctx, reader, length, mapsURL, uid, convID, true)
 	if err != nil {
@@ -302,6 +316,12 @@ func (p *Packager) packageMaps(ctx context.Context, uid gregor1.UID, convID chat
 		return res, errors.New("image not available for maps unfurl")
 	}
 	g.Image = &asset
+	g.MapInfo = &chat1.UnfurlGenericMapInfo{
+		Coord:               mapsRaw.Coord,
+		LiveLocationEndTime: mapsRaw.LiveLocationEndTime,
+		IsLiveLocationDone:  isDone,
+		Time:                mapsRaw.Time,
+	}
 	return chat1.NewUnfurlWithGeneric(g), nil
 }
 

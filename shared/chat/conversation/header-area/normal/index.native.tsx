@@ -10,7 +10,7 @@ import {
 } from '../../../../common-adapters'
 import {assertionToDisplay} from '../../../../common-adapters/usernames'
 import * as Styles from '../../../../styles'
-import {Props} from './index.types'
+import {Props} from '.'
 
 const shhIconColor = Styles.globalColors.black_20
 const shhIconFontSize = 24
@@ -101,12 +101,14 @@ const UsernameHeader = (props: Props) => (
 const PhoneOrEmailHeader = (props: Props) => {
   const phoneOrEmail = props.participants.find(s => s.endsWith('@phone') || s.endsWith('@email')) || ''
   const formattedPhoneOrEmail = assertionToDisplay(phoneOrEmail)
-  const name = props.contactNames[phoneOrEmail]
+  const name = props.contactNames.get(phoneOrEmail)
   return (
     <Wrapper {...props}>
       <Box2 direction="vertical" style={styles.usernameHeaderContainer}>
         <Box2 direction="horizontal" style={styles.lessMargins}>
-          <Text type="BodyBig">{formattedPhoneOrEmail}</Text>
+          <Text type="BodyBig" lineClamp={1} ellipsizeMode="middle">
+            {formattedPhoneOrEmail}
+          </Text>
           {props.muted && <ShhIcon onClick={props.unMuteConversation} />}
         </Box2>
         {!!name && <Text type="BodyTiny">{name}</Text>}
@@ -115,28 +117,31 @@ const PhoneOrEmailHeader = (props: Props) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  center: {
-    justifyContent: 'center',
-    textAlign: 'center',
-  },
-  channelHeaderContainer: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    paddingLeft: Styles.globalMargins.tiny,
-    paddingRight: Styles.globalMargins.tiny,
-  },
-  channelName: {
-    color: Styles.globalColors.black,
-  },
-  channelNameLight: {
-    color: Styles.globalColors.black_50,
-  },
-  lessMargins: {
-    marginBottom: -5,
-  },
-  shhIcon: {marginLeft: Styles.globalMargins.xtiny},
-  usernameHeaderContainer: {alignItems: 'center', justifyContent: 'center'},
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      center: {
+        justifyContent: 'center',
+        textAlign: 'center',
+      },
+      channelHeaderContainer: {
+        alignItems: 'center',
+        alignSelf: 'center',
+        paddingLeft: Styles.globalMargins.tiny,
+        paddingRight: Styles.globalMargins.tiny,
+      },
+      channelName: {
+        color: Styles.globalColors.black,
+      },
+      channelNameLight: {
+        color: Styles.globalColors.black_50,
+      },
+      lessMargins: {
+        marginBottom: -5,
+      },
+      shhIcon: {marginLeft: Styles.globalMargins.xtiny},
+      usernameHeaderContainer: {alignItems: 'center', justifyContent: 'center'},
+    } as const)
+)
 
 export {ChannelHeader, PhoneOrEmailHeader, UsernameHeader}

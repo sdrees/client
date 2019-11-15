@@ -3,9 +3,10 @@ import {Box} from '../../../common-adapters'
 import * as Sb from '../../../stories/storybook'
 import {makeRetentionPolicy} from '../../../constants/teams'
 import {globalStyles} from '../../../styles'
-import {Settings} from './'
+import {Settings} from '.'
 
 const commonProps = {
+  canShowcase: true,
   ignoreAccessRequests: true,
   isBigTeam: true,
   openTeam: true,
@@ -32,6 +33,7 @@ const commonProps = {
     listFirst: true,
     manageMembers: true,
     manageSubteams: true,
+    pinMessage: true,
     renameChannel: true,
     renameTeam: true,
     setMemberShowcase: true,

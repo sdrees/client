@@ -2,8 +2,8 @@
 @compression_type("gzip")
 protocol remote {
 
-  import idl "github.com/keybase/client/go/protocol/gregor1" as gregor1;
-  import idl "github.com/keybase/client/go/protocol/keybase1" as keybase1;
+  import idl "../gregor1" as gregor1;
+  import idl "../keybase1" as keybase1;
 
   record MessageBoxed {
     // This was not present in most V1 messages.
@@ -114,6 +114,7 @@ protocol remote {
     union { null, RateLimit } rateLimit;
   }
 
+  @timeout_msec(30000) // 5 minutes
   GetInboxRemoteRes getInboxRemote(InboxVers vers, union { null, GetInboxQuery } query, union { null, Pagination } pagination);
   GetThreadRemoteRes getThreadRemote(ConversationID conversationID, GetThreadReason reason, union { null, GetThreadQuery } query, union { null, Pagination } pagination);
 
@@ -308,7 +309,7 @@ protocol remote {
   }
   SweepRes retentionSweepConv(ConversationID convID);
 
-  void upgradeKBFSToImpteam(TLFID tlfID);
+  void upgradeKBFSToImpteam(TLFID tlfID, keybase1.TeamID teamID);
 
   // Share extension
   void registerSharePost(ConversationID convID, gregor1.DeviceID deviceID, OutboxID outboxID);
@@ -339,7 +340,7 @@ protocol remote {
   array<ExternalAPIKey> getExternalAPIKeys(array<ExternalAPIKeyTyp> typs);
 
   // Bot commands
-  @typedef("uint64") @lint("ignore") record CommandConvVers {} 
+  @typedef("uint64") @lint("ignore") record CommandConvVers {}
   record RemoteBotCommandsAdvertisementPublic {
     ConversationID convID;
   }
@@ -354,6 +355,7 @@ protocol remote {
   }
   record BotCommandConv {
     gregor1.UID uid;
+    keybase1.TeamRole untrustedTeamRole;
     ConversationID convID;
     CommandConvVers vers;
     gregor1.Time mtime;
@@ -366,10 +368,10 @@ protocol remote {
   }
   record ClearBotCommandsRes {
     union { null, RateLimit } rateLimit;
-  } 
+  }
   AdvertiseBotCommandsRes advertiseBotCommands(array<RemoteBotCommandsAdvertisement> ads);
   ClearBotCommandsRes clearBotCommands();
-  
+
   enum BotInfoResponseTyp {
     UPTODATE_0,
     INFO_1
@@ -377,12 +379,11 @@ protocol remote {
   variant BotInfoResponse switch (BotInfoResponseTyp typ) {
     case UPTODATE: void;
     case INFO: BotInfo;
-  } 
+  }
   record GetBotInfoRes {
     BotInfoResponse response;
     union { null, RateLimit } rateLimit;
   }
   @typedef("bytes") record BotInfoHash {}
   GetBotInfoRes getBotInfo(ConversationID convID, BotInfoHash infoHash);
-  
 }

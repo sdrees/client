@@ -9,7 +9,6 @@ import SetPublicName from './set-public-name/container'
 import Username from './username-or-email/container'
 
 export const newRoutes = {
-  // TODO broken connect
   codePage: {getScreen: (): typeof CodePage => require('./code-page/container').default},
   error: {getScreen: (): typeof ErrorView => require('./error/container').default},
   forgotUsername: {getScreen: (): typeof ForgotUsername => require('./forgot-username/container').default},
@@ -22,4 +21,6 @@ export const newRoutes = {
   setPublicName: {getScreen: (): typeof SetPublicName => require('./set-public-name/container').default},
   username: {getScreen: (): typeof Username => require('./username-or-email/container').default},
 }
-export const newModalRoutes = {}
+
+// No modal routes while not logged in. More plumbing would be necessary to add them, so there is not
+// an empty newModalRoutes here.

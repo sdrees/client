@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/keybase/client/go/chat/types"
 	"github.com/keybase/client/go/ephemeral"
@@ -159,7 +160,7 @@ func (e TransientUnboxingError) ToStatus() (status keybase1.Status) {
 
 //=============================================================================
 
-type EphemeralAlreadyExpiredError struct{ inner error }
+type EphemeralAlreadyExpiredError struct{}
 
 func NewEphemeralAlreadyExpiredError() EphemeralAlreadyExpiredError {
 	return EphemeralAlreadyExpiredError{}
@@ -296,6 +297,22 @@ func (e BoxingError) IsImmediateFail() (chat1.OutboxErrorType, bool) {
 
 //=============================================================================
 
+type RestrictedBotChannelError struct{}
+
+func NewRestrictedBotChannelError() RestrictedBotChannelError {
+	return RestrictedBotChannelError{}
+}
+
+func (e RestrictedBotChannelError) Error() string {
+	return "bot restricted from sending to this channel"
+}
+
+func (e RestrictedBotChannelError) IsImmediateFail() (chat1.OutboxErrorType, bool) {
+	return chat1.OutboxErrorType_RESTRICTEDBOT, true
+}
+
+//=============================================================================
+
 type BoxingCryptKeysError struct {
 	Err error
 }
@@ -418,15 +435,17 @@ func (e OfflineError) Error() string {
 type OfflineClient struct {
 }
 
-func (e OfflineClient) Call(ctx context.Context, method string, arg interface{}, res interface{}) error {
+func (e OfflineClient) Call(ctx context.Context, method string, arg interface{},
+	res interface{}, timeout time.Duration) error {
 	return OfflineError{}
 }
 
-func (e OfflineClient) CallCompressed(ctx context.Context, method string, arg interface{}, res interface{}, ctype rpc.CompressionType) error {
+func (e OfflineClient) CallCompressed(ctx context.Context, method string, arg interface{},
+	res interface{}, ctype rpc.CompressionType, timeout time.Duration) error {
 	return OfflineError{}
 }
 
-func (e OfflineClient) Notify(ctx context.Context, method string, arg interface{}) error {
+func (e OfflineClient) Notify(ctx context.Context, method string, arg interface{}, timeout time.Duration) error {
 	return OfflineError{}
 }
 

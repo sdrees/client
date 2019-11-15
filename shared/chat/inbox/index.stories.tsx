@@ -6,7 +6,7 @@ import * as Sb from '../../stories/storybook'
 import {isDarwin} from '../../constants/platform'
 import {isMobile, globalColors, globalMargins} from '../../styles'
 import Inbox from '.'
-import {RowItemSmall, RowItemBigHeader, RowItemBig, RowItemDivider} from './index.types'
+import {RowItemSmall, RowItemBigHeader, RowItemBig, RowItemDivider, RowItemTeamBuilder} from './index'
 
 /*
  * Rows
@@ -14,8 +14,15 @@ import {RowItemSmall, RowItemBigHeader, RowItemBig, RowItemDivider} from './inde
 const makeRowItemSmall = (conversationIDKey: string = ''): RowItemSmall => ({
   type: 'small',
   conversationIDKey: Types.stringToConversationIDKey(conversationIDKey),
+  teamname: 'mikem',
+  isTeam: false,
+  time: 1569718345,
 })
-const makeRowItemBigHeader = (teamname: string = ''): RowItemBigHeader => ({type: 'bigHeader', teamname})
+const makeRowItemBigHeader = (teamname: string = ''): RowItemBigHeader => ({
+  type: 'bigHeader',
+  teamID: '',
+  teamname,
+})
 const makeRowItemBigChannel = (conversationIDKey, teamname, channelname): RowItemBig => ({
   type: 'big',
   teamname,
@@ -23,6 +30,7 @@ const makeRowItemBigChannel = (conversationIDKey, teamname, channelname): RowIte
   conversationIDKey: Types.stringToConversationIDKey(conversationIDKey),
 })
 const makeRowItemDivider = (showButton: boolean = false): RowItemDivider => ({type: 'divider', showButton})
+const makeRowItemTeamBuilder = (): RowItemTeamBuilder => ({type: 'teamBuilder'})
 
 /*
  * Component Prop Map
@@ -73,6 +81,7 @@ const commonBigChannel = {
   hasUnread: false,
   isError: false,
   isMuted: false,
+  isLoading: false,
   isSearching: false,
   isSelected: false,
   onSelectConversation: Sb.action('onSelectConversation'),
@@ -339,9 +348,11 @@ const getPropProviderProps = own => {
  */
 const propsInboxCommon = {
   allowShowFloatingButton: false,
+  hasBigTeams: false,
+  isLoading: false,
   isSearching: false,
+  navKey: 'nav',
   neverLoaded: false,
-  nowOverride: 0, // just for dumb rendering
   onNewChat: Sb.action('onNewChat'),
   onUntrustedInboxVisible: Sb.action('onUntrustedInboxVisible'),
   onSelectUp: Sb.action('onSelectUp'),
@@ -351,7 +362,9 @@ const propsInboxCommon = {
   selectedConversationIDKey: Types.stringToConversationIDKey('fake conversation id key'),
   smallTeamsExpanded: false,
   toggleSmallTeamsExpanded: Sb.action('toggleSmallTeamsExpanded'),
-  unreadIndices: I.List(),
+  unreadIndices: [],
+  setInboxNumSmallRows: Sb.action('setInboxNumSmallRows'),
+  inboxNumSmallRows: 5,
 }
 
 const propsInboxEmpty = {
@@ -377,6 +390,7 @@ const propsInboxSimple = {
 
 const propsInboxTeam = {
   ...propsInboxCommon,
+  hasBigTeams: true,
   rows: [
     makeRowItemBigHeader('bigTeamAHeader'),
     makeRowItemBigChannel('bigTeamAChannel1', 'Keybase', 'general'),
@@ -393,11 +407,14 @@ const propsInboxTeam = {
     ),
     makeRowItemBigChannel('bigTeamBChannel3', 'techtonica.long.team.name.with.ellipsis', 'random'),
     makeRowItemBigChannel('bigTeamBChannel4', 'techtonica.long.team.name.with.ellipsis', 'happy-hour'),
+
+    makeRowItemTeamBuilder(),
   ],
 }
 
 const propsInboxDivider = {
   ...propsInboxCommon,
+  hasBigTeams: true,
   smallTeamsExpanded: false,
   rows: [
     // Small
@@ -428,6 +445,8 @@ const propsInboxDivider = {
     ),
     makeRowItemBigChannel('bigTeamBChannel3', 'techtonica.long.team.name.with.ellipsis', 'random'),
     makeRowItemBigChannel('bigTeamBChannel4', 'techtonica.long.team.name.with.ellipsis', 'happy-hour'),
+
+    makeRowItemTeamBuilder(),
   ],
 }
 
@@ -453,14 +472,9 @@ const propsInboxExpanded = {
 /*
  * Prop Providers
  */
-const teamMemberCounts = {
-  Keybase: 30,
-  'techtonica.long.team.name.with.ellipsis': 30,
-  stripe: 1337,
-}
 
 const provider = Sb.createPropProviderWithCommon({
-  ...Sb.PropProviders.TeamDropdownMenu(undefined, teamMemberCounts),
+  ...Sb.PropProviders.TeamDropdownMenu(),
   ChatInboxHeaderContainer: p => {
     return {
       focusFilter: () => {},
@@ -518,7 +532,7 @@ class Wrapper extends React.Component<any, any> {
   componentDidMount() {
     if (!__STORYSHOT__) {
       setTimeout(() => {
-        this.setState({props: {...this.state.props, smallTeamsExpanded: true}})
+        this.setState((s: any) => ({props: {...s.props, smallTeamsExpanded: true}}))
       }, 1)
     }
   }

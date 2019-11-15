@@ -1,155 +1,109 @@
-import * as I from 'immutable'
 import * as Constants from '../constants/tracker2'
 import * as Types from '../constants/types/tracker2'
 import * as ConfigGen from '../actions/config-gen'
 import * as Tracker2Gen from '../actions/tracker2-gen'
+import * as Container from '../util/container'
 import logger from '../logger'
 
 const initialState: Types.State = Constants.makeState()
 
-export default function(
-  state: Types.State = initialState,
-  action: Tracker2Gen.Actions | ConfigGen.BootstrapStatusLoadedPayload
-): Types.State {
-  switch (action.type) {
-    case ConfigGen.bootstrapStatusLoaded: {
-      const {username} = action.payload
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn([username], (old = Constants.makeDetails()) =>
-          old.merge({fullname: action.payload.fullname})
-        ),
-      })
-    }
-    case Tracker2Gen.resetStore:
-      return initialState
-    case Tracker2Gen.load: {
-      const guiID = action.payload.guiID
-      if (action.payload.forceDisplay) {
-        logger.info(`Showing tracker for assertion: ${action.payload.assertion}`)
-      }
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn(
-          [action.payload.assertion],
-          (old = Constants.makeDetails()) =>
-            old.merge({
-              assertions: I.Map(), // just remove for now, maybe keep them
-              guiID,
-              reason: action.payload.reason,
-              showTracker: action.payload.forceDisplay || old.showTracker, // show it or keep the last state
-              state: 'checking',
-              username: action.payload.assertion,
-            })
-        ),
-      })
-    }
-    case Tracker2Gen.updatedDetails: {
-      const username = Constants.guiIDToUsername(state, action.payload.guiID)
-      if (!username) {
-        return state
-      }
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn([username], (old = Constants.makeDetails()) =>
-          old.merge({
-            bio: action.payload.bio,
-            blocked: action.payload.blocked,
-            followersCount: action.payload.followersCount,
-            followingCount: action.payload.followingCount,
-            fullname: action.payload.fullname,
-            location: action.payload.location,
-            registeredForAirdrop: action.payload.registeredForAirdrop,
-            teamShowcase: I.List(action.payload.teamShowcase.map(Constants.makeTeamShowcase)),
-          })
-        ),
-      })
-    }
-    case Tracker2Gen.updateResult: {
-      const username = Constants.guiIDToUsername(state, action.payload.guiID)
-      if (!username) {
-        return state
-      }
-
-      const reason =
-        action.payload.reason ||
-        (action.payload.result === 'broken' &&
-          `Some of ${username}'s proofs have changed since you last followed them.`)
-
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn([username], (old = Constants.makeDetails()) =>
-          old.merge({
-            reason: reason || old.reason,
-            state: action.payload.result,
-          })
-        ),
-      })
-    }
-    case Tracker2Gen.closeTracker: {
-      const username = Constants.guiIDToUsername(state, action.payload.guiID)
-      if (!username) {
-        return state
-      }
-      logger.info(`Closing tracker for assertion: ${username}`)
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn([username], (old = Constants.makeDetails()) =>
-          old.merge({showTracker: false})
-        ),
-      })
-    }
-    case Tracker2Gen.updateAssertion: {
-      const username = Constants.guiIDToUsername(state, action.payload.guiID)
-      if (!username) {
-        return state
-      }
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn([username], (old = Constants.makeDetails()) =>
-          old.updateIn(
-            ['assertions', action.payload.assertion.assertionKey],
-            (old: any = Constants.makeAssertion()) => old.merge(action.payload.assertion)
-          )
-        ),
-      })
-    }
-
-    case Tracker2Gen.updateFollowers: {
-      return state.merge({
-        usernameToDetails: state.usernameToDetails.updateIn(
-          [action.payload.username],
-          (old = Constants.makeDetails()) =>
-            old.merge({
-              followers: I.OrderedSet(action.payload.followers.map(f => f.username)),
-              following: I.OrderedSet(action.payload.following.map(f => f.username)),
-            })
-        ),
-      })
-    }
-    case Tracker2Gen.proofSuggestionsUpdated:
-      return state.merge({proofSuggestions: I.List(action.payload.suggestions)})
-    case Tracker2Gen.loadedNonUserProfile:
-      return state.merge({
-        usernameToNonUserDetails: state.usernameToNonUserDetails.updateIn(
-          [action.payload.assertion],
-          (old = Constants.makeNonUserDetails()) =>
-            old.merge({
-              assertionKey: action.payload.assertionKey,
-              assertionValue: action.payload.assertionValue,
-              bio: action.payload.bio,
-              description: action.payload.description,
-              formattedName: action.payload.formattedName,
-              fullName: action.payload.fullName,
-              location: action.payload.location,
-              pictureUrl: action.payload.pictureUrl,
-              siteIcon: action.payload.siteIcon,
-              siteIconFull: action.payload.siteIconFull,
-            })
-        ),
-      })
-    // Saga only actions
-    case Tracker2Gen.getProofSuggestions:
-    case Tracker2Gen.changeFollow:
-    case Tracker2Gen.showUser:
-    case Tracker2Gen.ignore:
-    case Tracker2Gen.loadNonUserProfile:
-      return state
-    default:
-      return state
-  }
+function actionToUsername<A extends {payload: {guiID: string}}>(state: Types.State, action: A) {
+  const {guiID} = action.payload
+  return Constants.guiIDToUsername(state, guiID)
 }
+
+const getDetails = (state: Types.State, username: string) => {
+  const {usernameToDetails} = state
+  const d = usernameToDetails.get(username) || {...Constants.noDetails}
+  usernameToDetails.set(username, d)
+  return d
+}
+
+type Actions = Tracker2Gen.Actions | ConfigGen.BootstrapStatusLoadedPayload
+
+export default Container.makeReducer<Actions, Types.State>(initialState, {
+  [Tracker2Gen.resetStore]: () => initialState,
+  [ConfigGen.bootstrapStatusLoaded]: (draftState, action) => {
+    const {username, fullname} = action.payload
+    getDetails(draftState, username).fullname = fullname
+  },
+  [Tracker2Gen.load]: (draftState, action) => {
+    const {guiID, forceDisplay, assertion, reason} = action.payload
+    const username = assertion
+    if (forceDisplay) {
+      logger.info(`Showing tracker for assertion: ${assertion}`)
+    }
+    const d = getDetails(draftState, username)
+    d.assertions = new Map() // just remove for now, maybe keep them
+    d.guiID = guiID
+    d.reason = reason
+    d.showTracker = forceDisplay || d.showTracker // show it or keep the last state
+    d.state = 'checking'
+    d.username = username
+  },
+  [Tracker2Gen.updatedDetails]: (draftState, action) => {
+    const username = actionToUsername(draftState, action)
+    if (!username) return
+    const {bio, blocked, followersCount, followingCount, fullname} = action.payload
+    const {location, registeredForAirdrop, teamShowcase} = action.payload
+    const d = getDetails(draftState, username)
+    d.bio = bio
+    d.blocked = blocked
+    d.followersCount = followersCount
+    d.followingCount = followingCount
+    d.fullname = fullname
+    d.location = location
+    d.registeredForAirdrop = registeredForAirdrop
+    d.teamShowcase = teamShowcase
+  },
+  [Tracker2Gen.updateResult]: (draftState, action) => {
+    const username = actionToUsername(draftState, action)
+    if (!username) return
+
+    const {reason, result} = action.payload
+    const newReason =
+      reason ||
+      (result === 'broken' && `Some of ${username}'s proofs have changed since you last followed them.`)
+
+    const d = getDetails(draftState, username)
+    d.reason = newReason || d.reason
+    d.state = result
+  },
+  [Tracker2Gen.closeTracker]: (draftState, action) => {
+    const username = actionToUsername(draftState, action)
+    if (!username) return
+
+    logger.info(`Closing tracker for assertion: ${username}`)
+
+    const d = getDetails(draftState, username)
+    d.showTracker = false
+  },
+  [Tracker2Gen.updateAssertion]: (draftState, action) => {
+    const username = actionToUsername(draftState, action)
+    if (!username) return
+    const d = getDetails(draftState, username)
+    const {assertion} = action.payload
+    const assertions = d.assertions || new Map()
+    d.assertions = assertions
+    assertions.set(assertion.assertionKey, assertion)
+  },
+  [Tracker2Gen.updateFollowers]: (draftState, action) => {
+    const {username, followers, following} = action.payload
+    const d = getDetails(draftState, username)
+    d.followers = new Set(followers.map(f => f.username))
+    d.following = new Set(following.map(f => f.username))
+  },
+  [Tracker2Gen.proofSuggestionsUpdated]: (draftState, action) => {
+    type ReadonlyProofSuggestions = Readonly<Types.State['proofSuggestions']>
+    ;(draftState.proofSuggestions as ReadonlyProofSuggestions) = action.payload.suggestions
+  },
+  [Tracker2Gen.loadedNonUserProfile]: (draftState, action) => {
+    const {assertion, ...rest} = action.payload
+    const {usernameToNonUserDetails} = draftState
+    const old = usernameToNonUserDetails.get(assertion) || Constants.noNonUserDetails
+    usernameToNonUserDetails.set(assertion, {
+      ...old,
+      ...rest,
+    })
+  },
+})

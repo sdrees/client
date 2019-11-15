@@ -57,7 +57,7 @@ func TestBackgroundPurge(t *testing.T) {
 		select {
 		case loadID := <-listener.bgConvLoads:
 			require.Equal(t, convID, loadID)
-			require.Equal(t, queueSize, purger.pq.Len())
+			require.Equal(t, queueSize, purger.Len())
 		case <-time.After(10 * time.Second):
 			require.Fail(t, "timeout waiting for conversation load")
 		}
@@ -108,10 +108,8 @@ func TestBackgroundPurge(t *testing.T) {
 			}
 			require.Equal(t, msgIDs, purgedIDs)
 		}
-		updates := listener.consumeThreadsStale(t)
-		require.Len(t, updates, 1)
-		require.Equal(t, updates[0].ConvID, convID)
-		require.Equal(t, updates[0].UpdateType, chat1.StaleUpdateType_CONVUPDATE)
+		updateID := listener.consumeConvUpdate(t)
+		require.Equal(t, updateID, convID)
 
 		rc, err := utils.GetUnverifiedConv(ctx, g, uid, convID, types.InboxSourceDataSourceLocalOnly)
 		require.NoError(t, err)
@@ -125,10 +123,12 @@ func TestBackgroundPurge(t *testing.T) {
 	// Load our conv with the initial tlf msg
 	t.Logf("assert listener 0")
 	require.NoError(t, tc.Context().ConvLoader.Queue(context.TODO(),
-		types.NewConvLoaderJob(conv1.ConvID, nil, &chat1.Pagination{Num: 3}, types.ConvLoaderPriorityHigh, nil)))
+		types.NewConvLoaderJob(conv1.ConvID, &chat1.Pagination{Num: 3}, types.ConvLoaderPriorityHigh,
+			types.ConvLoaderUnique, nil)))
 	assertListener(conv1.ConvID, 0)
 	require.NoError(t, tc.Context().ConvLoader.Queue(context.TODO(),
-		types.NewConvLoaderJob(conv2.ConvID, nil, &chat1.Pagination{Num: 3}, types.ConvLoaderPriorityHigh, nil)))
+		types.NewConvLoaderJob(conv2.ConvID, &chat1.Pagination{Num: 3}, types.ConvLoaderPriorityHigh,
+			types.ConvLoaderUnique, nil)))
 	assertListener(conv2.ConvID, 0)
 
 	// Nothing is up for purging yet
@@ -186,7 +186,6 @@ func TestBackgroundPurge(t *testing.T) {
 	<-g.EphemeralPurger.Stop(context.Background())
 	g.EphemeralPurger.Start(context.Background(), uid)
 	g.EphemeralPurger.Start(context.Background(), uid)
-	assertListener(conv1.ConvID, 2)
 
 	t.Logf("assert listener 2")
 	world.Fc.Advance(lifetimeDuration)
@@ -231,7 +230,7 @@ func TestBackgroundPurge(t *testing.T) {
 		NextPurgeTime:   msgs[3].Valid().Etime(),
 		IsActive:        true,
 	})
-	require.Equal(t, 2, purger.pq.Len())
+	require.Equal(t, 2, purger.Len())
 
 	g.EphemeralPurger.Start(ctx, uid)
 	world.Fc.Advance(lifetimeDuration * 3)
@@ -244,19 +243,12 @@ func TestBackgroundPurge(t *testing.T) {
 	}()
 
 	t.Logf("assert listener 4 & 5")
-	assertListener(conv2.ConvID, 0)
 	assertListener(conv1.ConvID, 0)
-	for i := 0; i < 3; i++ {
-		select {
-		case <-listener.bgConvLoads:
-		case <-time.After(time.Second):
-			require.Fail(t, "did not drain")
-		}
-	}
-	localVers2++
-	assertEphemeralPurgeNotifInfo(conv2.ConvID, []chat1.MessageID{msgs[3].GetMessageID()}, localVers2)
+	assertListener(conv2.ConvID, 0)
 	localVers1++
 	assertEphemeralPurgeNotifInfo(conv1.ConvID, []chat1.MessageID{msgs[4].GetMessageID()}, localVers1)
+	localVers2++
+	assertEphemeralPurgeNotifInfo(conv2.ConvID, []chat1.MessageID{msgs[3].GetMessageID()}, localVers2)
 	assertTrackerState(conv1.ConvID, chat1.EphemeralPurgeInfo{
 		ConvID:          conv1.ConvID,
 		MinUnexplodedID: msgs[4].GetMessageID(),
@@ -290,7 +282,7 @@ func TestBackgroundPurge(t *testing.T) {
 		NextPurgeTime:   0,
 		IsActive:        false,
 	})
-	require.Equal(t, 0, purger.pq.Len())
+	require.Equal(t, 0, purger.Len())
 }
 
 func TestQueueState(t *testing.T) {
@@ -322,7 +314,8 @@ func TestQueueState(t *testing.T) {
 		IsActive:        true,
 	}
 
-	purger.Queue(ctx, purgeInfo)
+	err := purger.Queue(ctx, purgeInfo)
+	require.NoError(t, err)
 	require.Equal(t, 1, pq.Len())
 	queueItem := pq.Peek()
 	require.NotNil(t, queueItem)
@@ -336,7 +329,8 @@ func TestQueueState(t *testing.T) {
 		NextPurgeTime:   gregor1.ToTime(now.Add(time.Hour).Add(time.Minute)),
 		IsActive:        true,
 	}
-	purger.Queue(ctx, purgeInfo2)
+	err = purger.Queue(ctx, purgeInfo2)
+	require.NoError(t, err)
 	require.Equal(t, 1, pq.Len())
 	queueItem = pq.Peek()
 	require.NotNil(t, queueItem)
@@ -350,7 +344,8 @@ func TestQueueState(t *testing.T) {
 		NextPurgeTime:   gregor1.ToTime(now.Add(30 * time.Minute)),
 		IsActive:        true,
 	}
-	purger.Queue(ctx, purgeInfo3)
+	err = purger.Queue(ctx, purgeInfo3)
+	require.NoError(t, err)
 	require.Equal(t, 2, pq.Len())
 	queueItem = pq.Peek()
 	require.NotNil(t, queueItem)

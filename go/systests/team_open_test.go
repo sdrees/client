@@ -129,7 +129,8 @@ func TestOpenSubteamAdd(t *testing.T) {
 
 	// User requesting access
 	subteamNameStr := subteamObj.Name().String()
-	roo.teamsClient.TeamRequestAccess(context.TODO(), keybase1.TeamRequestAccessArg{Name: subteamNameStr})
+	_, err = roo.teamsClient.TeamRequestAccess(context.TODO(), keybase1.TeamRequestAccessArg{Name: subteamNameStr})
+	require.NoError(t, err)
 
 	own.waitForTeamChangedGregor(*subteam, keybase1.Seqno(3))
 
@@ -158,13 +159,16 @@ func TestTeamOpenMultipleTars(t *testing.T) {
 	t.Logf("Open team name is %q", teamName.String())
 
 	// Everyone requests access before team is open.
-	tar1.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: teamName.String()})
-	tar2.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: teamName.String()})
-	tar3.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: teamName.String()})
+	_, err := tar1.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: teamName.String()})
+	require.NoError(t, err)
+	_, err = tar2.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: teamName.String()})
+	require.NoError(t, err)
+	_, err = tar3.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: teamName.String()})
+	require.NoError(t, err)
 
 	// Change settings to open.
 	tar3.kickTeamRekeyd()
-	err := teams.ChangeTeamSettings(context.Background(), own.tc.G, teamName.String(), keybase1.TeamSettings{Open: true, JoinAs: keybase1.TeamRole_READER})
+	err = teams.ChangeTeamSettings(context.Background(), own.tc.G, teamName.String(), keybase1.TeamSettings{Open: true, JoinAs: keybase1.TeamRole_READER})
 	require.NoError(t, err)
 
 	own.waitForTeamChangedGregor(teamID, keybase1.Seqno(3))
@@ -266,8 +270,7 @@ func TestTeamOpenResetAndRejoin(t *testing.T) {
 	bob := tt.addUser("bob")
 	tt.logUserNames()
 
-	teamID, teamName := ann.createTeam2()
-	team := teamName.String()
+	team := ann.createTeam()
 	ann.addTeamMember(team, bob.username, keybase1.TeamRole_WRITER)
 	err := teams.ChangeTeamSettings(context.Background(), ann.tc.G, team, keybase1.TeamSettings{Open: true, JoinAs: keybase1.TeamRole_READER})
 	require.NoError(t, err)
@@ -278,7 +281,7 @@ func TestTeamOpenResetAndRejoin(t *testing.T) {
 	bob.reset()
 
 	// Wait for change membership link after bob resets
-	ann.waitForRotateByID(teamID, keybase1.Seqno(4))
+	ann.pollForTeamSeqnoLink(team, keybase1.Seqno(4))
 
 	bob.loginAfterResetPukless()
 	_, err = bob.teamsClient.TeamRequestAccess(context.Background(), keybase1.TeamRequestAccessArg{Name: team})

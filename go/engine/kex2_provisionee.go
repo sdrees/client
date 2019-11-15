@@ -38,7 +38,6 @@ type Kex2Provisionee struct {
 	kex2Cancel   func()
 	mctx         libkb.MetaContext
 	salt         []byte
-	v1Only       bool // only support protocol v1 (for testing)
 	ekReboxer    *ephemeralKeyReboxer
 	expectedUID  keybase1.UID
 }
@@ -319,15 +318,20 @@ func (e *Kex2Provisionee) handleDidCounterSign(m libkb.MetaContext, sig []byte, 
 		return err
 	}
 
-	// Finish the ephemeral key generation -- create a deviceEKStatement and
-	// prepare the boxMetadata for posting if we received a valid userEKBox
-	reboxArg, err := e.ekReboxer.getReboxArg(m, userEKBox, e.device.ID, e.eddsa)
-	if err != nil {
-		return err
-	}
+	if err := retryOnEphemeralRace(m, func(m libkb.MetaContext) error {
+		// Finish the ephemeral key generation -- create a deviceEKStatement and
+		// prepare the boxMetadata for posting if we received a valid userEKBox
+		reboxArg, err := e.ekReboxer.getReboxArg(m, userEKBox, e.device.ID, e.eddsa)
+		if err != nil {
+			return err
+		}
 
-	// post the key sigs to the api server
-	if err = e.postSigs(eddsaArgs, dhArgs, perUserKeyBox, reboxArg); err != nil {
+		// post the key sigs to the api server
+		if err = e.postSigs(eddsaArgs, dhArgs, perUserKeyBox, reboxArg); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -463,7 +467,10 @@ func (e *Kex2Provisionee) addDeviceSibkey(m libkb.MetaContext, jw *jsonw.Wrapper
 	if err != nil {
 		return err
 	}
-	jw.SetValueAtPath("body.device", dw)
+	err = jw.SetValueAtPath("body.device", dw)
+	if err != nil {
+		return err
+	}
 
 	return jw.SetValueAtPath("body.sibkey.kid", jsonw.NewString(e.eddsa.GetKID().String()))
 }
@@ -564,7 +571,10 @@ func (e *Kex2Provisionee) pushLKSServerHalf(m libkb.MetaContext) (err error) {
 	ppstream := libkb.NewPassphraseStream(e.pps.PassphraseStream)
 	ppstream.SetGeneration(libkb.PassphraseGeneration(e.pps.Generation))
 	e.lks = libkb.NewLKSec(ppstream, e.uid)
-	e.lks.GenerateServerHalf()
+	err = e.lks.GenerateServerHalf()
+	if err != nil {
+		return err
+	}
 
 	// make client half recovery
 	chrKID := e.dh.GetKID()
@@ -622,7 +632,7 @@ func (e *Kex2Provisionee) saveConfig(m libkb.MetaContext, uv keybase1.UserVersio
 		deviceName = *e.device.Description
 	}
 
-	return m.SwitchUserNewConfigActiveDevice(uv, libkb.NewNormalizedUsername(e.username), e.salt, e.device.ID, e.eddsa, e.dh, deviceName)
+	return m.SwitchUserNewConfigActiveDevice(uv, libkb.NewNormalizedUsername(e.username), e.salt, e.device.ID, e.eddsa, e.dh, deviceName, libkb.KeychainModeOS)
 }
 
 func (e *Kex2Provisionee) SigningKey() (libkb.GenericKey, error) {

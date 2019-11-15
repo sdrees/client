@@ -105,17 +105,24 @@ type TestContext struct {
 func (tc *TestContext) Cleanup() {
 	// stop the background logger
 	close(tc.cleanupCh)
-	tc.eg.Wait()
+	err := tc.eg.Wait()
+	require.NoError(tc.T, err)
 
 	tc.G.Log.Debug("global context shutdown:")
-	tc.G.Shutdown()
+	mctx := NewMetaContextForTest(*tc)
+	_ = tc.G.Shutdown(mctx) // could error due to missing pid file
 	if len(tc.Tp.Home) > 0 {
 		tc.G.Log.Debug("cleaning up %s", tc.Tp.Home)
 		os.RemoveAll(tc.Tp.Home)
 		tc.G.Log.Debug("clearing stored secrets:")
-		tc.ClearAllStoredSecrets()
+		err := tc.ClearAllStoredSecrets()
+		require.NoError(tc.T, err)
 	}
 	tc.G.Log.Debug("cleanup complete")
+}
+
+func (tc *TestContext) Logout() error {
+	return NewMetaContextForTest(*tc).LogoutKillSecrets()
 }
 
 func (tc TestContext) MoveGpgKeyringTo(dst TestContext) error {
@@ -169,8 +176,14 @@ func (tc *TestContext) MakePGPKey(id string) (*PGPKeyBundle, error) {
 		SubkeyBits:  1024,
 		PGPUids:     []string{id},
 	}
-	arg.Init()
-	arg.CreatePGPIDs()
+	err := arg.Init()
+	if err != nil {
+		return nil, err
+	}
+	err = arg.CreatePGPIDs()
+	if err != nil {
+		return nil, err
+	}
 	return GeneratePGPKeyBundle(tc.G, arg, tc.G.UI.GetLogUI())
 }
 
@@ -251,7 +264,10 @@ func setupTestContext(tb TestingTB, name string, tcPrev *TestContext) (tc TestCo
 	g.secretStore = NewSecretStoreLocked(m)
 	g.secretStoreMu.Unlock()
 
-	g.ConfigureLogging()
+	err = g.ConfigureLogging(nil)
+	if err != nil {
+		return TestContext{}, err
+	}
 
 	if err = g.ConfigureAPI(); err != nil {
 		return
@@ -461,9 +477,11 @@ type TestLoginUI struct {
 	Username                 string
 	RevokeBackup             bool
 	CalledGetEmailOrUsername int
-	ResetAccount             bool
+	ResetAccount             keybase1.ResetPromptResponse
 	PassphraseRecovery       bool
 }
+
+var _ LoginUI = (*TestLoginUI)(nil)
 
 func (t *TestLoginUI) GetEmailOrUsername(_ context.Context, _ int) (string, error) {
 	t.CalledGetEmailOrUsername++
@@ -482,7 +500,7 @@ func (t *TestLoginUI) DisplayPrimaryPaperKey(_ context.Context, arg keybase1.Dis
 	return nil
 }
 
-func (t *TestLoginUI) PromptResetAccount(_ context.Context, arg keybase1.PromptResetAccountArg) (bool, error) {
+func (t *TestLoginUI) PromptResetAccount(_ context.Context, arg keybase1.PromptResetAccountArg) (keybase1.ResetPromptResponse, error) {
 	return t.ResetAccount, nil
 }
 
@@ -496,6 +514,14 @@ func (t *TestLoginUI) ExplainDeviceRecovery(_ context.Context, arg keybase1.Expl
 
 func (t *TestLoginUI) PromptPassphraseRecovery(_ context.Context, arg keybase1.PromptPassphraseRecoveryArg) (bool, error) {
 	return t.PassphraseRecovery, nil
+}
+
+func (t *TestLoginUI) ChooseDeviceToRecoverWith(_ context.Context, arg keybase1.ChooseDeviceToRecoverWithArg) (keybase1.DeviceID, error) {
+	return "", nil
+}
+
+func (t *TestLoginUI) DisplayResetMessage(_ context.Context, arg keybase1.DisplayResetMessageArg) error {
+	return nil
 }
 
 type TestLoginCancelUI struct {
@@ -663,10 +689,10 @@ func CreateReadOnlySecretStoreDir(tc TestContext) (string, func()) {
 	fi, err := os.Stat(td)
 	require.NoError(tc.T, err)
 	oldMode := fi.Mode()
-	os.Chmod(td, 0400)
+	_ = os.Chmod(td, 0400)
 
 	cleanup := func() {
-		os.Chmod(td, oldMode)
+		_ = os.Chmod(td, oldMode)
 		if err := os.RemoveAll(td); err != nil {
 			tc.T.Log(err)
 		}

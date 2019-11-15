@@ -2,7 +2,7 @@ import * as React from 'react'
 import {MessageExplodeDescription} from '../../../../constants/types/chat2'
 import {MenuItems, Box2, Icon, Text, FloatingMenu} from '../../../../common-adapters'
 import {platformStyles, globalColors} from '../../../../styles'
-import {Props} from './index.types'
+import {Props} from '.'
 
 const quantityTextStyle = platformStyles({
   common: {
@@ -26,12 +26,12 @@ const Item = (props: ItemProps) => {
     content = props.desc.text
   } else {
     content = (
-      <React.Fragment>
+      <>
         <Text type="Body" style={quantityTextStyle}>
           {words[0]}
         </Text>
         {' ' + words.slice(1).join(' ')}
-      </React.Fragment>
+      </>
     )
   }
   return (

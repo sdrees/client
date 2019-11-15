@@ -13,6 +13,7 @@ import (
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/stellar1"
 	"github.com/keybase/client/go/stellar"
+	airdrop "github.com/keybase/client/go/stellar/airdrop"
 	"github.com/keybase/client/go/stellar/remote"
 	"github.com/keybase/client/go/stellar/stellarcommon"
 	"github.com/keybase/stellarnet"
@@ -757,12 +758,17 @@ func (s *Server) SendPathLocal(ctx context.Context, arg stellar1.SendPathLocalAr
 		return res, err
 	}
 
+	var pubMemo *stellarnet.Memo
+	if arg.PublicNote != "" {
+		pubMemo = stellarnet.NewMemoText(arg.PublicNote)
+	}
+
 	sendRes, err := stellar.SendPathPaymentGUI(mctx, s.walletState, stellar.SendPathPaymentArg{
 		From:        arg.Source,
 		To:          stellarcommon.RecipientInput(arg.Recipient),
 		Path:        arg.Path,
 		SecretNote:  arg.Note,
-		PublicMemo:  stellarnet.NewMemoText(arg.PublicNote),
+		PublicMemo:  pubMemo,
 		QuickReturn: true,
 	})
 	if err != nil {
@@ -1027,7 +1033,7 @@ func (s *Server) AirdropRegisterLocal(ctx context.Context, arg stellar1.AirdropR
 	if err != nil {
 		return err
 	}
-
+	go testExperimentalRegistration(mctx)
 	return remote.AirdropRegister(mctx, arg.Register)
 }
 
@@ -1332,4 +1338,11 @@ func (s *Server) prepareAnchorInteractor(mctx libkb.MetaContext, accountID stell
 
 	// all good from the user's perspective, proceed...
 	return newAnchorInteractor(accountID, seed, fullAsset), nil
+}
+
+func testExperimentalRegistration(mctx libkb.MetaContext) {
+	err := airdrop.NewClient().Register(mctx.BackgroundWithLogTags())
+	if err != nil {
+		mctx.Info("Error testExperimentalRegistration: %s", err.Error())
+	}
 }

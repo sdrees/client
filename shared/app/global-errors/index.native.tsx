@@ -2,13 +2,12 @@ import * as React from 'react'
 import * as Kb from '../../common-adapters/mobile.native'
 import * as Styles from '../../styles'
 import {RPCError} from '../../util/errors'
-import {Props as _Props} from './index.types'
+import {Props as _Props} from './index'
 
 type Size = 'Closed' | 'Small' | 'Big'
 
 type State = {
   size: Size
-  cachedSummary?: string
   cachedDetails?: string
 }
 
@@ -22,7 +21,6 @@ class GlobalError extends React.Component<Props, State> {
 
     this.state = {
       cachedDetails: this._detailsForError(props.error),
-      cachedSummary: this._summaryForError(props.error),
       size: 'Closed',
     }
   }
@@ -42,10 +40,6 @@ class GlobalError extends React.Component<Props, State> {
     }
   }
 
-  _summaryForError(err: null | Error | RPCError) {
-    return err ? err.message : undefined
-  }
-
   _detailsForError(err: null | Error | RPCError) {
     return err ? err.stack : undefined
   }
@@ -56,7 +50,6 @@ class GlobalError extends React.Component<Props, State> {
         () => {
           this.setState({
             cachedDetails: this._detailsForError(this.props.error),
-            cachedSummary: this._summaryForError(this.props.error),
           })
         },
         this.props.error ? 0 : 7000
@@ -67,11 +60,7 @@ class GlobalError extends React.Component<Props, State> {
 
   _renderItem = (index: number, item: string) => {
     return (
-      <Kb.Text
-        key={String(index)}
-        type="BodySmall"
-        style={{color: Styles.globalColors.white, fontSize: 8, lineHeight: 8}}
-      >
+      <Kb.Text key={String(index)} type="BodySmall" style={styles.itemText}>
         {item}
         {'\n'}
       </Kb.Text>
@@ -94,19 +83,13 @@ class GlobalError extends React.Component<Props, State> {
           this.state.size === 'Big' && Styles.globalStyles.fillAbsolute,
         ])}
       >
-        <Kb.SafeAreaViewTop style={{backgroundColor: Styles.globalColors.transparent, flexGrow: 0}} />
+        <Kb.SafeAreaViewTop style={styles.safeAreaView} />
         <Kb.Box style={Styles.globalStyles.flexBoxColumn}>
-          <Kb.Box
-            style={{
-              ...summaryRowStyle,
-              paddingBottom: Styles.globalMargins.xtiny,
-              position: 'relative',
-            }}
-          >
+          <Kb.Box style={Styles.collapseStyles([styles.summaryRow, styles.errorTextContainer])}>
             <Kb.Text
               center={true}
               type="BodySmallSemibold"
-              style={{color: Styles.globalColors.white, flex: 1}}
+              style={styles.errorText}
               onClick={this._onExpandClick}
             >
               {this.state.size !== 'Big' && (
@@ -122,7 +105,7 @@ class GlobalError extends React.Component<Props, State> {
               fontSize={21}
             />
           </Kb.Box>
-          <Kb.Box style={summaryRowStyle}>
+          <Kb.Box style={styles.summaryRow}>
             <Kb.Button
               fullWidth={true}
               label="Please tell us"
@@ -134,7 +117,7 @@ class GlobalError extends React.Component<Props, State> {
         </Kb.Box>
         {this.state.size === 'Big' && (
           <Kb.NativeScrollView>
-            <Kb.Text type="BodySmall" selectable={true} style={detailStyle}>
+            <Kb.Text type="BodySmall" selectable={true} style={styles.details}>
               {this.props.error && this.props.error.message}
               {'\n\n'}
               {details}
@@ -146,31 +129,49 @@ class GlobalError extends React.Component<Props, State> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  container: {
-    backgroundColor: Styles.globalColors.black,
-    position: 'absolute',
-    top: 0,
-  },
-})
-
-const summaryRowStyle = {
-  ...Styles.globalStyles.flexBoxRow,
-  alignItems: 'flex-start',
-  flexShrink: 0,
-  justifyContent: 'flex-start',
-  paddingBottom: Styles.globalMargins.tiny,
-  paddingLeft: Styles.globalMargins.xsmall,
-  paddingRight: Styles.globalMargins.xsmall,
-  paddingTop: Styles.globalMargins.tiny,
-}
-
-const detailStyle = {
-  color: Styles.globalColors.white_75,
-  fontSize: 14,
-  lineHeight: 19,
-  padding: Styles.globalMargins.xtiny,
-  paddingTop: Styles.globalMargins.tiny,
-}
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: {
+        backgroundColor: Styles.globalColors.black,
+        position: 'absolute',
+        top: 0,
+      },
+      details: {
+        color: Styles.globalColors.white_75,
+        fontSize: 14,
+        lineHeight: 19,
+        padding: Styles.globalMargins.xtiny,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      errorText: {
+        color: Styles.globalColors.white,
+        flex: 1,
+      },
+      errorTextContainer: {
+        paddingBottom: Styles.globalMargins.xtiny,
+        position: 'relative',
+      },
+      itemText: {
+        color: Styles.globalColors.white,
+        fontSize: 8,
+        lineHeight: 8,
+      },
+      safeAreaView: {
+        backgroundColor: Styles.globalColors.transparent,
+        flexGrow: 0,
+      },
+      summaryRow: {
+        ...Styles.globalStyles.flexBoxRow,
+        alignItems: 'flex-start',
+        flexShrink: 0,
+        justifyContent: 'flex-start',
+        paddingBottom: Styles.globalMargins.tiny,
+        paddingLeft: Styles.globalMargins.xsmall,
+        paddingRight: Styles.globalMargins.xsmall,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+    } as const)
+)
 
 export default Kb.HOCTimers(GlobalError)

@@ -20,7 +20,15 @@ export type IncomingErrorCallback = (err: {code?: number; desc?: string} | null)
 type IncomingReturn = Effect | null | void | false | Array<Effect | null | void | false>
 
 // Dummy calls to avoid undelcared warnings in TS strict mode
-export const _doNotUse = (w: WaitingKey, i: IncomingReturn) => console.log('why did you call this function?', w, i, call(() => {}), engine(), getEngineSaga())
+export const _doNotUse = (w: WaitingKey, i: IncomingReturn) =>
+  console.log(
+    'why did you call this function?',
+    w,
+    i,
+    call(() => {}),
+    engine(),
+    getEngineSaga()
+  )
 
 export type MessageTypes = {
   'stellar.1.local.acceptDisclaimerLocal': {
@@ -374,7 +382,7 @@ export type AccountAssetLocal = {readonly name: String; readonly assetCode: Stri
 export type AccountBundle = {readonly prev: Hash; readonly ownHash: Hash; readonly accountID: AccountID; readonly signers?: Array<SecretKey> | null}
 export type AccountBundleSecretUnsupported = {}
 export type AccountBundleSecretV1 = {readonly accountID: AccountID; readonly signers?: Array<SecretKey> | null}
-export type AccountBundleSecretVersioned = {version: AccountBundleVersion.v1; v1: AccountBundleSecretV1 | null} | {version: AccountBundleVersion.v2; v2: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v3; v3: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v4; v4: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v5; v5: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v6; v6: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v7; v7: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v8; v8: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v9; v9: AccountBundleSecretUnsupported | null} | {version: AccountBundleVersion.v10; v10: AccountBundleSecretUnsupported | null}
+export type AccountBundleSecretVersioned = {version: AccountBundleVersion.v1; v1: AccountBundleSecretV1} | {version: AccountBundleVersion.v2; v2: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v3; v3: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v4; v4: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v5; v5: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v6; v6: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v7; v7: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v8; v8: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v9; v9: AccountBundleSecretUnsupported} | {version: AccountBundleVersion.v10; v10: AccountBundleSecretUnsupported}
 export type AccountDetails = {readonly accountID: AccountID; readonly seqno: String; readonly balances?: Array<Balance> | null; readonly subentryCount: Int; readonly available: String; readonly reserves?: Array<AccountReserve> | null; readonly readTransactionID?: TransactionID | null; readonly unreadPayments: Int; readonly displayCurrency: String; readonly inflationDestination?: AccountID | null}
 export type AccountID = String
 export type AccountReserve = {readonly amount: String; readonly description: String}
@@ -382,7 +390,7 @@ export type AirdropDetails = {readonly isPromoted: Boolean; readonly details: St
 export type AirdropQualification = {readonly title: String; readonly subtitle: String; readonly valid: Boolean}
 export type AirdropState = String
 export type AirdropStatus = {readonly state: AirdropState; readonly rows?: Array<AirdropQualification> | null}
-export type Asset = {readonly type: String; readonly code: String; readonly issuer: String; readonly verifiedDomain: String; readonly issuerName: String; readonly desc: String; readonly infoUrl: String; readonly infoUrlText: String; readonly showDepositButton: Boolean; readonly depositButtonText: String; readonly showWithdrawButton: Boolean; readonly withdrawButtonText: String; readonly withdrawType: String; readonly transferServer: String; readonly authEndpoint: String}
+export type Asset = {readonly type: String; readonly code: String; readonly issuer: String; readonly verifiedDomain: String; readonly issuerName: String; readonly desc: String; readonly infoUrl: String; readonly infoUrlText: String; readonly showDepositButton: Boolean; readonly depositButtonText: String; readonly showWithdrawButton: Boolean; readonly withdrawButtonText: String; readonly withdrawType: String; readonly transferServer: String; readonly authEndpoint: String; readonly depositReqAuth: Boolean; readonly withdrawReqAuth: Boolean}
 export type AssetActionResultLocal = {readonly externalUrl?: String | null; readonly messageFromAnchor?: String | null}
 export type AssetCode = String
 export type AssetListResult = {readonly assets?: Array<Asset> | null; readonly totalCount: Int}
@@ -393,7 +401,7 @@ export type BatchPaymentError = {readonly message: String; readonly code: Int}
 export type BatchPaymentResult = {readonly username: String; readonly startTime: TimeMs; readonly submittedTime: TimeMs; readonly endTime: TimeMs; readonly txID: TransactionID; readonly status: PaymentStatus; readonly statusDescription: String; readonly error?: BatchPaymentError | null}
 export type BatchResultLocal = {readonly startTime: TimeMs; readonly preparedTime: TimeMs; readonly allSubmittedTime: TimeMs; readonly allCompleteTime: TimeMs; readonly endTime: TimeMs; readonly payments?: Array<BatchPaymentResult> | null; readonly overallDurationMs: TimeMs; readonly prepareDurationMs: TimeMs; readonly submitDurationMs: TimeMs; readonly waitPaymentsDurationMs: TimeMs; readonly waitChatDurationMs: TimeMs; readonly countSuccess: Int; readonly countDirect: Int; readonly countRelay: Int; readonly countError: Int; readonly countPending: Int; readonly avgDurationMs: TimeMs; readonly avgSuccessDurationMs: TimeMs; readonly avgDirectDurationMs: TimeMs; readonly avgRelayDurationMs: TimeMs; readonly avgErrorDurationMs: TimeMs}
 export type BuildPaymentID = String
-export type BuildPaymentResLocal = {readonly readyToReview: Boolean; readonly from: AccountID; readonly toErrMsg: String; readonly amountErrMsg: String; readonly secretNoteErrMsg: String; readonly publicMemoErrMsg: String; readonly worthDescription: String; readonly worthInfo: String; readonly worthAmount: String; readonly worthCurrency: String; readonly displayAmountXLM: String; readonly displayAmountFiat: String; readonly sendingIntentionXLM: Boolean; readonly amountAvailable: String; readonly banners?: Array<SendBannerLocal> | null}
+export type BuildPaymentResLocal = {readonly readyToReview: Boolean; readonly from: AccountID; readonly toErrMsg: String; readonly amountErrMsg: String; readonly secretNoteErrMsg: String; readonly publicMemoErrMsg: String; readonly publicMemoOverride: String; readonly worthDescription: String; readonly worthInfo: String; readonly worthAmount: String; readonly worthCurrency: String; readonly displayAmountXLM: String; readonly displayAmountFiat: String; readonly sendingIntentionXLM: Boolean; readonly amountAvailable: String; readonly banners?: Array<SendBannerLocal> | null}
 export type BuildRequestResLocal = {readonly readyToRequest: Boolean; readonly toErrMsg: String; readonly amountErrMsg: String; readonly secretNoteErrMsg: String; readonly worthDescription: String; readonly worthInfo: String; readonly displayAmountXLM: String; readonly displayAmountFiat: String; readonly sendingIntentionXLM: Boolean; readonly banners?: Array<SendBannerLocal> | null}
 export type Bundle = {readonly revision: BundleRevision; readonly prev: Hash; readonly ownHash: Hash; readonly accounts?: Array<BundleEntry> | null; readonly accountBundles: {[key: string]: AccountBundle}}
 export type BundleEntry = {readonly accountID: AccountID; readonly mode: AccountMode; readonly isPrimary: Boolean; readonly name: String; readonly acctBundleRevision: BundleRevision; readonly encAcctBundleHash: Hash}
@@ -401,7 +409,7 @@ export type BundleRevision = Uint64
 export type BundleSecretEntryV2 = {readonly accountID: AccountID; readonly name: String}
 export type BundleSecretUnsupported = {}
 export type BundleSecretV2 = {readonly visibleHash: Hash; readonly accounts?: Array<BundleSecretEntryV2> | null}
-export type BundleSecretVersioned = {version: BundleVersion.v1; v1: BundleSecretUnsupported | null} | {version: BundleVersion.v2; v2: BundleSecretV2 | null} | {version: BundleVersion.v3; v3: BundleSecretUnsupported | null} | {version: BundleVersion.v4; v4: BundleSecretUnsupported | null} | {version: BundleVersion.v5; v5: BundleSecretUnsupported | null} | {version: BundleVersion.v6; v6: BundleSecretUnsupported | null} | {version: BundleVersion.v7; v7: BundleSecretUnsupported | null} | {version: BundleVersion.v8; v8: BundleSecretUnsupported | null} | {version: BundleVersion.v9; v9: BundleSecretUnsupported | null} | {version: BundleVersion.v10; v10: BundleSecretUnsupported | null}
+export type BundleSecretVersioned = {version: BundleVersion.v1; v1: BundleSecretUnsupported} | {version: BundleVersion.v2; v2: BundleSecretV2} | {version: BundleVersion.v3; v3: BundleSecretUnsupported} | {version: BundleVersion.v4; v4: BundleSecretUnsupported} | {version: BundleVersion.v5; v5: BundleSecretUnsupported} | {version: BundleVersion.v6; v6: BundleSecretUnsupported} | {version: BundleVersion.v7; v7: BundleSecretUnsupported} | {version: BundleVersion.v8; v8: BundleSecretUnsupported} | {version: BundleVersion.v9; v9: BundleSecretUnsupported} | {version: BundleVersion.v10; v10: BundleSecretUnsupported}
 export type BundleVisibleEntryV2 = {readonly accountID: AccountID; readonly mode: AccountMode; readonly isPrimary: Boolean; readonly acctBundleRevision: BundleRevision; readonly encAcctBundleHash: Hash}
 export type BundleVisibleV2 = {readonly revision: BundleRevision; readonly prev: Hash; readonly accounts?: Array<BundleVisibleEntryV2> | null}
 export type ChatConversationID = String
@@ -448,7 +456,7 @@ export type PaymentPathQuery = {readonly source: AccountID; readonly destination
 export type PaymentRelayPost = {readonly fromDeviceID: Keybase1.DeviceID; readonly to?: Keybase1.UserVersion | null; readonly toAssertion: String; readonly relayAccount: AccountID; readonly teamID: Keybase1.TeamID; readonly displayAmount: String; readonly displayCurrency: String; readonly boxB64: String; readonly signedTransaction: String; readonly quickReturn: Boolean; readonly chatConversationID?: ChatConversationID | null; readonly batchID: String}
 export type PaymentResult = {readonly senderAccountID: AccountID; readonly keybaseID: KeybaseTransactionID; readonly stellarID: TransactionID; readonly pending: Boolean}
 export type PaymentStatusMsg = {readonly accountID: AccountID; readonly kbTxID: KeybaseTransactionID; readonly txID: TransactionID}
-export type PaymentSummary = {typ: PaymentSummaryType.stellar; stellar: PaymentSummaryStellar | null} | {typ: PaymentSummaryType.direct; direct: PaymentSummaryDirect | null} | {typ: PaymentSummaryType.relay; relay: PaymentSummaryRelay | null} | {typ: PaymentSummaryType.none}
+export type PaymentSummary = {typ: PaymentSummaryType.stellar; stellar: PaymentSummaryStellar} | {typ: PaymentSummaryType.direct; direct: PaymentSummaryDirect} | {typ: PaymentSummaryType.relay; relay: PaymentSummaryRelay} | {typ: PaymentSummaryType.none}
 export type PaymentSummaryDirect = {readonly kbTxID: KeybaseTransactionID; readonly txID: TransactionID; readonly txStatus: TransactionStatus; readonly txErrMsg: String; readonly fromStellar: AccountID; readonly from: Keybase1.UserVersion; readonly fromDeviceID: Keybase1.DeviceID; readonly toStellar: AccountID; readonly to?: Keybase1.UserVersion | null; readonly amount: String; readonly asset: Asset; readonly displayAmount?: String | null; readonly displayCurrency?: String | null; readonly noteB64: String; readonly fromDisplayAmount: String; readonly fromDisplayCurrency: String; readonly toDisplayAmount: String; readonly toDisplayCurrency: String; readonly ctime: TimeMs; readonly rtime: TimeMs; readonly cursorToken: String; readonly unread: Boolean; readonly fromPrimary: Boolean; readonly batchID: String; readonly fromAirdrop: Boolean; readonly sourceAmountMax: String; readonly sourceAmountActual: String; readonly sourceAsset: Asset}
 export type PaymentSummaryRelay = {readonly kbTxID: KeybaseTransactionID; readonly txID: TransactionID; readonly txStatus: TransactionStatus; readonly txErrMsg: String; readonly fromStellar: AccountID; readonly from: Keybase1.UserVersion; readonly fromDeviceID: Keybase1.DeviceID; readonly to?: Keybase1.UserVersion | null; readonly toAssertion: String; readonly relayAccount: AccountID; readonly amount: String; readonly displayAmount?: String | null; readonly displayCurrency?: String | null; readonly ctime: TimeMs; readonly rtime: TimeMs; readonly boxB64: String; readonly teamID: Keybase1.TeamID; readonly claim?: ClaimSummary | null; readonly cursorToken: String; readonly batchID: String; readonly fromAirdrop: Boolean}
 export type PaymentSummaryStellar = {readonly txID: TransactionID; readonly from: AccountID; readonly to: AccountID; readonly amount: String; readonly asset: Asset; readonly ctime: TimeMs; readonly cursorToken: String; readonly unread: Boolean; readonly isInflation: Boolean; readonly inflationSource?: String | null; readonly sourceAmountMax: String; readonly sourceAmountActual: String; readonly sourceAsset: Asset; readonly isAdvanced: Boolean; readonly summaryAdvanced: String; readonly operations?: Array<String> | null; readonly trustline?: PaymentTrustlineLocal | null}
@@ -561,6 +569,7 @@ export const localValidateStellarURILocalRpcPromise = (params: MessageTypes['ste
 // 'stellar.1.local.balancesLocal'
 // 'stellar.1.local.sendCLILocal'
 // 'stellar.1.local.sendPathCLILocal'
+// 'stellar.1.local.accountMergeCLILocal'
 // 'stellar.1.local.claimCLILocal'
 // 'stellar.1.local.recentPaymentsCLILocal'
 // 'stellar.1.local.paymentDetailCLILocal'
@@ -608,6 +617,7 @@ export const localValidateStellarURILocalRpcPromise = (params: MessageTypes['ste
 // 'stellar.1.remote.ping'
 // 'stellar.1.remote.networkOptions'
 // 'stellar.1.remote.detailsPlusPayments'
+// 'stellar.1.remote.allDetailsPlusPayments'
 // 'stellar.1.remote.assetSearch'
 // 'stellar.1.remote.fuzzyAssetSearch'
 // 'stellar.1.remote.listPopularAssets'

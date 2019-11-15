@@ -48,7 +48,7 @@ func NewBadger(g *libkb.GlobalContext) *Badger {
 		shutdownCh:     make(chan struct{}),
 	}
 	go b.notifyLoop()
-	g.PushShutdownHook(func() error {
+	g.PushShutdownHook(func(mctx libkb.MetaContext) error {
 		close(b.shutdownCh)
 		return nil
 	})
@@ -143,7 +143,7 @@ func (b *Badger) log(ctx context.Context, state1 keybase1.BadgeState) {
 	state2 := state1
 	state2.Conversations = nil
 	for _, c1 := range state1.Conversations {
-		if c1.UnreadMessages == 0 {
+		if c1.IsEmpty() {
 			continue
 		}
 		c2id := c1.ConvID

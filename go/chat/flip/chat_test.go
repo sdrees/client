@@ -8,6 +8,7 @@ import (
 	"time"
 
 	chat1 "github.com/keybase/client/go/protocol/chat1"
+	gregor1 "github.com/keybase/client/go/protocol/gregor1"
 	clockwork "github.com/keybase/clockwork"
 	"github.com/stretchr/testify/require"
 )
@@ -61,7 +62,7 @@ func (c *chatClient) Me() UserDevice {
 	return c.me
 }
 
-func (c *chatClient) SendChat(ctx context.Context, conversationID chat1.ConversationID,
+func (c *chatClient) SendChat(ctx context.Context, initiatorUID gregor1.UID, conversationID chat1.ConversationID,
 	gameID chat1.FlipGameID, msg GameMessageEncoded) error {
 	c.server.inputCh <- GameMessageWrappedEncoded{Body: msg, GameID: gameID, Sender: c.me}
 	return nil
@@ -133,14 +134,16 @@ func (s *chatServer) newClient() *chatClient {
 }
 
 func (c *chatClient) run(ctx context.Context, ch chat1.ConversationID) {
-	go c.dealer.Run(ctx)
+	go func() {
+		_ = c.dealer.Run(ctx)
+	}()
 	for {
 		select {
 		case <-c.shutdownCh:
 			return
 		case msg := <-c.ch:
 			chKey := ch.String()
-			c.dealer.InjectIncomingChat(ctx, msg.Sender, ch, msg.GameID, msg.Body, !c.history[chKey])
+			_ = c.dealer.InjectIncomingChat(ctx, msg.Sender, ch, msg.GameID, msg.Body, !c.history[chKey])
 			c.history[chKey] = true
 		}
 	}

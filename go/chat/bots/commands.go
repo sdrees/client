@@ -16,12 +16,13 @@ import (
 
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/chat/storage"
-	"github.com/keybase/client/go/chat/types"
 	"github.com/keybase/client/go/chat/utils"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/chat1"
 	"github.com/keybase/client/go/protocol/gregor1"
 )
+
+const storageVersion = 1
 
 type commandUpdaterJob struct {
 	convID     chat1.ConversationID
@@ -36,15 +37,16 @@ type userCommandAdvertisement struct {
 }
 
 type storageCommandAdvertisement struct {
-	Advertisement userCommandAdvertisement
-	Username      string
+	Advertisement     userCommandAdvertisement
+	UntrustedTeamRole keybase1.TeamRole
+	UID               gregor1.UID
+	Username          string
 }
 
 type commandsStorage struct {
 	Advertisements []storageCommandAdvertisement `codec:"A"`
+	Version        int                           `codec:"V"`
 }
-
-const commandsStorageVersion = 1
 
 var commandsPublicTopicName = "___keybase_botcommands_public"
 
@@ -67,7 +69,7 @@ type CachingBotCommandManager struct {
 
 func NewCachingBotCommandManager(g *globals.Context, ri func() chat1.RemoteInterface) *CachingBotCommandManager {
 	keyFn := func(ctx context.Context) ([32]byte, error) {
-		return storage.GetSecretBoxKey(ctx, g.ExternalG(), storage.DefaultSecretUI)
+		return storage.GetSecretBoxKey(ctx, g.ExternalG())
 	}
 	dbFn := func(g *libkb.GlobalContext) *libkb.JSONLocalDb {
 		return g.LocalChatDb
@@ -104,7 +106,10 @@ func (b *CachingBotCommandManager) Stop(ctx context.Context) chan struct{} {
 		close(b.stopCh)
 		b.started = false
 		go func() {
-			b.eg.Wait()
+			err := b.eg.Wait()
+			if err != nil {
+				b.Debug(ctx, "CachingBotCommandManager: error waiting: %+v", err)
+			}
 			close(ch)
 		}()
 	} else {
@@ -140,6 +145,18 @@ func (b *CachingBotCommandManager) createConv(ctx context.Context, param chat1.A
 	default:
 		return res, errors.New("unknown bot advertisement typ")
 	}
+}
+
+func (b *CachingBotCommandManager) PublicCommandsConv(ctx context.Context, username string) (chat1.ConversationID, error) {
+	convs, err := b.G().ChatHelper.FindConversations(ctx, username, &commandsPublicTopicName,
+		chat1.TopicType_DEV, chat1.ConversationMembersType_IMPTEAMNATIVE, keybase1.TLFVisibility_PUBLIC)
+	if err != nil {
+		return nil, err
+	}
+	if len(convs) != 1 {
+		return nil, fmt.Errorf("unable to find conversation for %v, found %d convs instead of 1", username, len(convs))
+	}
+	return convs[0].GetConvID(), nil
 }
 
 func (b *CachingBotCommandManager) Advertise(ctx context.Context, alias *string,
@@ -208,16 +225,38 @@ func (b *CachingBotCommandManager) dbCommandsKey(convID chat1.ConversationID) li
 
 func (b *CachingBotCommandManager) ListCommands(ctx context.Context, convID chat1.ConversationID) (res []chat1.UserBotCommandOutput, err error) {
 	defer b.Trace(ctx, func() error { return err }, "ListCommands")()
+	dbKey := b.dbCommandsKey(convID)
 	var s commandsStorage
-	found, err := b.edb.Get(ctx, b.dbCommandsKey(convID), &s)
+	found, err := b.edb.Get(ctx, dbKey, &s)
 	if err != nil {
 		return res, err
 	}
 	if !found {
 		return nil, nil
 	}
+	if s.Version != storageVersion {
+		b.Debug(ctx, "ListCommands: deleting old version %d vs %d", s.Version, storageVersion)
+		if err := b.edb.Delete(ctx, dbKey); err != nil {
+			b.Debug(ctx, "edb.Delete: %v", err)
+		}
+		return nil, nil
+	}
 	cmdDedup := make(map[string]bool)
+
 	for _, ad := range s.Advertisements {
+		// If the advertisement is by a restricted bot that will not be keyed
+		// for commands, filter the advertisement out.
+		if ad.UntrustedTeamRole.IsRestrictedBot() {
+			teamBotSettings, err := b.G().InboxSource.TeamBotSettingsForConv(ctx, b.uid, convID)
+			if err != nil {
+				return nil, err
+			}
+			if !teamBotSettings[keybase1.UID(ad.UID.String())].Cmds {
+				b.Debug(ctx, "ListCommands: skipping commands from %v, a restricted bot without cmds", ad.UID)
+				continue
+			}
+		}
+		ad.Username = libkb.NewNormalizedUsername(ad.Username).String()
 		for _, cmd := range ad.Advertisement.Commands {
 			key := cmd.Name + ad.Username
 			if !cmdDedup[key] {
@@ -253,27 +292,21 @@ func (b *CachingBotCommandManager) UpdateCommands(ctx context.Context, convID ch
 	})
 }
 
-type nullChatUI struct {
-	libkb.ChatUI
-}
-
-func (n nullChatUI) ChatBotCommandsUpdateStatus(ctx context.Context, convID chat1.ConversationID,
-	status chat1.UIBotCommandsUpdateStatus) error {
-	return nil
-}
-
 func (b *CachingBotCommandManager) getChatUI(ctx context.Context) libkb.ChatUI {
 	ui, err := b.G().UIRouter.GetChatUI()
 	if err != nil || ui == nil {
 		b.Debug(ctx, "getChatUI: no chat UI found: err: %s", err)
-		return nullChatUI{}
+		return utils.NullChatUI{}
 	}
 	return ui
 }
 
 func (b *CachingBotCommandManager) runCommandUpdateUI(ctx context.Context, job commandUpdaterJob) {
-	b.getChatUI(ctx).ChatBotCommandsUpdateStatus(ctx, job.convID,
+	err := b.getChatUI(ctx).ChatBotCommandsUpdateStatus(ctx, job.convID,
 		chat1.UIBotCommandsUpdateStatus_BLANK)
+	if err != nil {
+		b.Debug(ctx, "getChatUI: error getting update status: %+v", err)
+	}
 	sentUpdating := false
 	for {
 		select {
@@ -283,12 +316,18 @@ func (b *CachingBotCommandManager) runCommandUpdateUI(ctx context.Context, job c
 				if err != nil {
 					updateStatus = chat1.UIBotCommandsUpdateStatus_FAILED
 				}
-				b.getChatUI(ctx).ChatBotCommandsUpdateStatus(ctx, job.convID, updateStatus)
+				err := b.getChatUI(ctx).ChatBotCommandsUpdateStatus(ctx, job.convID, updateStatus)
+				if err != nil {
+					b.Debug(ctx, "getChatUI: error getting update status: %+v", err)
+				}
 			}
 			return
 		case <-time.After(800 * time.Millisecond):
-			b.getChatUI(ctx).ChatBotCommandsUpdateStatus(ctx, job.convID,
+			err := b.getChatUI(ctx).ChatBotCommandsUpdateStatus(ctx, job.convID,
 				chat1.UIBotCommandsUpdateStatus_UPDATING)
+			if err != nil {
+				b.Debug(ctx, "getChatUI: error getting update status: %+v", err)
+			}
 			sentUpdating = true
 		}
 	}
@@ -312,6 +351,7 @@ func (b *CachingBotCommandManager) queueCommandUpdate(ctx context.Context, job c
 }
 
 func (b *CachingBotCommandManager) getBotInfo(ctx context.Context, job commandUpdaterJob) (botInfo chat1.BotInfo, doUpdate bool, err error) {
+	defer b.Trace(ctx, func() error { return err }, fmt.Sprintf("getBotInfo: %v", job.convID))()
 	if job.info != nil {
 		return *job.info, true, nil
 	}
@@ -332,6 +372,9 @@ func (b *CachingBotCommandManager) getBotInfo(ctx context.Context, job commandUp
 		return botInfo, false, err
 	}
 	rtyp, err := res.Response.Typ()
+	if err != nil {
+		return botInfo, false, err
+	}
 	switch rtyp {
 	case chat1.BotInfoResponseTyp_UPTODATE:
 		return botInfo, false, nil
@@ -345,7 +388,7 @@ func (b *CachingBotCommandManager) getBotInfo(ctx context.Context, job commandUp
 }
 
 func (b *CachingBotCommandManager) getConvAdvertisement(ctx context.Context, convID chat1.ConversationID,
-	botUID gregor1.UID) (res *storageCommandAdvertisement) {
+	botUID gregor1.UID, untrustedTeamRole keybase1.TeamRole) (res *storageCommandAdvertisement) {
 	b.Debug(ctx, "getConvAdvertisement: reading commands from: %s for uid: %s", convID, botUID)
 	tv, err := b.G().ConvSource.Pull(ctx, convID, b.uid, chat1.GetThreadReason_BOTCOMMANDS,
 		&chat1.GetThreadQuery{
@@ -380,6 +423,9 @@ func (b *CachingBotCommandManager) getConvAdvertisement(ctx context.Context, con
 		return nil
 	}
 	res.Username = msg.Valid().SenderUsername
+	res.UID = botUID
+	res.UntrustedTeamRole = untrustedTeamRole
+
 	return res
 }
 
@@ -401,9 +447,11 @@ func (b *CachingBotCommandManager) commandUpdate(ctx context.Context, job comman
 		b.Debug(ctx, "commandUpdate: bot info uptodate, not updating")
 		return nil
 	}
-	var s commandsStorage
+	s := commandsStorage{
+		Version: storageVersion,
+	}
 	for _, cconv := range botInfo.CommandConvs {
-		ad := b.getConvAdvertisement(ctx, cconv.ConvID, cconv.Uid)
+		ad := b.getConvAdvertisement(ctx, cconv.ConvID, cconv.Uid, cconv.UntrustedTeamRole)
 		if ad != nil {
 			s.Advertisements = append(s.Advertisements, *ad)
 		}
@@ -412,22 +460,7 @@ func (b *CachingBotCommandManager) commandUpdate(ctx context.Context, job comman
 		return err
 	}
 	// alert that the conv is now updated
-	if err := storage.NewInbox(b.G()).IncrementLocalConvVersion(ctx, b.uid, job.convID); err != nil {
-		b.Debug(ctx, "commandUpdate: unable to IncrementLocalConvVersion, err", err)
-	}
-	conv, err := utils.GetVerifiedConv(ctx, b.G(), b.uid, job.convID, types.InboxSourceDataSourceAll)
-	if err != nil {
-		return err
-	}
-	username, err := b.getMyUsername(ctx)
-	if err != nil {
-		return err
-	}
-	act := chat1.NewChatActivityWithConvsUpdated(chat1.ConvsUpdated{
-		Items: []chat1.InboxUIItem{utils.PresentConversationLocal(ctx, conv, username)},
-	})
-	b.G().ActivityNotifier.Activity(ctx, b.uid, chat1.TopicType_CHAT, &act,
-		chat1.ChatActivitySource_LOCAL)
+	b.G().InboxSource.NotifyUpdate(ctx, b.uid, job.convID)
 	return nil
 }
 

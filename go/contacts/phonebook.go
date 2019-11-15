@@ -27,7 +27,7 @@ var _ libkb.SyncedContactListProvider = (*SavedContactsStore)(nil)
 // The store is used to securely store list of resolved contacts.
 func NewSavedContactsStore(g *libkb.GlobalContext) *SavedContactsStore {
 	keyFn := func(ctx context.Context) ([32]byte, error) {
-		return encrypteddb.GetSecretBoxKey(ctx, g, encrypteddb.DefaultSecretUI,
+		return encrypteddb.GetSecretBoxKey(ctx, g,
 			libkb.EncryptionReasonContactsLocalStorage, "encrypting local contact list")
 	}
 	dbFn := func(g *libkb.GlobalContext) *libkb.JSONLocalDb {
@@ -71,7 +71,7 @@ type assertionToNameCache struct {
 const assertionToNameCurrentVer = 1
 
 func ResolveAndSaveContacts(mctx libkb.MetaContext, provider ContactsProvider, contacts []keybase1.Contact) (newlyResolved []keybase1.ProcessedContact, err error) {
-	resolveResults, err := ResolveContacts(mctx, provider, contacts, keybase1.RegionCode(""))
+	resolveResults, err := ResolveContacts(mctx, provider, contacts)
 	if err != nil {
 		return nil, err
 	}
@@ -79,21 +79,57 @@ func ResolveAndSaveContacts(mctx libkb.MetaContext, provider ContactsProvider, c
 	// find newly resolved
 	s := mctx.G().SyncedContactList
 	currentContacts, err := s.RetrieveContacts(mctx)
+
+	newlyResolvedMap := make(map[string]keybase1.ProcessedContact)
 	if err == nil {
-		unres := make(map[string]struct{})
+		unresolved := make(map[string]bool)
+		resolved := make(map[string]bool)
 		for _, contact := range currentContacts {
-			if !contact.Resolved {
-				unres[contact.Assertion] = struct{}{}
+			if contact.Resolved {
+				resolved[contact.ContactName] = true
+			}
+			if resolved[contact.ContactName] {
+				// If any contact by this name is resolved, we dedupe.
+				delete(unresolved, contact.ContactName)
+			} else {
+				// We resolve based on display name, not assertion, so we don't
+				// duplicate multiple assertions for the same contact.
+				unresolved[contact.ContactName] = true
 			}
 		}
 
-		for _, result := range resolveResults {
-			if _, ok := unres[result.Assertion]; ok && result.Resolved {
-				newlyResolved = append(newlyResolved, result)
+		for _, resolution := range resolveResults {
+			if unresolved[resolution.ContactName] && resolution.Resolved && !resolution.Following {
+				// We only want to show one resolution per username.
+				newlyResolvedMap[resolution.Username] = resolution
 			}
 		}
 	} else {
 		mctx.Warning("error retrieving synced contacts; continuing: %s", err)
+	}
+
+	if len(newlyResolvedMap) == 0 {
+		return newlyResolved, s.SaveProcessedContacts(mctx, resolveResults)
+	}
+
+	resolutionsForPeoplePage := make([]ContactResolution, 0, len(newlyResolvedMap))
+	for _, contact := range newlyResolvedMap {
+		contactDisplay := contact.ContactName
+		if contactDisplay == "" {
+			contactDisplay = contact.Component.ValueString()
+		}
+		resolutionsForPeoplePage = append(resolutionsForPeoplePage, ContactResolution{
+			Description: contactDisplay,
+			ResolvedUser: keybase1.User{
+				Uid:      contact.Uid,
+				Username: contact.Username,
+			},
+		})
+		newlyResolved = append(newlyResolved, contact)
+	}
+	err = SendEncryptedContactResolutionToServer(mctx, resolutionsForPeoplePage)
+	if err != nil {
+		mctx.Warning("Could not add resolved contacts to people page: %v; returning contacts anyway", err)
 	}
 
 	return newlyResolved, s.SaveProcessedContacts(mctx, resolveResults)

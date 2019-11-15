@@ -1,4 +1,6 @@
 import * as Constants from '../constants/provision'
+import * as LoginConstants from '../constants/login'
+import * as ConfigConstants from '../constants/config'
 import * as RouteTreeGen from './route-tree-gen'
 import * as DevicesGen from './devices-gen'
 import * as ProvisionGen from './provision-gen'
@@ -45,11 +47,14 @@ class ProvisioningManager {
   _stashedResponseKey: ValidCallback | null = null
   _addingANewDevice: boolean
   _done: boolean = false
+  _canceled: boolean = false
 
   constructor(addingANewDevice: boolean, _: 'ONLY_CALL_THIS_FROM_HELPER') {
     this._addingANewDevice = addingANewDevice
     ProvisioningManager.singleton = this
   }
+
+  isCanceled = () => this._canceled
 
   done = (reason: string) => {
     logger.info('ProvisioningManager.done', reason)
@@ -73,7 +78,10 @@ class ProvisioningManager {
   }
 
   // Choosing a device to use to provision
-  chooseDeviceHandler = (params, response) => {
+  chooseDeviceHandler = (
+    params: RPCTypes.MessageTypes['keybase.1.provisionUi.chooseDevice']['inParam'],
+    response
+  ) => {
     if (this._done) {
       logger.info('ProvisioningManager done, yet chooseDeviceHandler called')
       return
@@ -86,7 +94,7 @@ class ProvisioningManager {
     )
   }
 
-  submitDeviceSelect = state => {
+  submitDeviceSelect = (state: Container.TypedState) => {
     if (this._done) {
       logger.info('ProvisioningManager done, yet submitDeviceSelect called')
       return
@@ -96,12 +104,12 @@ class ProvisioningManager {
       throw new Error('Tried to submit a device choice but missing callback')
     }
 
-    if (!state.provision.codePageOtherDeviceId) {
+    if (!state.provision.codePageOtherDevice.id) {
       response.error()
       throw new Error('Tried to submit a device choice but missing device in store')
     }
 
-    response.result(state.provision.codePageOtherDeviceId)
+    response.result(state.provision.codePageOtherDevice.id)
   }
 
   // Telling the daemon the other device type when adding a new device
@@ -113,7 +121,7 @@ class ProvisioningManager {
     return Saga.callUntyped(function*() {
       const state: Container.TypedState = yield* Saga.selectState()
       let type
-      switch (state.provision.codePageOtherDeviceType) {
+      switch (state.provision.codePageOtherDevice.type) {
         case 'mobile':
           type = RPCTypes.DeviceType.mobile
           break
@@ -123,7 +131,7 @@ class ProvisioningManager {
         default:
           response.error()
           throw new Error(
-            'Tried to add a device but of unknown type' + state.provision.codePageOtherDeviceType
+            'Tried to add a device but of unknown type' + state.provision.codePageOtherDevice.type
           )
       }
 
@@ -269,11 +277,11 @@ class ProvisioningManager {
     }
     this._stashResponse('keybase.1.secretUi.getPassphrase', response)
 
-    let error = ''
     // Service asking us again due to an error?
-    if (params.pinentry.retryLabel) {
-      error = params.pinentry.retryLabel
-    }
+    const error =
+      params.pinentry.retryLabel === LoginConstants.invalidPasswordErrorString
+        ? 'Incorrect password.'
+        : params.pinentry.retryLabel
 
     switch (params.pinentry.type) {
       case RPCTypes.PassphraseType.passPhrase:
@@ -348,33 +356,25 @@ class ProvisioningManager {
     })
 
   maybeCancelProvision = () => {
-    // TODO fix
-    // let root = state.routeTree.routeState && state.routeTree.routeState.selected
-    // let onDevicesTab = root === devicesRoot[0]
-    // let onLoginTab = root === Tabs.loginTab
-    // const path = Router2Constants.getFullRoute().map(p => p.routeName)
-    // onDevicesTab = path.includes(devicesRoot[0])
-    // onLoginTab = path.includes('login')
-    // const doingDeviceAdd = this._addingANewDevice && onDevicesTab
-    // const doingProvision = !this._addingANewDevice && onLoginTab
-    // if (doingDeviceAdd || doingProvision) {
-    // // cancel if we're waiting on anything
-    // const response = this._stashedResponse
-    // if (response) {
-    // Constants.cancelOnCallback(null, response)
-    // }
-    // this._stashedResponse = null
-    // this._stashedResponseKey = null
-    // // clear errors always, and nav to root if we actually canceled something
-    // return [
-    // ProvisionGen.createProvisionError({error: new HiddenString('')}),
-    // response &&
-    // RouteTreeGen.createNavigateTo({
-    // parentPath: [],
-    // path: doingDeviceAdd ? devicesRoot : ['login'],
-    // }),
-    // ]
-    // }
+    logger.info('ProvisioningManager.maybeCancelProvision')
+    if (this._done) {
+      logger.info('But provisioning is already done, nothing to do')
+      return false
+    } else if (this._canceled) {
+      // Unexpected - that means cancel action was called multiple times.
+      logger.warn('But provisioning is already canceled')
+      return false
+    }
+
+    if (this._stashedResponse && this._stashedResponseKey) {
+      logger.info('ProvisioningManager - canceling ongoing stashed response')
+      Constants.cancelOnCallback(null, this._stashedResponse)
+      this._stashedResponse = null
+      this._stashedResponseKey = null
+    }
+
+    this._canceled = true
+    return true
   }
 }
 
@@ -386,7 +386,7 @@ const makeProvisioningManager = (addingANewDevice: boolean): ProvisioningManager
  * screens and we stash the result object so we can show the screen. When the submit on that screen is done we find the stashedReponse and respond and wait
  */
 function* startProvisioning(state: Container.TypedState) {
-  makeProvisioningManager(false)
+  const manager = makeProvisioningManager(false)
   try {
     const username = state.provision.username
     if (!username) {
@@ -408,9 +408,24 @@ function* startProvisioning(state: Container.TypedState) {
     })
     ProvisioningManager.getSingleton().done('provision call done w/ success')
   } catch (finalError) {
-    ProvisioningManager.getSingleton().done(
-      'provision call done w/ error' + finalError ? finalError.message : ' unknown error'
+    manager.done(
+      'startProvisioning call done w/ error ' + (finalError ? finalError.message : ' unknown error')
     )
+
+    if (ProvisioningManager.getSingleton() !== manager) {
+      // Another provisioning session has started while this one was active.
+      // This is not desired and is an indication of a problem somewhere else.
+      logger.error(
+        `Provision.startProvisioning error, and ProvisioningManager has changed: ${finalError.message}`
+      )
+      return
+    }
+
+    if (Constants.errorCausedByUsCanceling(finalError) && manager.isCanceled()) {
+      // After cancelling the RPC we are going to get "input canceled" error.
+      return
+    }
+
     // If it's a non-existent username or invalid, allow the opportunity to
     // correct it right there on the page.
     switch (finalError.code) {
@@ -422,12 +437,14 @@ function* startProvisioning(state: Container.TypedState) {
         yield Saga.put(ProvisionGen.createShowFinalErrorPage({finalError, fromDeviceAdd: false}))
         break
     }
+  } finally {
+    yield Saga.put(ProvisionGen.createProvisionDone())
   }
 }
 
 function* addNewDevice() {
-  // Make a new handler each time just in case
-  makeProvisioningManager(true)
+  // Make a new handler each time.
+  const manager = makeProvisioningManager(true)
   try {
     yield RPCTypes.deviceDeviceAddRpcSaga({
       customResponseIncomingCallMap: ProvisioningManager.getSingleton().getCustomResponseIncomingCallMap(),
@@ -441,10 +458,24 @@ function* addNewDevice() {
     yield Saga.put(RouteTreeGen.createNavigateAppend({path: devicesRoot}))
     yield Saga.put(RouteTreeGen.createClearModals())
   } catch (finalError) {
-    ProvisioningManager.getSingleton().done(finalError.message)
+    manager.done('addNewDevice call done w/ error ' + (finalError ? finalError.message : ' unknown error'))
+
+    if (ProvisioningManager.getSingleton() !== manager) {
+      // Another provisioning session has started while this one was active.
+      // This is not desired and is an indication of a problem somewhere else.
+      logger.error(`Provision.addNewDevice error, and ProvisioningManager has changed: ${finalError.message}`)
+      return
+    }
+
+    if (Constants.errorCausedByUsCanceling(finalError) && manager.isCanceled()) {
+      // After cancelling the RPC we are going to get "input canceled" error.
+      return
+    }
 
     yield Saga.put(ProvisionGen.createShowFinalErrorPage({finalError, fromDeviceAdd: true}))
     logger.error(`Provision -> Add device error: ${finalError.message}`)
+  } finally {
+    yield Saga.put(ProvisionGen.createProvisionDone())
   }
 }
 
@@ -463,7 +494,9 @@ const submitPasswordOrPaperkey = (
   state: Container.TypedState,
   action: ProvisionGen.SubmitPasswordPayload | ProvisionGen.SubmitPaperkeyPayload
 ) => ProvisioningManager.getSingleton().submitPasswordOrPaperkey(state, action)
-const maybeCancelProvision = () => ProvisioningManager.getSingleton().maybeCancelProvision()
+const maybeCancelProvision = () => {
+  ProvisioningManager.getSingleton().maybeCancelProvision()
+}
 
 const showDeviceListPage = (state: Container.TypedState) =>
   !state.provision.error.stringValue() &&
@@ -491,33 +524,70 @@ const showPaperkeyPage = (state: Container.TypedState) =>
   !state.provision.error.stringValue() &&
   RouteTreeGen.createNavigateAppend({path: ['paperkey'], replace: true})
 
-const showFinalErrorPage = (state: Container.TypedState, action: ProvisionGen.ShowFinalErrorPagePayload) => {
+const showFinalErrorPage = (_: Container.TypedState, action: ProvisionGen.ShowFinalErrorPagePayload) => {
   const parentPath = action.payload.fromDeviceAdd ? devicesRoot : ['login']
-  let path: Array<string>
-  if (state.provision.finalError && !Constants.errorCausedByUsCanceling(state.provision.finalError)) {
-    path = ['error']
-  } else {
-    path = []
-  }
-
-  return RouteTreeGen.createNavigateAppend({path: [...parentPath, ...path], replace: true})
+  const replace = !action.payload.fromDeviceAdd
+  const path = ['error']
+  return [
+    ...(action.payload.fromDeviceAdd ? [RouteTreeGen.createClearModals()] : []),
+    RouteTreeGen.createNavigateAppend({path: [...parentPath, ...path], replace}),
+  ]
 }
 
-const showUsernameEmailPage = () => RouteTreeGen.createNavigateAppend({path: ['username']})
+const showUsernameEmailPage = async (
+  state: Container.TypedState,
+  action: ProvisionGen.StartProvisionPayload
+) => {
+  // If we're logged in, we're coming from the user switcher; log out first to prevent the service from getting out of sync with the GUI about our logged-in-ness
+  if (state.config.loggedIn) {
+    await RPCTypes.loginLogoutRpcPromise(
+      {force: false, keepSecrets: true},
+      ConfigConstants.loginAsOtherUserWaitingKey
+    )
+  }
+  return RouteTreeGen.createNavigateAppend({
+    path: [{props: {fromReset: action.payload.fromReset}, selected: 'username'}],
+  })
+}
 
-const forgotUsername = (_: Container.TypedState, action: ProvisionGen.ForgotUsernamePayload) =>
-  RPCTypes.accountRecoverUsernameWithEmailRpcPromise(
-    {email: action.payload.email},
-    Constants.forgotUsernameWaitingKey
-  )
-    .then(() => ProvisionGen.createForgotUsernameResult({result: 'success'}))
-    .catch(error =>
-      ProvisionGen.createForgotUsernameResult({
+const forgotUsername = async (_: Container.TypedState, action: ProvisionGen.ForgotUsernamePayload) => {
+  if (action.payload.email) {
+    try {
+      await RPCTypes.accountRecoverUsernameWithEmailRpcPromise(
+        {email: action.payload.email},
+        Constants.forgotUsernameWaitingKey
+      )
+      return ProvisionGen.createForgotUsernameResult({result: 'success'})
+    } catch (error) {
+      return ProvisionGen.createForgotUsernameResult({
         result: Constants.decodeForgotUsernameError(error),
       })
-    )
+    }
+  } else {
+    try {
+      await RPCTypes.accountRecoverUsernameWithPhoneRpcPromise(
+        {phone: action.payload.phone},
+        Constants.forgotUsernameWaitingKey
+      )
+      return ProvisionGen.createForgotUsernameResult({result: 'success'})
+    } catch (error) {
+      return ProvisionGen.createForgotUsernameResult({
+        result: Constants.decodeForgotUsernameError(error),
+      })
+    }
+  }
+}
 
-function* provisionSaga(): Saga.SagaGenerator<any, any> {
+function* backToDeviceList(_: Container.TypedState, action: ProvisionGen.BackToDeviceListPayload) {
+  const cancelled = ProvisioningManager.getSingleton().maybeCancelProvision()
+  if (cancelled) {
+    // must wait for previous session to close
+    yield Saga.take(ProvisionGen.provisionDone)
+  }
+  yield Saga.put(ProvisionGen.createSubmitUsername({username: action.payload.username}))
+}
+
+function* provisionSaga() {
   // Always ensure we have one live
   makeProvisioningManager(false)
 
@@ -549,6 +619,9 @@ function* provisionSaga(): Saga.SagaGenerator<any, any> {
   yield* Saga.chainAction2(ProvisionGen.showPaperkeyPage, showPaperkeyPage)
   yield* Saga.chainAction2(ProvisionGen.showFinalErrorPage, showFinalErrorPage)
   yield* Saga.chainAction2(ProvisionGen.forgotUsername, forgotUsername)
+
+  yield* Saga.chainAction2(ProvisionGen.cancelProvision, maybeCancelProvision)
+  yield* Saga.chainGenerator(ProvisionGen.backToDeviceList, backToDeviceList)
 }
 
 export const _testing = {

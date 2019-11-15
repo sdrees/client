@@ -7,7 +7,9 @@ import Tlf from './rows/tlf-container'
 import SfmiBanner from '../banner/system-file-manager-integration-banner/container'
 import {WrapRow} from './rows/rows'
 
-type Props = {}
+type Props = {
+  destinationPickerIndex?: number
+}
 
 type SectionListItem = {
   name: string
@@ -29,14 +31,19 @@ const rootRows = [
   },
 ]
 
-const renderItem = ({item, section}) =>
+const getRenderItem = destinationPickerIndex => ({item, section}) =>
   section.key === 'section-top' ? (
     <WrapRow>
-      <TlfType name={item.name} />
+      <TlfType name={item.name} destinationPickerIndex={destinationPickerIndex} />
     </WrapRow>
   ) : (
     <WrapRow>
-      <Tlf name={item.name} tlfType={item.tlfType} mixedMode={true} />
+      <Tlf
+        name={item.name}
+        tlfType={item.tlfType}
+        mixedMode={true}
+        destinationPickerIndex={destinationPickerIndex}
+      />
     </WrapRow>
   )
 
@@ -55,9 +62,7 @@ const useTopNTlfs = (
   // TODO move these sorting to Go HOTPOT-433
   React.useMemo(
     () =>
-      tlfs
-        .valueSeq()
-        .toArray()
+      [...tlfs.values()]
         .filter(({isIgnored}) => !isIgnored)
         .sort((tlf1, tlf2) => tlf2.tlfMtime - tlf1.tlfMtime)
         .slice(0, n)
@@ -84,11 +89,11 @@ const useRecentTlfs = (n: number): Array<SectionListItem> => {
   )
 }
 
-const Root = (_: Props) => {
+const Root = ({destinationPickerIndex}: Props) => {
   const shouldShowSFMIBanner = Container.useSelector(state => state.fs.sfmi.showingBanner)
   const top10 = useRecentTlfs(10)
   const sections = [
-    ...(shouldShowSFMIBanner
+    ...(!destinationPickerIndex && shouldShowSFMIBanner
       ? [{data: [], key: 'banner-sfmi', keyExtractor: () => 'banner-sfmi-item', title: ''}]
       : []),
     {
@@ -101,9 +106,10 @@ const Root = (_: Props) => {
       data: top10,
       key: 'section-recent-tlfs',
       keyExtractor: (item: SectionListItem) => `recent-tlfs:${item.tlfType}-${item.name}`,
-      title: 'Recent Folders',
+      title: 'Recent folders',
     },
   ]
+  const renderItem = React.useMemo(() => getRenderItem(destinationPickerIndex), [destinationPickerIndex])
   return (
     <Kb.SectionList
       sections={sections}

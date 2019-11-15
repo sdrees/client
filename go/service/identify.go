@@ -85,7 +85,10 @@ func (h *IdentifyHandler) IdentifyLite(netCtx context.Context, arg keybase1.Iden
 	}
 	servedRet, err := h.service.offlineRPCCache.Serve(mctx, arg.Oa, offline.Version(1), "identify.identifyLite", false, cacheArg, &ret, loader)
 	if err != nil {
-		return servedRet.(keybase1.IdentifyLiteRes), err
+		if s, ok := servedRet.(keybase1.IdentifyLiteRes); ok {
+			ret = s
+		}
+		return ret, err
 	}
 	if s, ok := servedRet.(keybase1.IdentifyLiteRes); ok {
 		ret = s
@@ -357,16 +360,18 @@ func (h *IdentifyHandler) resolveIdentifyImplicitTeamDoIdentifies(ctx context.Co
 			if idErr != nil {
 				h.G().Log.CDebugf(subctx, "Failed to convert result from Identify2: %s", idErr)
 			}
-			if idRes != nil && idRes.TrackBreaks != nil && idErr == nil {
+			if idRes != nil {
 				trackBreaksLock.Lock()
 				defer trackBreaksLock.Unlock()
-				if res.TrackBreaks == nil {
-					res.TrackBreaks = make(map[keybase1.UserVersion]keybase1.IdentifyTrackBreaks)
+				if idRes.TrackBreaks != nil && idErr == nil {
+					if res.TrackBreaks == nil {
+						res.TrackBreaks = make(map[keybase1.UserVersion]keybase1.IdentifyTrackBreaks)
+					}
+					res.TrackBreaks[idRes.Upk.ToUserVersion()] = *idRes.TrackBreaks
+					brokenUsernames = append(brokenUsernames, idRes.Upk.GetName())
+				} else {
+					okUsernames = append(okUsernames, idRes.Upk.GetName())
 				}
-				res.TrackBreaks[idRes.Upk.ToUserVersion()] = *idRes.TrackBreaks
-				brokenUsernames = append(brokenUsernames, idRes.Upk.GetName())
-			} else {
-				okUsernames = append(okUsernames, idRes.Upk.GetName())
 			}
 			if err != nil {
 				h.G().Log.CDebugf(subctx, "identify failed (IDres %v, TrackBreaks %v): %v", idRes != nil, idRes != nil && idRes.TrackBreaks != nil, err)

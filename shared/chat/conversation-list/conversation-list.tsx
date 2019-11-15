@@ -50,6 +50,7 @@ const _itemRenderer = (_, row) => {
         <SelectableSmallTeam
           conversationIDKey={row.conversationIDKey}
           isSelected={row.isSelected}
+          name=""
           onSelectConversation={row.onSelectConversation}
         />
       )
@@ -58,6 +59,7 @@ const _itemRenderer = (_, row) => {
         <SelectableBigTeamChannel
           conversationIDKey={row.conversationIDKey}
           isSelected={row.isSelected}
+          name=""
           onSelectConversation={row.onSelectConversation}
         />
       )
@@ -95,13 +97,16 @@ const ConversationList = (props: Props) => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  filter: {
-    backgroundColor: Styles.globalColors.fastBlank,
-  },
-  moreLessContainer: {
-    height: rowHeight,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      filter: {
+        backgroundColor: Styles.globalColors.fastBlank,
+      },
+      moreLessContainer: {
+        height: rowHeight,
+      },
+    } as const)
+)
 
 export default ConversationList

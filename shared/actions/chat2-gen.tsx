@@ -1,11 +1,12 @@
 // NOTE: This file is GENERATED from json files in actions/json. Run 'yarn build-actions' to regenerate
-import * as I from 'immutable'
+
 import * as RPCTypes from '../constants/types/rpc-gen'
 import * as RPCChatTypes from '../constants/types/rpc-chat-gen'
 import * as Types from '../constants/types/chat2'
 import * as TeamsTypes from '../constants/types/teams'
 import HiddenString from '../util/hidden-string'
 import {RetentionPolicy} from '../constants/types/retention-policy'
+import {AmpTracker} from '../chat/audio/amptracker'
 
 // Constants
 export const resetStore = 'common:resetStore' // not a part of chat2 but is handled by every reducer. NEVER dispatch this
@@ -24,22 +25,28 @@ export const attachmentPreviewSelect = 'chat2:attachmentPreviewSelect'
 export const attachmentUploaded = 'chat2:attachmentUploaded'
 export const attachmentUploading = 'chat2:attachmentUploading'
 export const attachmentsUpload = 'chat2:attachmentsUpload'
+export const attemptAudioRecording = 'chat2:attemptAudioRecording'
 export const badgesUpdated = 'chat2:badgesUpdated'
 export const blockConversation = 'chat2:blockConversation'
 export const changeFocus = 'chat2:changeFocus'
 export const clearAttachmentView = 'chat2:clearAttachmentView'
 export const clearCommandStatusInfo = 'chat2:clearCommandStatusInfo'
+export const clearMessages = 'chat2:clearMessages'
+export const clearMetas = 'chat2:clearMetas'
 export const clearPaymentConfirmInfo = 'chat2:clearPaymentConfirmInfo'
 export const confirmScreenResponse = 'chat2:confirmScreenResponse'
 export const conversationErrored = 'chat2:conversationErrored'
 export const createConversation = 'chat2:createConversation'
 export const deselectConversation = 'chat2:deselectConversation'
 export const desktopNotification = 'chat2:desktopNotification'
+export const dismissBottomBanner = 'chat2:dismissBottomBanner'
+export const enableAudioRecording = 'chat2:enableAudioRecording'
 export const giphyGotSearchResult = 'chat2:giphyGotSearchResult'
 export const giphySend = 'chat2:giphySend'
 export const giphyToggleWindow = 'chat2:giphyToggleWindow'
 export const handleSeeingWallets = 'chat2:handleSeeingWallets'
 export const hideConversation = 'chat2:hideConversation'
+export const ignorePinnedMessage = 'chat2:ignorePinnedMessage'
 export const inboxRefresh = 'chat2:inboxRefresh'
 export const inboxSearch = 'chat2:inboxSearch'
 export const inboxSearchMoveSelectedIndex = 'chat2:inboxSearchMoveSelectedIndex'
@@ -56,6 +63,7 @@ export const loadAttachmentView = 'chat2:loadAttachmentView'
 export const loadMessagesCentered = 'chat2:loadMessagesCentered'
 export const loadNewerMessagesDueToScroll = 'chat2:loadNewerMessagesDueToScroll'
 export const loadOlderMessagesDueToScroll = 'chat2:loadOlderMessagesDueToScroll'
+export const lockAudioRecording = 'chat2:lockAudioRecording'
 export const markConversationsStale = 'chat2:markConversationsStale'
 export const markInitiallyLoadedThreadAsRead = 'chat2:markInitiallyLoadedThreadAsRead'
 export const messageAttachmentNativeSave = 'chat2:messageAttachmentNativeSave'
@@ -68,6 +76,7 @@ export const messageErrored = 'chat2:messageErrored'
 export const messageReplyPrivately = 'chat2:messageReplyPrivately'
 export const messageRetry = 'chat2:messageRetry'
 export const messageSend = 'chat2:messageSend'
+export const messageSendByUsernames = 'chat2:messageSendByUsernames'
 export const messageSetEditing = 'chat2:messageSetEditing'
 export const messageSetQuoting = 'chat2:messageSetQuoting'
 export const messageWasEdited = 'chat2:messageWasEdited'
@@ -89,6 +98,7 @@ export const openChatFromWidget = 'chat2:openChatFromWidget'
 export const openFolder = 'chat2:openFolder'
 export const paymentInfoReceived = 'chat2:paymentInfoReceived'
 export const pendingMessageWasEdited = 'chat2:pendingMessageWasEdited'
+export const pinMessage = 'chat2:pinMessage'
 export const prepareFulfillRequestForm = 'chat2:prepareFulfillRequestForm'
 export const previewConversation = 'chat2:previewConversation'
 export const replyJump = 'chat2:replyJump'
@@ -98,8 +108,11 @@ export const resetLetThemIn = 'chat2:resetLetThemIn'
 export const resolveMaybeMention = 'chat2:resolveMaybeMention'
 export const saveMinWriterRole = 'chat2:saveMinWriterRole'
 export const selectConversation = 'chat2:selectConversation'
+export const sendAudioRecording = 'chat2:sendAudioRecording'
 export const sendTyping = 'chat2:sendTyping'
 export const setAttachmentViewStatus = 'chat2:setAttachmentViewStatus'
+export const setAudioRecordingPostInfo = 'chat2:setAudioRecordingPostInfo'
+export const setChannelSearchText = 'chat2:setChannelSearchText'
 export const setCommandMarkdown = 'chat2:setCommandMarkdown'
 export const setCommandStatusInfo = 'chat2:setCommandStatusInfo'
 export const setContainsLastMessage = 'chat2:setContainsLastMessage'
@@ -107,6 +120,7 @@ export const setConvExplodingMode = 'chat2:setConvExplodingMode'
 export const setConvRetentionPolicy = 'chat2:setConvRetentionPolicy'
 export const setConversationOffline = 'chat2:setConversationOffline'
 export const setExplodingModeLock = 'chat2:setExplodingModeLock'
+export const setInboxNumSmallRows = 'chat2:setInboxNumSmallRows'
 export const setInboxShowIsNew = 'chat2:setInboxShowIsNew'
 export const setMaybeMentionInfo = 'chat2:setMaybeMentionInfo'
 export const setMinWriterRole = 'chat2:setMinWriterRole'
@@ -118,9 +132,11 @@ export const setThreadSearchStatus = 'chat2:setThreadSearchStatus'
 export const setUnsentText = 'chat2:setUnsentText'
 export const setWalletsOld = 'chat2:setWalletsOld'
 export const staticConfigLoaded = 'chat2:staticConfigLoaded'
+export const stopAudioRecording = 'chat2:stopAudioRecording'
 export const tabSelected = 'chat2:tabSelected'
 export const threadSearch = 'chat2:threadSearch'
 export const threadSearchResults = 'chat2:threadSearchResults'
+export const toggleGiphyPrefill = 'chat2:toggleGiphyPrefill'
 export const toggleInboxSearch = 'chat2:toggleInboxSearch'
 export const toggleInfoPanel = 'chat2:toggleInfoPanel'
 export const toggleLocalReaction = 'chat2:toggleLocalReaction'
@@ -133,10 +149,12 @@ export const unfurlRemove = 'chat2:unfurlRemove'
 export const unfurlResolvePrompt = 'chat2:unfurlResolvePrompt'
 export const unfurlTogglePrompt = 'chat2:unfurlTogglePrompt'
 export const unhideConversation = 'chat2:unhideConversation'
+export const unpinMessage = 'chat2:unpinMessage'
 export const unsentTextChanged = 'chat2:unsentTextChanged'
 export const updateCoinFlipStatus = 'chat2:updateCoinFlipStatus'
 export const updateConvExplodingModes = 'chat2:updateConvExplodingModes'
 export const updateConvRetentionPolicy = 'chat2:updateConvRetentionPolicy'
+export const updateLastCoord = 'chat2:updateLastCoord'
 export const updateMessages = 'chat2:updateMessages'
 export const updateMoreToLoad = 'chat2:updateMoreToLoad'
 export const updateNotificationSettings = 'chat2:updateNotificationSettings'
@@ -156,8 +174,11 @@ type _AddUsersToChannelPayload = {
   readonly usernames: Array<string>
 }
 type _AttachmentDownloadPayload = {readonly message: Types.Message}
-type _AttachmentDownloadedPayload = {readonly message: Types.Message; readonly path?: string}
-type _AttachmentDownloadedPayloadError = {readonly error: string; readonly message: Types.Message}
+type _AttachmentDownloadedPayload = {
+  readonly message: Types.Message
+  readonly error?: string
+  readonly path?: string
+}
 type _AttachmentFullscreenNextPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly messageID: Types.MessageID
@@ -194,6 +215,10 @@ type _AttachmentsUploadPayload = {
   readonly paths: Array<Types.PathAndOutboxID>
   readonly titles: Array<string>
 }
+type _AttemptAudioRecordingPayload = {
+  readonly conversationIDKey: Types.ConversationIDKey
+  readonly meteringCb: (amp: number) => void
+}
 type _BadgesUpdatedPayload = {readonly conversations: Array<RPCTypes.BadgeConversationInfo>}
 type _BlockConversationPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -202,6 +227,8 @@ type _BlockConversationPayload = {
 type _ChangeFocusPayload = {readonly nextFocus: Types.Focus}
 type _ClearAttachmentViewPayload = {readonly conversationIDKey: Types.ConversationIDKey}
 type _ClearCommandStatusInfoPayload = {readonly conversationIDKey: Types.ConversationIDKey}
+type _ClearMessagesPayload = void
+type _ClearMetasPayload = void
 type _ClearPaymentConfirmInfoPayload = void
 type _ConfirmScreenResponsePayload = {readonly accept: boolean}
 type _ConversationErroredPayload = {readonly message: string}
@@ -211,6 +238,11 @@ type _DesktopNotificationPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly author: string
   readonly body: string
+}
+type _DismissBottomBannerPayload = {readonly conversationIDKey: Types.ConversationIDKey}
+type _EnableAudioRecordingPayload = {
+  readonly conversationIDKey: Types.ConversationIDKey
+  readonly meteringCb: (amp: number) => void
 }
 type _GiphyGotSearchResultPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -224,6 +256,7 @@ type _GiphyToggleWindowPayload = {
 }
 type _HandleSeeingWalletsPayload = void
 type _HideConversationPayload = {readonly conversationIDKey: Types.ConversationIDKey}
+type _IgnorePinnedMessagePayload = {readonly conversationIDKey: Types.ConversationIDKey}
 type _InboxRefreshPayload = {
   readonly reason:
     | 'bootstrap'
@@ -234,10 +267,12 @@ type _InboxRefreshPayload = {
     | 'joinedAConversation'
     | 'leftAConversation'
     | 'teamTypeChanged'
+    | 'maybeKickedFromTeam'
+    | 'widgetRefresh'
 }
 type _InboxSearchMoveSelectedIndexPayload = {readonly increment: boolean}
 type _InboxSearchNameResultsPayload = {
-  readonly results: I.List<Types.InboxSearchConvHit>
+  readonly results: Array<Types.InboxSearchConvHit>
   readonly unread: boolean
 }
 type _InboxSearchPayload = {readonly query: HiddenString}
@@ -268,6 +303,7 @@ type _LoadMessagesCenteredPayload = {
 }
 type _LoadNewerMessagesDueToScrollPayload = {readonly conversationIDKey: Types.ConversationIDKey}
 type _LoadOlderMessagesDueToScrollPayload = {readonly conversationIDKey: Types.ConversationIDKey}
+type _LockAudioRecordingPayload = {readonly conversationIDKey: Types.ConversationIDKey}
 type _MarkConversationsStalePayload = {
   readonly conversationIDKeys: Array<Types.ConversationIDKey>
   readonly updateType: RPCChatTypes.StaleUpdateType
@@ -293,6 +329,7 @@ type _MessageEditPayload = {
 type _MessageErroredPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly reason: string
+  readonly errorTyp: number | null
   readonly outboxID: Types.OutboxID
 }
 type _MessageReplyPrivatelyPayload = {
@@ -302,6 +339,11 @@ type _MessageReplyPrivatelyPayload = {
 type _MessageRetryPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly outboxID: Types.OutboxID
+}
+type _MessageSendByUsernamesPayload = {
+  readonly usernames: string
+  readonly text: HiddenString
+  readonly waitingKey?: string
 }
 type _MessageSendPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -322,9 +364,9 @@ type _MessageWasEditedPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly messageID: RPCChatTypes.MessageID
   readonly text: HiddenString
-  readonly mentionsAt: I.Set<string>
+  readonly mentionsAt: Set<string>
   readonly mentionsChannel: 'none' | 'all' | 'here'
-  readonly mentionsChannelName: I.Map<string, Types.ConversationIDKey>
+  readonly mentionsChannelName: Map<string, Types.ConversationIDKey>
 }
 type _MessagesAddPayload = {
   readonly context:
@@ -349,7 +391,7 @@ type _MessagesWereDeletedPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly messageIDs?: Array<RPCChatTypes.MessageID>
   readonly upToMessageID?: RPCChatTypes.MessageID
-  readonly deletableMessageTypes?: I.Set<Types.MessageType>
+  readonly deletableMessageTypes?: Set<Types.MessageType>
   readonly ordinals?: Array<Types.Ordinal>
 }
 type _MetaDeletePayload = {
@@ -368,24 +410,31 @@ type _MetaReceivedErrorPayload = {
 }
 type _MetaRequestTrustedPayload = {
   readonly force?: boolean
+  readonly noWaiting?: boolean
+  readonly reason:
+    | 'refreshPreviousSelected'
+    | 'requestTeamsUnboxing'
+    | 'inboxSynced'
+    | 'setConvRetention'
+    | 'subTeamRename'
+    | 'tlfFinalize'
+    | 'threadStale'
+    | 'membersUpdate'
+    | 'scroll'
+    | 'ensureSelectedMeta'
+    | 'ensureWidgetMetas'
+    | 'inboxSearchResults'
   readonly conversationIDKeys: Array<Types.ConversationIDKey>
 }
 type _MetaRequestingTrustedPayload = {readonly conversationIDKeys: Array<Types.ConversationIDKey>}
 type _MetasReceivedPayload = {
   readonly metas: Array<Types.ConversationMeta>
   readonly removals?: Array<Types.ConversationIDKey>
-  readonly neverCreate?: boolean
-  readonly clearExistingMetas?: boolean
-  readonly clearExistingMessages?: boolean
-  readonly fromExpunge?: boolean
   readonly fromInboxRefresh?: boolean
   readonly initialTrustedLoad?: boolean
 }
 type _MuteConversationPayload = {readonly conversationIDKey: Types.ConversationIDKey; readonly muted: boolean}
-type _NavigateToInboxPayload = {
-  readonly avoidConversationID?: Types.ConversationIDKey
-  readonly findNewConversation: boolean
-}
+type _NavigateToInboxPayload = void
 type _NavigateToThreadPayload = void
 type _NotificationSettingsUpdatedPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -402,6 +451,10 @@ type _PendingMessageWasEditedPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly ordinal: Types.Ordinal
   readonly text: HiddenString
+}
+type _PinMessagePayload = {
+  readonly conversationIDKey: Types.ConversationIDKey
+  readonly messageID: Types.MessageID
 }
 type _PrepareFulfillRequestFormPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -432,6 +485,8 @@ type _PreviewConversationPayload = {
     | 'requestedPayment'
     | 'teamMention'
     | 'appLink'
+    | 'search'
+    | 'journeyCardPopular'
 }
 type _ReplyJumpPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -477,6 +532,12 @@ type _SelectConversationPayload = {
     | 'teamChat'
     | 'addedToChannel'
     | 'teamMention'
+  readonly navKey?: string
+}
+type _SendAudioRecordingPayload = {
+  readonly conversationIDKey: Types.ConversationIDKey
+  readonly fromStaged: boolean
+  readonly info: Types.AudioRecordingInfo
 }
 type _SendTypingPayload = {readonly conversationIDKey: Types.ConversationIDKey; readonly typing: boolean}
 type _SetAttachmentViewStatusPayload = {
@@ -485,6 +546,12 @@ type _SetAttachmentViewStatusPayload = {
   readonly status: Types.AttachmentViewStatus
   readonly last?: boolean
 }
+type _SetAudioRecordingPostInfoPayload = {
+  readonly conversationIDKey: Types.ConversationIDKey
+  readonly path: string
+  readonly outboxID: Buffer
+}
+type _SetChannelSearchTextPayload = {readonly text: string}
 type _SetCommandMarkdownPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly md: RPCChatTypes.UICommandMarkdown | null
@@ -513,14 +580,17 @@ type _SetExplodingModeLockPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly unset?: boolean
 }
+type _SetInboxNumSmallRowsPayload = {readonly ignoreWrite?: boolean; readonly rows: number}
 type _SetInboxShowIsNewPayload = {readonly isNew: boolean}
 type _SetMaybeMentionInfoPayload = {readonly name: string; readonly info: RPCChatTypes.UIMaybeMentionInfo}
 type _SetMinWriterRolePayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly role: TeamsTypes.TeamRoleType
 }
-type _SetPaymentConfirmInfoPayload = {readonly summary: RPCChatTypes.UIChatPaymentSummary}
-type _SetPaymentConfirmInfoPayloadError = {readonly error: RPCTypes.Status}
+type _SetPaymentConfirmInfoPayload = {
+  readonly error?: RPCTypes.Status
+  readonly summary?: RPCChatTypes.UIChatPaymentSummary
+}
 type _SetPrependTextPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly text: HiddenString | null
@@ -539,10 +609,15 @@ type _SetThreadSearchStatusPayload = {
 }
 type _SetUnsentTextPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
-  readonly text: HiddenString | null
+  readonly text?: HiddenString
 }
 type _SetWalletsOldPayload = void
 type _StaticConfigLoadedPayload = {readonly staticConfig: Types.StaticConfig}
+type _StopAudioRecordingPayload = {
+  readonly conversationIDKey: Types.ConversationIDKey
+  readonly stopType: Types.AudioStopType
+  readonly amps?: AmpTracker
+}
 type _TabSelectedPayload = void
 type _ThreadSearchPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
@@ -553,6 +628,7 @@ type _ThreadSearchResultsPayload = {
   readonly messages: Array<Types.Message>
   readonly clear: boolean
 }
+type _ToggleGiphyPrefillPayload = {readonly conversationIDKey: Types.ConversationIDKey}
 type _ToggleInboxSearchPayload = {readonly enabled: boolean}
 type _ToggleInfoPanelPayload = void
 type _ToggleLocalReactionPayload = {
@@ -594,6 +670,7 @@ type _UnfurlTogglePromptPayload = {
   readonly show: boolean
 }
 type _UnhideConversationPayload = {readonly conversationIDKey: Types.ConversationIDKey}
+type _UnpinMessagePayload = {readonly conversationIDKey: Types.ConversationIDKey}
 type _UnsentTextChangedPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly text: HiddenString
@@ -602,7 +679,8 @@ type _UpdateCoinFlipStatusPayload = {readonly statuses: Array<RPCChatTypes.UICoi
 type _UpdateConvExplodingModesPayload = {
   readonly modes: Array<{conversationIDKey: Types.ConversationIDKey; seconds: number}>
 }
-type _UpdateConvRetentionPolicyPayload = {readonly conv: RPCChatTypes.InboxUIItem}
+type _UpdateConvRetentionPolicyPayload = {readonly meta: Types.ConversationMeta}
+type _UpdateLastCoordPayload = {readonly coord: Types.Coordinate}
 type _UpdateMessagesPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly messages: Array<{messageID: Types.MessageID; message: Types.Message}>
@@ -621,7 +699,7 @@ type _UpdateReactionsPayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly updates: Array<{targetMsgID: RPCChatTypes.MessageID; reactions: Types.Reactions}>
 }
-type _UpdateTeamRetentionPolicyPayload = {readonly convs: Array<RPCChatTypes.InboxUIItem>}
+type _UpdateTeamRetentionPolicyPayload = {readonly metas: Array<Types.ConversationMeta>}
 type _UpdateUnreadlinePayload = {
   readonly conversationIDKey: Types.ConversationIDKey
   readonly messageID: Types.MessageID
@@ -725,6 +803,12 @@ export const createUpdateConvExplodingModes = (
   payload: _UpdateConvExplodingModesPayload
 ): UpdateConvExplodingModesPayload => ({payload, type: updateConvExplodingModes})
 /**
+ * Ignore pinned message
+ */
+export const createIgnorePinnedMessage = (
+  payload: _IgnorePinnedMessagePayload
+): IgnorePinnedMessagePayload => ({payload, type: ignorePinnedMessage})
+/**
  * Inbox search has started
  */
 export const createInboxSearchStarted = (payload: _InboxSearchStartedPayload): InboxSearchStartedPayload => ({
@@ -774,6 +858,13 @@ export const createThreadSearch = (payload: _ThreadSearchPayload): ThreadSearchP
 export const createInboxSearch = (payload: _InboxSearchPayload): InboxSearchPayload => ({
   payload,
   type: inboxSearch,
+})
+/**
+ * Pin a message
+ */
+export const createPinMessage = (payload: _PinMessagePayload): PinMessagePayload => ({
+  payload,
+  type: pinMessage,
 })
 /**
  * Prime data to fulfill this message's request and navigate to the send form.
@@ -844,6 +935,12 @@ export const createSetCommandStatusInfo = (
   payload: _SetCommandStatusInfoPayload
 ): SetCommandStatusInfoPayload => ({payload, type: setCommandStatusInfo})
 /**
+ * Set filter for channel search
+ */
+export const createSetChannelSearchText = (
+  payload: _SetChannelSearchTextPayload
+): SetChannelSearchTextPayload => ({payload, type: setChannelSearchText})
+/**
  * Set index percent complete
  */
 export const createInboxSearchSetIndexPercent = (
@@ -870,6 +967,12 @@ export const createSetWalletsOld = (payload: _SetWalletsOldPayload): SetWalletsO
   type: setWalletsOld,
 })
 /**
+ * Set the bottom banner on a new conversation as dismissed
+ */
+export const createDismissBottomBanner = (
+  payload: _DismissBottomBannerPayload
+): DismissBottomBannerPayload => ({payload, type: dismissBottomBanner})
+/**
  * Set the collapse status of a message
  */
 export const createToggleMessageCollapse = (
@@ -886,11 +989,8 @@ export const createSetMinWriterRole = (payload: _SetMinWriterRolePayload): SetMi
  * Set the payment confirm modal payment data
  */
 export const createSetPaymentConfirmInfo = (
-  payload: _SetPaymentConfirmInfoPayload
+  payload: _SetPaymentConfirmInfoPayload = Object.freeze({})
 ): SetPaymentConfirmInfoPayload => ({payload, type: setPaymentConfirmInfo})
-export const createSetPaymentConfirmInfoError = (
-  payload: _SetPaymentConfirmInfoPayloadError
-): SetPaymentConfirmInfoPayloadError => ({error: true, payload, type: setPaymentConfirmInfo})
 /**
  * Set the remote exploding mode for a conversation.
  */
@@ -961,6 +1061,13 @@ export const createHandleSeeingWallets = (
   payload: _HandleSeeingWalletsPayload
 ): HandleSeeingWalletsPayload => ({payload, type: handleSeeingWallets})
 /**
+ * Toggle /giphy text to trigger preview window
+ */
+export const createToggleGiphyPrefill = (payload: _ToggleGiphyPrefillPayload): ToggleGiphyPrefillPayload => ({
+  payload,
+  type: toggleGiphyPrefill,
+})
+/**
  * Toggle Giphy search preview window
  */
 export const createGiphyToggleWindow = (payload: _GiphyToggleWindowPayload): GiphyToggleWindowPayload => ({
@@ -988,11 +1095,25 @@ export const createToggleThreadSearch = (payload: _ToggleThreadSearchPayload): T
   type: toggleThreadSearch,
 })
 /**
+ * Unpin a message
+ */
+export const createUnpinMessage = (payload: _UnpinMessagePayload): UnpinMessagePayload => ({
+  payload,
+  type: unpinMessage,
+})
+/**
  * Unsent text changed
  */
 export const createUnsentTextChanged = (payload: _UnsentTextChangedPayload): UnsentTextChangedPayload => ({
   payload,
   type: unsentTextChanged,
+})
+/**
+ * Update last known coordinate
+ */
+export const createUpdateLastCoord = (payload: _UpdateLastCoordPayload): UpdateLastCoordPayload => ({
+  payload,
+  type: updateLastCoord,
 })
 /**
  * Update messages that we might have in the store
@@ -1064,9 +1185,6 @@ export const createAttachmentDownload = (payload: _AttachmentDownloadPayload): A
 export const createAttachmentDownloaded = (
   payload: _AttachmentDownloadedPayload
 ): AttachmentDownloadedPayload => ({payload, type: attachmentDownloaded})
-export const createAttachmentDownloadedError = (
-  payload: _AttachmentDownloadedPayloadError
-): AttachmentDownloadedPayloadError => ({error: true, payload, type: attachmentDownloaded})
 export const createAttachmentFullscreenNext = (
   payload: _AttachmentFullscreenNextPayload
 ): AttachmentFullscreenNextPayload => ({payload, type: attachmentFullscreenNext})
@@ -1101,6 +1219,9 @@ export const createAttachmentsUpload = (payload: _AttachmentsUploadPayload): Att
   payload,
   type: attachmentsUpload,
 })
+export const createAttemptAudioRecording = (
+  payload: _AttemptAudioRecordingPayload
+): AttemptAudioRecordingPayload => ({payload, type: attemptAudioRecording})
 export const createBadgesUpdated = (payload: _BadgesUpdatedPayload): BadgesUpdatedPayload => ({
   payload,
   type: badgesUpdated,
@@ -1108,6 +1229,14 @@ export const createBadgesUpdated = (payload: _BadgesUpdatedPayload): BadgesUpdat
 export const createBlockConversation = (payload: _BlockConversationPayload): BlockConversationPayload => ({
   payload,
   type: blockConversation,
+})
+export const createClearMessages = (payload: _ClearMessagesPayload): ClearMessagesPayload => ({
+  payload,
+  type: clearMessages,
+})
+export const createClearMetas = (payload: _ClearMetasPayload): ClearMetasPayload => ({
+  payload,
+  type: clearMetas,
 })
 export const createConversationErrored = (
   payload: _ConversationErroredPayload
@@ -1118,6 +1247,9 @@ export const createDeselectConversation = (
 export const createDesktopNotification = (
   payload: _DesktopNotificationPayload
 ): DesktopNotificationPayload => ({payload, type: desktopNotification})
+export const createEnableAudioRecording = (
+  payload: _EnableAudioRecordingPayload
+): EnableAudioRecordingPayload => ({payload, type: enableAudioRecording})
 export const createHideConversation = (payload: _HideConversationPayload): HideConversationPayload => ({
   payload,
   type: hideConversation,
@@ -1143,6 +1275,10 @@ export const createLoadNewerMessagesDueToScroll = (
 export const createLoadOlderMessagesDueToScroll = (
   payload: _LoadOlderMessagesDueToScrollPayload
 ): LoadOlderMessagesDueToScrollPayload => ({payload, type: loadOlderMessagesDueToScroll})
+export const createLockAudioRecording = (payload: _LockAudioRecordingPayload): LockAudioRecordingPayload => ({
+  payload,
+  type: lockAudioRecording,
+})
 export const createMarkConversationsStale = (
   payload: _MarkConversationsStalePayload
 ): MarkConversationsStalePayload => ({payload, type: markConversationsStale})
@@ -1184,6 +1320,9 @@ export const createMessageSend = (payload: _MessageSendPayload): MessageSendPayl
   payload,
   type: messageSend,
 })
+export const createMessageSendByUsernames = (
+  payload: _MessageSendByUsernamesPayload
+): MessageSendByUsernamesPayload => ({payload, type: messageSendByUsernames})
 export const createMessageSetEditing = (payload: _MessageSetEditingPayload): MessageSetEditingPayload => ({
   payload,
   type: messageSetEditing,
@@ -1269,13 +1408,27 @@ export const createSelectConversation = (payload: _SelectConversationPayload): S
   payload,
   type: selectConversation,
 })
+export const createSendAudioRecording = (payload: _SendAudioRecordingPayload): SendAudioRecordingPayload => ({
+  payload,
+  type: sendAudioRecording,
+})
 export const createSendTyping = (payload: _SendTypingPayload): SendTypingPayload => ({
   payload,
   type: sendTyping,
 })
+export const createSetAudioRecordingPostInfo = (
+  payload: _SetAudioRecordingPostInfoPayload
+): SetAudioRecordingPostInfoPayload => ({payload, type: setAudioRecordingPostInfo})
 export const createSetConversationOffline = (
   payload: _SetConversationOfflinePayload
 ): SetConversationOfflinePayload => ({payload, type: setConversationOffline})
+export const createSetInboxNumSmallRows = (
+  payload: _SetInboxNumSmallRowsPayload
+): SetInboxNumSmallRowsPayload => ({payload, type: setInboxNumSmallRows})
+export const createStopAudioRecording = (payload: _StopAudioRecordingPayload): StopAudioRecordingPayload => ({
+  payload,
+  type: stopAudioRecording,
+})
 export const createToggleInfoPanel = (payload: _ToggleInfoPanelPayload): ToggleInfoPanelPayload => ({
   payload,
   type: toggleInfoPanel,
@@ -1314,11 +1467,6 @@ export type AttachmentDownloadPayload = {
 }
 export type AttachmentDownloadedPayload = {
   readonly payload: _AttachmentDownloadedPayload
-  readonly type: typeof attachmentDownloaded
-}
-export type AttachmentDownloadedPayloadError = {
-  readonly error: true
-  readonly payload: _AttachmentDownloadedPayloadError
   readonly type: typeof attachmentDownloaded
 }
 export type AttachmentFullscreenNextPayload = {
@@ -1361,6 +1509,10 @@ export type AttachmentsUploadPayload = {
   readonly payload: _AttachmentsUploadPayload
   readonly type: typeof attachmentsUpload
 }
+export type AttemptAudioRecordingPayload = {
+  readonly payload: _AttemptAudioRecordingPayload
+  readonly type: typeof attemptAudioRecording
+}
 export type BadgesUpdatedPayload = {
   readonly payload: _BadgesUpdatedPayload
   readonly type: typeof badgesUpdated
@@ -1378,6 +1530,11 @@ export type ClearCommandStatusInfoPayload = {
   readonly payload: _ClearCommandStatusInfoPayload
   readonly type: typeof clearCommandStatusInfo
 }
+export type ClearMessagesPayload = {
+  readonly payload: _ClearMessagesPayload
+  readonly type: typeof clearMessages
+}
+export type ClearMetasPayload = {readonly payload: _ClearMetasPayload; readonly type: typeof clearMetas}
 export type ClearPaymentConfirmInfoPayload = {
   readonly payload: _ClearPaymentConfirmInfoPayload
   readonly type: typeof clearPaymentConfirmInfo
@@ -1402,6 +1559,14 @@ export type DesktopNotificationPayload = {
   readonly payload: _DesktopNotificationPayload
   readonly type: typeof desktopNotification
 }
+export type DismissBottomBannerPayload = {
+  readonly payload: _DismissBottomBannerPayload
+  readonly type: typeof dismissBottomBanner
+}
+export type EnableAudioRecordingPayload = {
+  readonly payload: _EnableAudioRecordingPayload
+  readonly type: typeof enableAudioRecording
+}
 export type GiphyGotSearchResultPayload = {
   readonly payload: _GiphyGotSearchResultPayload
   readonly type: typeof giphyGotSearchResult
@@ -1418,6 +1583,10 @@ export type HandleSeeingWalletsPayload = {
 export type HideConversationPayload = {
   readonly payload: _HideConversationPayload
   readonly type: typeof hideConversation
+}
+export type IgnorePinnedMessagePayload = {
+  readonly payload: _IgnorePinnedMessagePayload
+  readonly type: typeof ignorePinnedMessage
 }
 export type InboxRefreshPayload = {readonly payload: _InboxRefreshPayload; readonly type: typeof inboxRefresh}
 export type InboxSearchMoveSelectedIndexPayload = {
@@ -1474,6 +1643,10 @@ export type LoadOlderMessagesDueToScrollPayload = {
   readonly payload: _LoadOlderMessagesDueToScrollPayload
   readonly type: typeof loadOlderMessagesDueToScroll
 }
+export type LockAudioRecordingPayload = {
+  readonly payload: _LockAudioRecordingPayload
+  readonly type: typeof lockAudioRecording
+}
 export type MarkConversationsStalePayload = {
   readonly payload: _MarkConversationsStalePayload
   readonly type: typeof markConversationsStale
@@ -1512,6 +1685,10 @@ export type MessageReplyPrivatelyPayload = {
   readonly type: typeof messageReplyPrivately
 }
 export type MessageRetryPayload = {readonly payload: _MessageRetryPayload; readonly type: typeof messageRetry}
+export type MessageSendByUsernamesPayload = {
+  readonly payload: _MessageSendByUsernamesPayload
+  readonly type: typeof messageSendByUsernames
+}
 export type MessageSendPayload = {readonly payload: _MessageSendPayload; readonly type: typeof messageSend}
 export type MessageSetEditingPayload = {
   readonly payload: _MessageSetEditingPayload
@@ -1588,6 +1765,7 @@ export type PendingMessageWasEditedPayload = {
   readonly payload: _PendingMessageWasEditedPayload
   readonly type: typeof pendingMessageWasEdited
 }
+export type PinMessagePayload = {readonly payload: _PinMessagePayload; readonly type: typeof pinMessage}
 export type PrepareFulfillRequestFormPayload = {
   readonly payload: _PrepareFulfillRequestFormPayload
   readonly type: typeof prepareFulfillRequestForm
@@ -1621,10 +1799,22 @@ export type SelectConversationPayload = {
   readonly payload: _SelectConversationPayload
   readonly type: typeof selectConversation
 }
+export type SendAudioRecordingPayload = {
+  readonly payload: _SendAudioRecordingPayload
+  readonly type: typeof sendAudioRecording
+}
 export type SendTypingPayload = {readonly payload: _SendTypingPayload; readonly type: typeof sendTyping}
 export type SetAttachmentViewStatusPayload = {
   readonly payload: _SetAttachmentViewStatusPayload
   readonly type: typeof setAttachmentViewStatus
+}
+export type SetAudioRecordingPostInfoPayload = {
+  readonly payload: _SetAudioRecordingPostInfoPayload
+  readonly type: typeof setAudioRecordingPostInfo
+}
+export type SetChannelSearchTextPayload = {
+  readonly payload: _SetChannelSearchTextPayload
+  readonly type: typeof setChannelSearchText
 }
 export type SetCommandMarkdownPayload = {
   readonly payload: _SetCommandMarkdownPayload
@@ -1654,6 +1844,10 @@ export type SetExplodingModeLockPayload = {
   readonly payload: _SetExplodingModeLockPayload
   readonly type: typeof setExplodingModeLock
 }
+export type SetInboxNumSmallRowsPayload = {
+  readonly payload: _SetInboxNumSmallRowsPayload
+  readonly type: typeof setInboxNumSmallRows
+}
 export type SetInboxShowIsNewPayload = {
   readonly payload: _SetInboxShowIsNewPayload
   readonly type: typeof setInboxShowIsNew
@@ -1668,11 +1862,6 @@ export type SetMinWriterRolePayload = {
 }
 export type SetPaymentConfirmInfoPayload = {
   readonly payload: _SetPaymentConfirmInfoPayload
-  readonly type: typeof setPaymentConfirmInfo
-}
-export type SetPaymentConfirmInfoPayloadError = {
-  readonly error: true
-  readonly payload: _SetPaymentConfirmInfoPayloadError
   readonly type: typeof setPaymentConfirmInfo
 }
 export type SetPrependTextPayload = {
@@ -1703,11 +1892,19 @@ export type StaticConfigLoadedPayload = {
   readonly payload: _StaticConfigLoadedPayload
   readonly type: typeof staticConfigLoaded
 }
+export type StopAudioRecordingPayload = {
+  readonly payload: _StopAudioRecordingPayload
+  readonly type: typeof stopAudioRecording
+}
 export type TabSelectedPayload = {readonly payload: _TabSelectedPayload; readonly type: typeof tabSelected}
 export type ThreadSearchPayload = {readonly payload: _ThreadSearchPayload; readonly type: typeof threadSearch}
 export type ThreadSearchResultsPayload = {
   readonly payload: _ThreadSearchResultsPayload
   readonly type: typeof threadSearchResults
+}
+export type ToggleGiphyPrefillPayload = {
+  readonly payload: _ToggleGiphyPrefillPayload
+  readonly type: typeof toggleGiphyPrefill
 }
 export type ToggleInboxSearchPayload = {
   readonly payload: _ToggleInboxSearchPayload
@@ -1754,6 +1951,7 @@ export type UnhideConversationPayload = {
   readonly payload: _UnhideConversationPayload
   readonly type: typeof unhideConversation
 }
+export type UnpinMessagePayload = {readonly payload: _UnpinMessagePayload; readonly type: typeof unpinMessage}
 export type UnsentTextChangedPayload = {
   readonly payload: _UnsentTextChangedPayload
   readonly type: typeof unsentTextChanged
@@ -1769,6 +1967,10 @@ export type UpdateConvExplodingModesPayload = {
 export type UpdateConvRetentionPolicyPayload = {
   readonly payload: _UpdateConvRetentionPolicyPayload
   readonly type: typeof updateConvRetentionPolicy
+}
+export type UpdateLastCoordPayload = {
+  readonly payload: _UpdateLastCoordPayload
+  readonly type: typeof updateLastCoord
 }
 export type UpdateMessagesPayload = {
   readonly payload: _UpdateMessagesPayload
@@ -1806,7 +2008,6 @@ export type Actions =
   | AddUsersToChannelPayload
   | AttachmentDownloadPayload
   | AttachmentDownloadedPayload
-  | AttachmentDownloadedPayloadError
   | AttachmentFullscreenNextPayload
   | AttachmentFullscreenSelectionPayload
   | AttachmentLoadingPayload
@@ -1817,22 +2018,28 @@ export type Actions =
   | AttachmentUploadedPayload
   | AttachmentUploadingPayload
   | AttachmentsUploadPayload
+  | AttemptAudioRecordingPayload
   | BadgesUpdatedPayload
   | BlockConversationPayload
   | ChangeFocusPayload
   | ClearAttachmentViewPayload
   | ClearCommandStatusInfoPayload
+  | ClearMessagesPayload
+  | ClearMetasPayload
   | ClearPaymentConfirmInfoPayload
   | ConfirmScreenResponsePayload
   | ConversationErroredPayload
   | CreateConversationPayload
   | DeselectConversationPayload
   | DesktopNotificationPayload
+  | DismissBottomBannerPayload
+  | EnableAudioRecordingPayload
   | GiphyGotSearchResultPayload
   | GiphySendPayload
   | GiphyToggleWindowPayload
   | HandleSeeingWalletsPayload
   | HideConversationPayload
+  | IgnorePinnedMessagePayload
   | InboxRefreshPayload
   | InboxSearchMoveSelectedIndexPayload
   | InboxSearchNameResultsPayload
@@ -1849,6 +2056,7 @@ export type Actions =
   | LoadMessagesCenteredPayload
   | LoadNewerMessagesDueToScrollPayload
   | LoadOlderMessagesDueToScrollPayload
+  | LockAudioRecordingPayload
   | MarkConversationsStalePayload
   | MarkInitiallyLoadedThreadAsReadPayload
   | MessageAttachmentNativeSavePayload
@@ -1860,6 +2068,7 @@ export type Actions =
   | MessageErroredPayload
   | MessageReplyPrivatelyPayload
   | MessageRetryPayload
+  | MessageSendByUsernamesPayload
   | MessageSendPayload
   | MessageSetEditingPayload
   | MessageSetQuotingPayload
@@ -1882,6 +2091,7 @@ export type Actions =
   | OpenFolderPayload
   | PaymentInfoReceivedPayload
   | PendingMessageWasEditedPayload
+  | PinMessagePayload
   | PrepareFulfillRequestFormPayload
   | PreviewConversationPayload
   | ReplyJumpPayload
@@ -1891,8 +2101,11 @@ export type Actions =
   | ResolveMaybeMentionPayload
   | SaveMinWriterRolePayload
   | SelectConversationPayload
+  | SendAudioRecordingPayload
   | SendTypingPayload
   | SetAttachmentViewStatusPayload
+  | SetAudioRecordingPostInfoPayload
+  | SetChannelSearchTextPayload
   | SetCommandMarkdownPayload
   | SetCommandStatusInfoPayload
   | SetContainsLastMessagePayload
@@ -1900,11 +2113,11 @@ export type Actions =
   | SetConvRetentionPolicyPayload
   | SetConversationOfflinePayload
   | SetExplodingModeLockPayload
+  | SetInboxNumSmallRowsPayload
   | SetInboxShowIsNewPayload
   | SetMaybeMentionInfoPayload
   | SetMinWriterRolePayload
   | SetPaymentConfirmInfoPayload
-  | SetPaymentConfirmInfoPayloadError
   | SetPrependTextPayload
   | SetThreadLoadStatusPayload
   | SetThreadSearchQueryPayload
@@ -1912,9 +2125,11 @@ export type Actions =
   | SetUnsentTextPayload
   | SetWalletsOldPayload
   | StaticConfigLoadedPayload
+  | StopAudioRecordingPayload
   | TabSelectedPayload
   | ThreadSearchPayload
   | ThreadSearchResultsPayload
+  | ToggleGiphyPrefillPayload
   | ToggleInboxSearchPayload
   | ToggleInfoPanelPayload
   | ToggleLocalReactionPayload
@@ -1927,10 +2142,12 @@ export type Actions =
   | UnfurlResolvePromptPayload
   | UnfurlTogglePromptPayload
   | UnhideConversationPayload
+  | UnpinMessagePayload
   | UnsentTextChangedPayload
   | UpdateCoinFlipStatusPayload
   | UpdateConvExplodingModesPayload
   | UpdateConvRetentionPolicyPayload
+  | UpdateLastCoordPayload
   | UpdateMessagesPayload
   | UpdateMoreToLoadPayload
   | UpdateNotificationSettingsPayload

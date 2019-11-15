@@ -3,6 +3,7 @@ import * as Styles from '../../styles'
 import * as Kb from '../../common-adapters'
 import {teamWaitingKey} from '../../constants/teams'
 import * as Types from '../../constants/types/teams'
+import {useTeamsSubscribe} from '../../teams/subscriber'
 
 export type RowProps = {
   canShowcase: boolean
@@ -95,92 +96,98 @@ const ShowcaseTeamOfferHeader = () => (
   </Kb.Box>
 )
 
-const ShowcaseTeamOffer = (props: Props) => (
-  <Kb.Box2 direction="vertical" style={styles.container}>
-    {!Styles.isMobile && <ShowcaseTeamOfferHeader />}
-    <Kb.ScrollView>
-      {Styles.isMobile && <ShowcaseTeamOfferHeader />}
-      {props.teamnames &&
-        props.teamnames.map(name => (
-          <TeamRow
-            canShowcase={
-              (props.teamNameToRole[name] !== 'none' && props.teamNameToAllowPromote[name]) ||
-              ['admin', 'owner'].indexOf(props.teamNameToRole[name]) !== -1
-            }
-            isExplicitMember={props.teamNameToRole[name] !== 'none'}
-            key={name}
-            name={name}
-            isOpen={props.teamNameToIsOpen[name]}
-            membercount={props.teammembercounts[name]}
-            onPromote={promoted => props.onPromote(name, promoted)}
-            showcased={props.teamNameToIsShowcasing[name]}
-            waiting={!!props.waiting[teamWaitingKey(name)]}
-          />
-        ))}
-    </Kb.ScrollView>
-  </Kb.Box2>
-)
+const ShowcaseTeamOffer = (props: Props) => {
+  useTeamsSubscribe()
+  return (
+    <Kb.Box2 direction="vertical" style={styles.container}>
+      {!Styles.isMobile && <ShowcaseTeamOfferHeader />}
+      <Kb.ScrollView>
+        {Styles.isMobile && <ShowcaseTeamOfferHeader />}
+        {props.teamnames &&
+          props.teamnames.map(name => (
+            <TeamRow
+              canShowcase={
+                (props.teamNameToRole[name] !== 'none' && props.teamNameToAllowPromote[name]) ||
+                ['admin', 'owner'].indexOf(props.teamNameToRole[name]) !== -1
+              }
+              isExplicitMember={props.teamNameToRole[name] !== 'none'}
+              key={name}
+              name={name}
+              isOpen={props.teamNameToIsOpen[name]}
+              membercount={props.teammembercounts[name]}
+              onPromote={promoted => props.onPromote(name, promoted)}
+              showcased={props.teamNameToIsShowcasing[name]}
+              waiting={!!props.waiting[teamWaitingKey(name)]}
+            />
+          ))}
+      </Kb.ScrollView>
+    </Kb.Box2>
+  )
+}
 
-const styles = Styles.styleSheetCreate({
-  container: Styles.platformStyles({
-    isElectron: {
-      maxHeight: 600,
-      maxWidth: 600,
-    },
-  }),
-  headerContainer: Styles.platformStyles({
-    isElectron: {
-      paddingLeft: Styles.globalMargins.small,
-      paddingRight: Styles.globalMargins.small,
-      paddingTop: Styles.globalMargins.mediumLarge,
-    },
-  }),
-  headerText: {
-    marginBottom: Styles.globalMargins.xsmall,
-  },
-  membershipText: Styles.platformStyles({
-    common: {color: Styles.globalColors.black_50},
-    isElectron: {textAlign: 'right'},
-    isMobile: {textAlign: 'center'},
-  }),
-  membershipTextContainer: {
-    flexShrink: 1,
-  },
-  meta: {
-    alignSelf: 'center',
-    marginLeft: Styles.globalMargins.xtiny,
-    marginTop: 2,
-  },
-  noteContainer: Styles.platformStyles({
-    isMobile: {
-      paddingTop: Styles.globalMargins.small,
-    },
-  }),
-  noteText: {
-    paddingBottom: Styles.globalMargins.small,
-    paddingLeft: Styles.globalMargins.large,
-    paddingRight: Styles.globalMargins.large,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-  teamNameContainer: {
-    flexShrink: 1,
-    marginLeft: Styles.globalMargins.small,
-    marginRight: Styles.globalMargins.small,
-  },
-  teamRowContainer: Styles.platformStyles({
-    common: {
-      paddingBottom: Styles.globalMargins.tiny,
-      paddingLeft: Styles.globalMargins.small,
-      paddingRight: Styles.globalMargins.small,
-      paddingTop: Styles.globalMargins.tiny,
-    },
-    isMobile: {
-      minHeight: Styles.isMobile ? 64 : 48,
-    },
-  }),
-  teamText: {
-    alignSelf: 'flex-start',
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: Styles.platformStyles({
+        isElectron: {
+          maxHeight: 600,
+          maxWidth: 600,
+        },
+      }),
+      headerContainer: Styles.platformStyles({
+        isElectron: {
+          paddingLeft: Styles.globalMargins.small,
+          paddingRight: Styles.globalMargins.small,
+          paddingTop: Styles.globalMargins.mediumLarge,
+        },
+      }),
+      headerText: {
+        marginBottom: Styles.globalMargins.xsmall,
+      },
+      membershipText: Styles.platformStyles({
+        common: {color: Styles.globalColors.black_50},
+        isElectron: {textAlign: 'right'},
+        isMobile: {textAlign: 'center'},
+      }),
+      membershipTextContainer: {
+        flexShrink: 1,
+      },
+      meta: {
+        alignSelf: 'center',
+        marginLeft: Styles.globalMargins.xtiny,
+        marginTop: 2,
+      },
+      noteContainer: Styles.platformStyles({
+        isMobile: {
+          paddingTop: Styles.globalMargins.small,
+        },
+      }),
+      noteText: {
+        paddingBottom: Styles.globalMargins.small,
+        paddingLeft: Styles.globalMargins.large,
+        paddingRight: Styles.globalMargins.large,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      teamNameContainer: {
+        flexShrink: 1,
+        marginLeft: Styles.globalMargins.small,
+        marginRight: Styles.globalMargins.small,
+      },
+      teamRowContainer: Styles.platformStyles({
+        common: {
+          paddingBottom: Styles.globalMargins.tiny,
+          paddingLeft: Styles.globalMargins.small,
+          paddingRight: Styles.globalMargins.small,
+          paddingTop: Styles.globalMargins.tiny,
+        },
+        isMobile: {
+          minHeight: Styles.isMobile ? 64 : 48,
+        },
+      }),
+      teamText: {
+        alignSelf: 'flex-start',
+      },
+    } as const)
+)
 
 export default ShowcaseTeamOffer

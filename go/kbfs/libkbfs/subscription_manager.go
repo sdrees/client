@@ -389,26 +389,30 @@ func (s subscriber) Unsubscribe(ctx context.Context, sid SubscriptionID) {
 
 var _ SubscriptionManagerPublisher = (*subscriptionManager)(nil)
 
-// FavoritesChanged implements the SubscriptionManagerPublisher interface.
-func (sm *subscriptionManager) FavoritesChanged() {
+// PublishChange implements the SubscriptionManagerPublisher interface.
+func (sm *subscriptionManager) PublishChange(topic keybase1.SubscriptionTopic) {
 	sm.lock.RLock()
 	defer sm.lock.RUnlock()
-	if sm.nonPathSubscriptions[keybase1.SubscriptionTopic_FAVORITES] == nil {
-		return
-	}
-	for _, notifier := range sm.nonPathSubscriptions[keybase1.SubscriptionTopic_FAVORITES] {
-		notifier.notify()
-	}
-}
 
-// JournalStatusChanged implements the SubscriptionManagerPublisher interface.
-func (sm *subscriptionManager) JournalStatusChanged() {
-	sm.lock.RLock()
-	defer sm.lock.RUnlock()
-	if sm.nonPathSubscriptions[keybase1.SubscriptionTopic_JOURNAL_STATUS] == nil {
+	// When sync status changes, trigger notification for all paths so they
+	// reload to get new prefetch status. This is unfortunate but it's
+	// non-trivial to actually build notification around individuall path's
+	// prefetch status. Since GUI doesnt' have that many path notifications,
+	// this should be fine.
+	//
+	// TODO: Build it.
+	if topic == keybase1.SubscriptionTopic_OVERALL_SYNC_STATUS {
+		for _, subscriptions := range sm.pathSubscriptions {
+			for _, notifier := range subscriptions {
+				notifier.notify()
+			}
+		}
+	}
+
+	if sm.nonPathSubscriptions[topic] == nil {
 		return
 	}
-	for _, notifier := range sm.nonPathSubscriptions[keybase1.SubscriptionTopic_JOURNAL_STATUS] {
+	for _, notifier := range sm.nonPathSubscriptions[topic] {
 		notifier.notify()
 	}
 }

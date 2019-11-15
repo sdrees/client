@@ -4,7 +4,7 @@ import React, {Component} from 'react'
 import Box from './box'
 import Text, {getStyle as getTextStyle} from './text.native'
 import {NativeTextInput} from './native-wrappers.native'
-import {collapseStyles, globalStyles, globalColors, styleSheetCreate} from '../styles'
+import * as Styles from '../styles'
 import {isIOS, isAndroid} from '../constants/platform'
 import {TextInput} from 'react-native'
 import {KeyboardType, Props, Selection, TextInfo} from './input'
@@ -187,14 +187,14 @@ class Input extends Component<Props, State> {
 
   _underlineColor = () => {
     if (this.props.hideUnderline) {
-      return globalColors.transparent
+      return Styles.globalColors.transparent
     }
 
     if (this.props.errorText && this.props.errorText.length) {
-      return globalColors.red
+      return Styles.globalColors.red
     }
 
-    return this.state.focused ? globalColors.blue : globalColors.black_10_on_white
+    return this.state.focused ? Styles.globalColors.blue : Styles.globalColors.black_10_on_white
   }
 
   _rowsToHeight = rows => {
@@ -205,15 +205,15 @@ class Input extends Component<Props, State> {
   _containerStyle = underlineColor => {
     return this.props.small
       ? {
-          ...globalStyles.flexBoxRow,
-          backgroundColor: globalColors.fastBlank,
+          ...Styles.globalStyles.flexBoxRow,
+          backgroundColor: Styles.globalColors.fastBlank,
           borderBottomColor: underlineColor,
           borderBottomWidth: 1,
           flex: 1,
         }
       : {
-          ...globalStyles.flexBoxColumn,
-          backgroundColor: globalColors.fastBlank,
+          ...Styles.globalStyles.flexBoxColumn,
+          backgroundColor: Styles.globalColors.fastBlank,
           justifyContent: 'flex-start',
           maxWidth: 400,
         }
@@ -241,47 +241,35 @@ class Input extends Component<Props, State> {
     this._onChangeTextDone(this._getValue())
   }
 
-  render = () => {
+  render() {
     const underlineColor = this._underlineColor()
     const lineHeight = this._lineHeight()
     const defaultRowsToShow = Math.min(2, this.props.rowsMax || 2)
     const containerStyle = this._containerStyle(underlineColor)
 
-    const commonInputStyle = {
-      backgroundColor: globalColors.fastBlank,
-      borderWidth: 0,
-      color: globalColors.black_on_white,
-      flexGrow: 1,
-      lineHeight: lineHeight,
-      ...(this.props.small
-        ? {
-            ...globalStyles.fontRegular,
-            fontSize: _bodyTextStyle.fontSize,
-            textAlign: 'left',
-          }
-        : {
-            ...globalStyles.fontSemibold,
-            fontSize: _headerTextStyle.fontSize,
-            minWidth: 200,
-            textAlign: 'center',
-          }),
-    }
+    const singlelineStyle = Styles.collapseStyles([
+      styles.commonInput,
+      {
+        lineHeight: lineHeight,
+        maxHeight: lineHeight, // ensure it doesn't grow or shrink
+        minHeight: lineHeight,
+        padding: 0,
+      },
+      this.props.small ? styles.commonInputSmall : styles.commonInputRegular,
+    ])
 
-    const singlelineStyle = {
-      ...commonInputStyle,
-      maxHeight: lineHeight, // ensure it doesn't grow or shrink
-      minHeight: lineHeight,
-      padding: 0,
-    }
-
-    const multilineStyle: any = {
-      ...commonInputStyle,
-      height: undefined,
-      minHeight: this._rowsToHeight(this.props.rowsMin || defaultRowsToShow),
-      paddingBottom: 0,
-      paddingTop: 0,
-      ...(this.props.rowsMax ? {maxHeight: this._rowsToHeight(this.props.rowsMax)} : null),
-    }
+    const multilineStyle: any = Styles.collapseStyles([
+      styles.commonInput,
+      {
+        height: undefined,
+        lineHeight: lineHeight,
+        minHeight: this._rowsToHeight(this.props.rowsMin || defaultRowsToShow),
+        paddingBottom: 0,
+        paddingTop: 0,
+        ...(this.props.rowsMax ? {maxHeight: this._rowsToHeight(this.props.rowsMax)} : null),
+      },
+      this.props.small ? styles.commonInputSmall : styles.commonInputRegular,
+    ])
 
     // Override height if we received an onContentSizeChange() earlier.
     if (isIOS && this.state.height) {
@@ -314,6 +302,7 @@ class Input extends Component<Props, State> {
       autoCorrect: Object.prototype.hasOwnProperty.call(this.props, 'autoCorrect') && this.props.autoCorrect,
       autoFocus: this.props.autoFocus,
       editable: Object.prototype.hasOwnProperty.call(this.props, 'editable') ? this.props.editable : true,
+      keyboardAppearance: Styles.isIOS ? (Styles.isDarkMode() ? 'dark' : 'light') : undefined,
       keyboardType,
       onBlur: this._onBlur,
       onChangeText: this._onChangeText,
@@ -322,6 +311,7 @@ class Input extends Component<Props, State> {
       onSelectionChange: this._onSelectionChange,
       onSubmitEditing: this.props.onEnterKeyDown,
       placeholder: this.props.hintText,
+      placeholderTextColor: Styles.globalColors.black_40,
       ref: this._input,
       returnKeyType: this.props.returnKeyType,
       secureTextEntry: this.props.type === 'password',
@@ -329,7 +319,7 @@ class Input extends Component<Props, State> {
       textContentType: this.props.textContentType,
       underlineColorAndroid: 'transparent',
       ...(this.props.maxLength ? {maxLength: this.props.maxLength} : null),
-    }
+    } as const
 
     if (!this.props.uncontrolled) {
       // @ts-ignore it's ok to add this
@@ -339,7 +329,7 @@ class Input extends Component<Props, State> {
     const singlelineProps = {
       ...commonProps,
       multiline: false,
-      style: collapseStyles([singlelineStyle, this.props.inputStyle]),
+      style: Styles.collapseStyles([singlelineStyle, this.props.inputStyle]),
     }
 
     const multilineProps = {
@@ -347,7 +337,7 @@ class Input extends Component<Props, State> {
       blurOnSubmit: false,
       multiline: true,
       onContentSizeChange: this._onContentSizeChange,
-      style: collapseStyles([multilineStyle, this.props.inputStyle]),
+      style: Styles.collapseStyles([multilineStyle, this.props.inputStyle]),
       ...(this.props.rowsMax ? {maxHeight: this._rowsToHeight(this.props.rowsMax)} : {}),
     }
 
@@ -361,7 +351,7 @@ class Input extends Component<Props, State> {
         {!!this.props.small && !!this.props.smallLabel && !this.props.hideLabel && (
           <Text
             type="BodySmall"
-            style={collapseStyles([styles.smallLabel, {lineHeight}, this.props.smallLabelStyle])}
+            style={Styles.collapseStyles([styles.smallLabel, {lineHeight}, this.props.smallLabelStyle])}
           >
             {this.props.smallLabel}
           </Text>
@@ -380,7 +370,7 @@ class Input extends Component<Props, State> {
           <Text
             center={true}
             type="BodySmallError"
-            style={collapseStyles([styles.error, this.props.errorStyle])}
+            style={Styles.collapseStyles([styles.error, this.props.errorStyle])}
           >
             {this.props.errorText || ''}
           </Text>
@@ -390,29 +380,48 @@ class Input extends Component<Props, State> {
   }
 }
 
-const _headerTextStyle: any = getTextStyle('Header')
-const _bodyTextStyle: any = getTextStyle('Body')
-const _bodySmallTextStyle: any = getTextStyle('BodySmall')
-const _bodyErrorTextStyle: any = getTextStyle('BodySmallError')
+const styles = Styles.styleSheetCreate(() => {
+  const _headerTextStyle: any = getTextStyle('Header')
+  const _bodyTextStyle: any = getTextStyle('Body')
+  const _bodySmallTextStyle: any = getTextStyle('BodySmall')
+  const _bodyErrorTextStyle: any = getTextStyle('BodySmallError')
+  return {
+    commonInput: {
+      backgroundColor: Styles.globalColors.fastBlank,
+      borderWidth: 0,
+      color: Styles.globalColors.black_on_white,
+      flexGrow: 1,
+    },
+    commonInputRegular: {
+      ...Styles.globalStyles.fontSemibold,
+      fontSize: _headerTextStyle.fontSize,
+      minWidth: 200,
+      textAlign: 'center',
+    },
+    commonInputSmall: {
+      ...Styles.globalStyles.fontRegular,
+      fontSize: _bodyTextStyle.fontSize,
+      textAlign: 'left',
+    },
 
-const styles = styleSheetCreate({
-  error: {minHeight: _bodyErrorTextStyle.lineHeight},
-  floating: {
-    color: globalColors.blueDark,
-    marginBottom: 9,
-    minHeight: _bodySmallTextStyle.lineHeight,
-  },
-  inputContainer: {borderBottomWidth: 1},
-  inputContainerSmall: {
-    backgroundColor: globalColors.fastBlank,
-    flex: 1,
-  },
-  smallLabel: {
-    ...globalStyles.fontSemibold,
-    color: globalColors.blueDark,
-    fontSize: _headerTextStyle.fontSize,
-    marginRight: 8,
-  },
+    error: {minHeight: _bodyErrorTextStyle.lineHeight},
+    floating: {
+      color: Styles.globalColors.blueDark,
+      marginBottom: 9,
+      minHeight: _bodySmallTextStyle.lineHeight,
+    },
+    inputContainer: {borderBottomWidth: 1},
+    inputContainerSmall: {
+      backgroundColor: Styles.globalColors.fastBlank,
+      flex: 1,
+    },
+    smallLabel: {
+      ...Styles.globalStyles.fontSemibold,
+      color: Styles.globalColors.blueDark,
+      fontSize: _headerTextStyle.fontSize,
+      marginRight: 8,
+    },
+  }
 })
 
 export default Input

@@ -49,7 +49,12 @@ const (
 // TODO: Move more common code here.
 func newConfigForTest(modeType InitModeType, loggerFn func(module string) logger.Logger) *ConfigLocal {
 	mode := modeTest{NewInitModeFromType(modeType)}
-	config := NewConfigLocal(mode, loggerFn, "", DiskCacheModeOff, &env.KBFSContext{})
+	config := NewConfigLocal(mode, loggerFn, "", DiskCacheModeOff, env.NewContextFromGlobalContext(&libkb.GlobalContext{
+		// Env is needed by simplefs.
+		Env: libkb.NewEnv(nil, nil, func() logger.Logger {
+			return loggerFn("G")
+		}),
+	}))
 	config.SetVLogLevel(libkb.VLog1String)
 
 	bops := NewBlockOpsStandard(
@@ -137,7 +142,10 @@ func MakeTestConfigOrBustLoggedInWithMode(
 		return log
 	})
 
-	kbfsOps := NewKBFSOpsStandard(env.EmptyAppStateUpdater{}, config)
+	initDoneCh := make(chan struct{})
+	kbfsOps := NewKBFSOpsStandard(
+		env.EmptyAppStateUpdater{}, config, initDoneCh)
+	defer close(initDoneCh)
 	config.SetKBFSOps(kbfsOps)
 	config.SetNotifier(kbfsOps)
 
@@ -220,9 +228,6 @@ func MakeTestConfigOrBustLoggedInWithMode(
 	configs := []Config{config}
 	config.allKnownConfigsForTesting = &configs
 
-	config.subscriptionManager, config.subscriptionManagerPublisher =
-		newSubscriptionManager(config)
-
 	return config
 }
 
@@ -252,7 +257,9 @@ func ConfigAsUserWithMode(config *ConfigLocal,
 	c.SetMetadataVersion(config.MetadataVersion())
 	c.SetRekeyWithPromptWaitTime(config.RekeyWithPromptWaitTime())
 
-	kbfsOps := NewKBFSOpsStandard(env.EmptyAppStateUpdater{}, c)
+	initDoneCh := make(chan struct{})
+	kbfsOps := NewKBFSOpsStandard(env.EmptyAppStateUpdater{}, c, initDoneCh)
+	defer close(initDoneCh)
 	c.SetKBFSOps(kbfsOps)
 	c.SetNotifier(kbfsOps)
 

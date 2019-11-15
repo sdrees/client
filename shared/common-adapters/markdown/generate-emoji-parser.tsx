@@ -3,7 +3,9 @@ import path from 'path'
 // TODO: is there something better to do that ignore this?
 // @ts-ignore
 import emojiData from 'emoji-datasource'
-import {escapeRegExp} from 'lodash-es'
+// MUST be lodash for node to work simply
+// eslint-disable-next-line
+import {escapeRegExp} from 'lodash'
 import tlds from 'tlds'
 
 const commonTlds = [
@@ -71,7 +73,8 @@ function genEmojiData() {
   emojiData.forEach(emoji => {
     if (emoji.skin_variations) {
       Object.keys(emoji.skin_variations).forEach((k, idx) =>
-        addEmojiLiteral(emoji.skin_variations[k].unified, emoji.short_name, idx + 1)
+        // + 2 because idx starts at 0, and skin-tone-1 is not a thing
+        addEmojiLiteral(emoji.skin_variations[k].unified, emoji.short_name, idx + 2)
       )
     }
     addEmojiLiteral(emoji.unified, emoji.short_name)

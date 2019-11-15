@@ -189,11 +189,6 @@ func (s SimpleFSMock) SimpleFSSyncStatus(ctx context.Context, filter keybase1.Li
 	return keybase1.FSSyncStatus{}, nil
 }
 
-// SimpleFSGetHTTPAddressAndToken implements the SimpleFSInterface.
-func (s SimpleFSMock) SimpleFSGetHTTPAddressAndToken(ctx context.Context) (keybase1.SimpleFSGetHTTPAddressAndTokenResponse, error) {
-	return keybase1.SimpleFSGetHTTPAddressAndTokenResponse{}, nil
-}
-
 // SimpleFSUserEditHistory implements the SimpleFSInterface.
 func (s SimpleFSMock) SimpleFSUserEditHistory(ctx context.Context) (
 	res []keybase1.FSFolderEditHistory, err error) {
@@ -208,7 +203,8 @@ func (s SimpleFSMock) SimpleFSFolderEditHistory(
 }
 
 // SimpleFSReset implements the SimpleFSInterface.
-func (s SimpleFSMock) SimpleFSReset(_ context.Context, _ keybase1.Path) error {
+func (s SimpleFSMock) SimpleFSReset(
+	_ context.Context, _ keybase1.SimpleFSResetArg) error {
 	return nil
 }
 
@@ -243,6 +239,13 @@ func (s SimpleFSMock) SimpleFSGetTeamQuotaUsage(
 	_ context.Context, _ keybase1.TeamName) (
 	keybase1.SimpleFSQuotaUsage, error) {
 	return keybase1.SimpleFSQuotaUsage{}, nil
+}
+
+// SimpleFSGetFolder implements the SimpleFSInterface.
+func (s SimpleFSMock) SimpleFSGetFolder(
+	_ context.Context, _ keybase1.KBFSPath) (
+	res keybase1.FolderWithFavFlags, err error) {
+	return res, nil
 }
 
 // SimpleFSFolderSyncConfigAndStatus implements the SimpleFSInterface.
@@ -322,6 +325,46 @@ func (s SimpleFSMock) SimpleFSSubscribePath(ctx context.Context, arg keybase1.Si
 // SimpleFSUnsubscribe implements the SimpleFSInterface.
 func (s SimpleFSMock) SimpleFSUnsubscribe(ctx context.Context, arg keybase1.SimpleFSUnsubscribeArg) error {
 	return nil
+}
+
+func (s SimpleFSMock) SimpleFSStartDownload(
+	ctx context.Context, arg keybase1.SimpleFSStartDownloadArg) (downloadID string, err error) {
+	return "", nil
+}
+
+func (s SimpleFSMock) SimpleFSGetDownloadStatus(ctx context.Context) (
+	status keybase1.DownloadStatus, err error) {
+	return keybase1.DownloadStatus{}, nil
+}
+
+func (s SimpleFSMock) SimpleFSDismissDownload(
+	ctx context.Context, downloadID string) (err error) {
+	return nil
+}
+
+func (s SimpleFSMock) SimpleFSCancelDownload(
+	ctx context.Context, downloadID string) (err error) {
+	return nil
+}
+
+func (s SimpleFSMock) SimpleFSGetDownloadInfo(
+	ctx context.Context, downloadID string) (downloadInfo keybase1.DownloadInfo, err error) {
+	return keybase1.DownloadInfo{}, nil
+}
+
+func (s SimpleFSMock) SimpleFSConfigureDownload(
+	ctx context.Context, arg keybase1.SimpleFSConfigureDownloadArg) (err error) {
+	return nil
+}
+
+func (s SimpleFSMock) SimpleFSGetGUIFileContext(ctx context.Context,
+	path keybase1.KBFSPath) (resource keybase1.GUIFileContext, err error) {
+	return keybase1.GUIFileContext{}, nil
+}
+
+func (s SimpleFSMock) SimpleFSGetFilesTabBadge(_ context.Context) (
+	keybase1.FilesTabBadge, error) {
+	return keybase1.FilesTabBadge_NONE, nil
 }
 
 /*

@@ -429,6 +429,18 @@ func (f *Folder) access(ctx context.Context, r *fuse.AccessRequest) error {
 	return nil
 }
 
+func (f *Folder) openFileCount() int64 {
+	f.nodesMu.Lock()
+	defer f.nodesMu.Unlock()
+	count := int64(len(f.nodes))
+	if count > 0 {
+		// The root node itself should only be counted by the folder
+		// list, not here.
+		count--
+	}
+	return count
+}
+
 // TODO: Expire TLF nodes periodically. See
 // https://keybase.atlassian.net/browse/KBFS-59 .
 
@@ -727,6 +739,14 @@ func (d *Dir) Symlink(ctx context.Context, req *fuse.SymlinkRequest) (
 		inode:  d.folder.fs.assignInode(),
 	}
 	return child, nil
+}
+
+var _ fs.NodeLinker = (*Dir)(nil)
+
+// Link implements the fs.NodeLinker interface for Dir.
+func (d *Dir) Link(
+	_ context.Context, _ *fuse.LinkRequest, _ fs.Node) (fs.Node, error) {
+	return nil, fuse.ENOTSUP
 }
 
 // Rename implements the fs.NodeRenamer interface for Dir.

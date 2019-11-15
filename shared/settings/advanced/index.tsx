@@ -1,18 +1,15 @@
 import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
-import {isDarwin, isMobile, isLinux, defaultUseNativeFrame} from '../../constants/platform'
+import {isMobile, isLinux} from '../../constants/platform'
 import flags from '../../util/feature-flags'
 // normally never do this but this call serves no purpose for users at all
 import * as RPCChatTypes from '../../constants/types/rpc-chat-gen'
 import * as RPCTypes from '../../constants/types/rpc-gen'
-import AppState from '../../app/app-state'
 import {ProxySettings} from '../proxy/container'
-import {DarkModePreference} from '../../styles/dark-mode'
 
 type Props = {
   openAtLogin: boolean
-  darkModePreference: DarkModePreference
   lockdownModeEnabled: boolean | null
   onChangeLockdownMode: (arg0: boolean) => void
   onSetOpenAtLogin: (open: boolean) => void
@@ -22,14 +19,13 @@ type Props = {
   onTrace: (durationSeconds: number) => void
   onProcessorProfile: (durationSeconds: number) => void
   onBack: () => void
-  onSetDarkModePreference: (pref: DarkModePreference) => void
   setLockdownModeError: string
   settingLockdownMode: boolean
   traceInProgress: boolean
   processorProfileInProgress: boolean
   hasRandomPW: boolean
   useNativeFrame: boolean
-  onChangeUseNativeFrame: (arg0: boolean) => void
+  onChangeUseNativeFrame: (use: boolean) => void
   onEnableCertPinning: () => void
   allowTlsMitmToggle: boolean
   rememberPassword: boolean
@@ -37,19 +33,18 @@ type Props = {
   onToggleRuntimeStats: () => void
 }
 
-const stateUseNativeFrame = new AppState().state.useNativeFrame
-const initialUseNativeFrame =
-  stateUseNativeFrame !== null && stateUseNativeFrame !== undefined
-    ? stateUseNativeFrame
-    : defaultUseNativeFrame
+let initialUseNativeFrame: boolean | undefined
 
 const UseNativeFrame = (props: Props) => {
-  return !isMobile ? (
+  if (initialUseNativeFrame === undefined) {
+    initialUseNativeFrame = props.useNativeFrame
+  }
+  return isMobile ? null : (
     <>
       <Kb.Box style={styles.checkboxContainer}>
         <Kb.Checkbox
           checked={!props.useNativeFrame}
-          label={'Hide system window frame'}
+          label="Hide system window frame"
           onCheck={x => props.onChangeUseNativeFrame(!x)}
         />
       </Kb.Box>
@@ -59,90 +54,88 @@ const UseNativeFrame = (props: Props) => {
         </Kb.Text>
       )}
     </>
-  ) : null
-}
-
-const Advanced = (props: Props) => {
-  const disabled = props.lockdownModeEnabled == null || props.hasRandomPW || props.settingLockdownMode
-  return (
-    <Kb.ScrollView>
-      <Kb.Box style={styles.advancedContainer}>
-        <Kb.Box style={styles.progressContainer}>
-          {props.settingLockdownMode && <Kb.ProgressIndicator />}
-        </Kb.Box>
-        <Kb.Box style={styles.checkboxContainer}>
-          <Kb.Checkbox
-            checked={props.hasRandomPW || !!props.lockdownModeEnabled}
-            disabled={disabled}
-            label={
-              'Forbid account changes from the website' +
-              (props.hasRandomPW ? ' (you need to set a password first)' : '')
-            }
-            onCheck={props.onChangeLockdownMode}
-          />
-        </Kb.Box>
-        {!!props.setLockdownModeError && (
-          <Kb.Text type="BodySmall" style={styles.error}>
-            {props.setLockdownModeError}
-          </Kb.Text>
-        )}
-        {!props.hasRandomPW && (
-          <Kb.Box style={styles.checkboxContainer}>
-            <Kb.Checkbox
-              checked={props.rememberPassword}
-              labelComponent={
-                <Kb.Box2 direction="vertical" style={Styles.globalStyles.flexOne}>
-                  <Kb.Text type="Body">Always stay logged in</Kb.Text>
-                  <Kb.Text type="BodySmall">
-                    You won't be asked for your password when restarting the app or your device.
-                  </Kb.Text>
-                </Kb.Box2>
-              }
-              onCheck={props.onChangeRememberPassword}
-            />
-          </Kb.Box>
-        )}
-        {isLinux ? <UseNativeFrame {...props} /> : null}
-        {!Styles.isMobile && !isLinux && (
-          <Kb.Box style={styles.checkboxContainer}>
-            <Kb.Checkbox
-              label="Open Keybase on startup"
-              checked={props.openAtLogin}
-              onCheck={props.onSetOpenAtLogin}
-            />
-          </Kb.Box>
-        )}
-        <Kb.Divider style={styles.proxyDivider} />
-        <ProxySettings />
-        {flags.darkMode && (
-          <Kb.Box2 direction="vertical" fullWidth={true}>
-            <Kb.Divider style={styles.proxyDivider} />
-            <Kb.Box2 direction="vertical" fullWidth={true}>
-              <Kb.Text type="Body">Dark mode</Kb.Text>
-              <Kb.Checkbox
-                label="Respect system settings"
-                disabled={!isDarwin}
-                checked={props.darkModePreference === 'system' || props.darkModePreference === undefined}
-                onCheck={() => props.onSetDarkModePreference('system')}
-              />
-              <Kb.Checkbox
-                label="Dark all the time"
-                checked={props.darkModePreference === 'alwaysDark'}
-                onCheck={() => props.onSetDarkModePreference('alwaysDark')}
-              />
-              <Kb.Checkbox
-                label="Light all the time 😎"
-                checked={props.darkModePreference === 'alwaysLight'}
-                onCheck={() => props.onSetDarkModePreference('alwaysLight')}
-              />
-            </Kb.Box2>
-          </Kb.Box2>
-        )}
-        <Developer {...props} />
-      </Kb.Box>
-    </Kb.ScrollView>
   )
 }
+
+const LockdownCheckbox = (props: Props) => {
+  const label =
+    'Enable account lockdown mode' + (props.hasRandomPW ? ' (you need to set a password first)' : '')
+  const checked = props.hasRandomPW || !!props.lockdownModeEnabled
+  const disabled = props.lockdownModeEnabled === null || props.hasRandomPW || props.settingLockdownMode
+  return (
+    <Kb.Checkbox
+      checked={checked}
+      disabled={disabled}
+      onCheck={props.onChangeLockdownMode}
+      labelComponent={
+        <Kb.Box2 direction="vertical" alignItems="flex-start" style={Styles.globalStyles.flexOne}>
+          <Kb.Text type="Body">{label}</Kb.Text>
+          <Kb.Text type="BodySmall">Prevent making account changes from the website.</Kb.Text>
+          <Kb.Text type="BodySmall">
+            With this setting on you will not be able to reset your account, even from the app. Protect your
+            account by installing Keybase on several devices, or by keeping a paper key in a safe place.
+          </Kb.Text>
+          <Kb.Text type="BodySmallPrimaryLink" onClickURL="https://keybase.io/docs/lockdown/index">
+            Read more{' '}
+            <Kb.Icon
+              type="iconfont-open-browser"
+              sizeType="Tiny"
+              boxStyle={styles.displayInline}
+              color={Styles.globalColors.blueDark}
+            />
+          </Kb.Text>
+        </Kb.Box2>
+      }
+    />
+  )
+}
+
+const Advanced = (props: Props) => (
+  <Kb.ScrollView style={styles.scrollview}>
+    <Kb.Box style={styles.advancedContainer}>
+      <Kb.Box style={styles.progressContainer}>
+        {props.settingLockdownMode && <Kb.ProgressIndicator />}
+      </Kb.Box>
+      <Kb.Box style={styles.checkboxContainer}>
+        <LockdownCheckbox {...props} />
+      </Kb.Box>
+      {!!props.setLockdownModeError && (
+        <Kb.Text type="BodySmall" style={styles.error}>
+          {props.setLockdownModeError}
+        </Kb.Text>
+      )}
+      {!props.hasRandomPW && (
+        <Kb.Box style={styles.checkboxContainer}>
+          <Kb.Checkbox
+            checked={props.rememberPassword}
+            labelComponent={
+              <Kb.Box2 direction="vertical" style={Styles.globalStyles.flexOne}>
+                <Kb.Text type="Body">Always stay logged in</Kb.Text>
+                <Kb.Text type="BodySmall">
+                  You won't be asked for your password when restarting the app or your device.
+                </Kb.Text>
+              </Kb.Box2>
+            }
+            onCheck={props.onChangeRememberPassword}
+          />
+        </Kb.Box>
+      )}
+      {isLinux ? <UseNativeFrame {...props} /> : null}
+      {!Styles.isMobile && (
+        <Kb.Box style={styles.checkboxContainer}>
+          <Kb.Checkbox
+            label="Open Keybase on startup"
+            checked={props.openAtLogin}
+            onCheck={props.onSetOpenAtLogin}
+          />
+        </Kb.Box>
+      )}
+      <Kb.Divider style={styles.proxyDivider} />
+      <ProxySettings />
+      <Developer {...props} />
+    </Kb.Box>
+  </Kb.ScrollView>
+)
 
 type StartButtonProps = {
   label: string
@@ -213,7 +206,7 @@ class Developer extends React.Component<Props, State> {
           onClick={props.onExtraKBFSLogging}
         />
         {this._showPprofControls() && (
-          <React.Fragment>
+          <>
             <Kb.Button
               label="Toggle Runtime Stats"
               onClick={this.props.onToggleRuntimeStats}
@@ -233,7 +226,7 @@ class Developer extends React.Component<Props, State> {
             <Kb.Text center={true} type="BodySmallSemibold" style={styles.text}>
               Trace and profile files are included in logs sent with feedback.
             </Kb.Text>
-          </React.Fragment>
+          </>
         )}
         {flags.chatIndexProfilingEnabled && (
           <Kb.Button
@@ -270,7 +263,7 @@ class Developer extends React.Component<Props, State> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   advancedContainer: {
     ...Styles.globalStyles.flexBoxColumn,
     flex: 1,
@@ -296,6 +289,7 @@ const styles = Styles.styleSheetCreate({
     paddingBottom: Styles.globalMargins.medium,
     paddingTop: Styles.globalMargins.xlarge,
   },
+  displayInline: Styles.platformStyles({isElectron: {display: 'inline'}}),
   divider: {
     marginTop: Styles.globalMargins.xsmall,
     width: '100%',
@@ -314,6 +308,10 @@ const styles = Styles.styleSheetCreate({
   },
   proxyDivider: {
     marginBottom: Styles.globalMargins.small,
+    marginTop: Styles.globalMargins.small,
+    width: '100%',
+  },
+  scrollview: {
     width: '100%',
   },
   text: Styles.platformStyles({
@@ -321,6 +319,6 @@ const styles = Styles.styleSheetCreate({
       cursor: 'default',
     },
   }),
-})
+}))
 
 export default Advanced

@@ -35,6 +35,7 @@ type Props = {
   path: Types._BuiltPaymentAdvanced
   readyToSend: boolean
   recipient: string | null
+  sendError: string
   signed: boolean | null
   summary: Summary
   userAmount: string | null
@@ -96,11 +97,19 @@ const InfoRow = (props: InfoRowProps) => (
 type HeaderProps = {
   requester: string | null
   isPayment: boolean
+  sendError: string
   signed: boolean | null
 }
 const Header = (props: HeaderProps) => (
   <Kb.Box2 direction="horizontal" fullWidth={true} style={styles.header}>
     <Kb.Box2 direction="vertical" fullWidth={true} style={styles.headerContent}>
+      {!!props.sendError && (
+        <Kb.Box2 direction="vertical" fullWidth={true}>
+          <Kb.Banner color="red">
+            <Kb.BannerParagraph bannerColor="red" content={props.sendError} />
+          </Kb.Banner>
+        </Kb.Box2>
+      )}
       {!props.signed && (
         <Kb.Box2 direction="vertical" fullWidth={true}>
           <Kb.Banner color="red">
@@ -251,6 +260,7 @@ const SEP7Confirm = (props: Props) => (
         <Header
           isPayment={props.operation === 'pay'}
           requester={props.signed ? props.originDomain : TrimString(props.recipient)}
+          sendError={props.sendError}
           signed={props.signed}
         />
         {!!props.callbackURL && <CallbackURLBanner callbackURL={props.callbackURL} />}
@@ -306,152 +316,156 @@ const SEP7Confirm = (props: Props) => (
 
 const SEP7ConfirmWrapper = (props: Omit<Props, 'onChangeAmount' | 'readyToSend' | 'userAmount'>) => {
   const [userAmount, onChangeAmount] = React.useState('')
+  const {assetCode, path, onLookupPath, amount, onBack} = props
   React.useEffect(() => {
-    props.assetCode && !props.path.exchangeRate && props.onLookupPath()
-  }, [props.assetCode, props.path.exchangeRate])
+    assetCode && !path.exchangeRate && onLookupPath()
+  }, [assetCode, path.exchangeRate, onLookupPath])
   return props.loading ? (
-    <Loading onBack={props.onBack} />
+    <Loading onBack={onBack} />
   ) : (
     <SEP7Confirm
       {...props}
       onChangeAmount={onChangeAmount}
       userAmount={userAmount}
-      readyToSend={props.assetCode ? !!props.path.exchangeRate : !!props.amount || !!userAmount}
+      readyToSend={assetCode ? !!path.exchangeRate : !!amount || !!userAmount}
     />
   )
 }
 
-const styles = Styles.styleSheetCreate({
-  backButtonBox: {
-    backgroundColor: Styles.globalColors.purpleDark,
-    minHeight: 46,
-  },
-  bodyText: Styles.platformStyles({
-    common: {
-      color: Styles.globalColors.black,
-    },
-    isElectron: {wordBreak: 'break-word'},
-  }),
-  bodyTextWithIcon: {
-    marginLeft: Styles.globalMargins.tiny,
-    marginRight: Styles.globalMargins.tiny,
-  },
-  button: {
-    marginBottom: Styles.globalMargins.small,
-    marginTop: Styles.globalMargins.small,
-  },
-  buttonContainer: Styles.platformStyles({
-    common: {
-      ...Styles.padding(0, Styles.globalMargins.small),
-      alignSelf: 'flex-end',
-      flexShrink: 0,
-      justifyContent: 'space-between',
-    },
-    isElectron: {
-      borderBottomLeftRadius: Styles.borderRadius,
-      borderBottomRightRadius: Styles.borderRadius,
-      borderTopColor: Styles.globalColors.black_10,
-      borderTopStyle: 'solid',
-      borderTopWidth: 1,
-    },
-  }),
-  callbackURLBanner: {
-    backgroundColor: Styles.globalColors.blue,
-    padding: Styles.globalMargins.tiny,
-  },
-  container: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.white,
-    },
-    isElectron: {
-      borderTopLeftRadius: Styles.borderRadius,
-      borderTopRightRadius: Styles.borderRadius,
-      height: 560,
-      width: 400,
-    },
-    isMobile: {
-      flexGrow: 1,
-      flexShrink: 1,
-      maxHeight: '100%',
-      width: '100%',
-    },
-  }),
-  dialog: {
-    padding: Styles.globalMargins.large,
-  },
-  header: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.purpleDark,
-    },
-    isElectron: {
-      borderTopLeftRadius: Styles.borderRadius,
-      borderTopRightRadius: Styles.borderRadius,
-      flex: 1,
-      minHeight: 160,
-    },
-    isMobile: {
-      flexBasis: 'auto',
-      flexGrow: 1,
-      flexShrink: 1,
-      minHeight: 250,
-    },
-  }),
-  headerContent: {
-    alignItems: 'center',
-  },
-  headingText: {
-    color: Styles.globalColors.black_50,
-    marginBottom: Styles.globalMargins.xtiny,
-  },
-  memoContainer: {
-    paddingBottom: Styles.globalMargins.tiny,
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-  purpleText: Styles.platformStyles({
-    common: {color: Styles.globalColors.purple},
-  }),
-  scrollView: Styles.platformStyles({
-    common: {
-      backgroundColor: Styles.globalColors.purpleDark,
-      flexBasis: 'auto',
-      flexGrow: 1,
-      flexShrink: 1,
-    },
-    isElectron: {
-      borderTopLeftRadius: Styles.borderRadius,
-      borderTopRightRadius: Styles.borderRadius,
-      display: 'flex',
-    },
-  }),
-  scrollViewContents: {
-    backgroundColor: Styles.globalColors.white,
-    display: 'flex',
-    flexDirection: 'column',
-    flexGrow: 1,
-  },
-  sendIcon: {
-    marginTop: Styles.globalMargins.tiny,
-  },
-  stellarIcon: {
-    alignSelf: 'flex-start',
-    color: Styles.globalColors.black,
-    marginRight: Styles.globalMargins.xxtiny,
-  },
-  subHeaderText: {
-    color: Styles.globalColors.white_75,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-  verifiedIcon: Styles.platformStyles({
-    common: {
-      color: Styles.globalColors.green,
-    },
-  }),
-  verifiedIconBox: {
-    backgroundColor: Styles.globalColors.transparent,
-    marginLeft: Styles.globalMargins.xtiny,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      backButtonBox: {
+        backgroundColor: Styles.globalColors.purpleDark,
+        minHeight: 46,
+      },
+      bodyText: Styles.platformStyles({
+        common: {
+          color: Styles.globalColors.black,
+        },
+        isElectron: {wordBreak: 'break-word'} as const,
+      }),
+      bodyTextWithIcon: {
+        marginLeft: Styles.globalMargins.tiny,
+        marginRight: Styles.globalMargins.tiny,
+      },
+      button: {
+        marginBottom: Styles.globalMargins.small,
+        marginTop: Styles.globalMargins.small,
+      },
+      buttonContainer: Styles.platformStyles({
+        common: {
+          ...Styles.padding(0, Styles.globalMargins.small),
+          alignSelf: 'flex-end',
+          flexShrink: 0,
+          justifyContent: 'space-between',
+        },
+        isElectron: {
+          borderBottomLeftRadius: Styles.borderRadius,
+          borderBottomRightRadius: Styles.borderRadius,
+          borderTopColor: Styles.globalColors.black_10,
+          borderTopStyle: 'solid',
+          borderTopWidth: 1,
+        },
+      }),
+      callbackURLBanner: {
+        backgroundColor: Styles.globalColors.blue,
+        padding: Styles.globalMargins.tiny,
+      },
+      container: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.white,
+        },
+        isElectron: {
+          borderTopLeftRadius: Styles.borderRadius,
+          borderTopRightRadius: Styles.borderRadius,
+          height: 560,
+          width: 400,
+        },
+        isMobile: {
+          flexGrow: 1,
+          flexShrink: 1,
+          maxHeight: '100%',
+          width: '100%',
+        },
+      }),
+      dialog: {
+        padding: Styles.globalMargins.large,
+      },
+      header: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.purpleDark,
+        },
+        isElectron: {
+          borderTopLeftRadius: Styles.borderRadius,
+          borderTopRightRadius: Styles.borderRadius,
+          flex: 1,
+          minHeight: 160,
+        },
+        isMobile: {
+          flexBasis: 'auto',
+          flexGrow: 1,
+          flexShrink: 1,
+          minHeight: 250,
+        },
+      }),
+      headerContent: {
+        alignItems: 'center',
+      },
+      headingText: {
+        color: Styles.globalColors.black_50,
+        marginBottom: Styles.globalMargins.xtiny,
+      },
+      memoContainer: {
+        paddingBottom: Styles.globalMargins.tiny,
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      purpleText: Styles.platformStyles({
+        common: {color: Styles.globalColors.purple},
+      }),
+      scrollView: Styles.platformStyles({
+        common: {
+          backgroundColor: Styles.globalColors.purpleDark,
+          flexBasis: 'auto',
+          flexGrow: 1,
+          flexShrink: 1,
+        },
+        isElectron: {
+          borderTopLeftRadius: Styles.borderRadius,
+          borderTopRightRadius: Styles.borderRadius,
+          display: 'flex',
+        },
+      }),
+      scrollViewContents: {
+        backgroundColor: Styles.globalColors.white,
+        display: 'flex',
+        flexDirection: 'column',
+        flexGrow: 1,
+      },
+      sendIcon: {
+        marginTop: Styles.globalMargins.tiny,
+      },
+      stellarIcon: {
+        alignSelf: 'flex-start',
+        color: Styles.globalColors.black,
+        marginRight: Styles.globalMargins.xxtiny,
+      },
+      subHeaderText: {
+        color: Styles.globalColors.white_75,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      verifiedIcon: Styles.platformStyles({
+        common: {
+          color: Styles.globalColors.green,
+        },
+      }),
+      verifiedIconBox: {
+        backgroundColor: Styles.globalColors.transparent,
+        marginLeft: Styles.globalMargins.xtiny,
+      },
+    } as const)
+)
 
 export default SEP7ConfirmWrapper

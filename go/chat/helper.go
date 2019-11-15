@@ -429,7 +429,7 @@ func newRecentConversationParticipants(g *globals.Context) *recentConversationPa
 
 func (r *recentConversationParticipants) getActiveScore(ctx context.Context, conv chat1.Conversation) float64 {
 	mtime := conv.GetMtime()
-	diff := time.Now().Sub(mtime.Time())
+	diff := time.Since(mtime.Time())
 	weeksAgo := diff.Seconds() / (time.Hour.Seconds() * 24 * 7)
 	val := 10.0 - math.Pow(1.6, weeksAgo)
 	if val < 1.0 {
@@ -484,7 +484,7 @@ func PresentConversationLocalWithFetchRetry(ctx context.Context, g *globals.Cont
 				NewConversationRetry(g, conv.GetConvID(), &conv.Info.Triple.Tlfid, InboxLoad))
 		}
 	} else {
-		pc := utils.PresentConversationLocal(ctx, conv, g.Env.GetUsername().String())
+		pc := utils.PresentConversationLocal(ctx, g, uid, conv)
 		res = &pc
 	}
 	return res
@@ -799,11 +799,11 @@ func JoinConversation(ctx context.Context, g *globals.Context, debugger utils.De
 	}
 
 	if _, err = g.InboxSource.MembershipUpdate(ctx, uid, 0, []chat1.ConversationMember{
-		chat1.ConversationMember{
+		{
 			Uid:    uid,
 			ConvID: convID,
 		},
-	}, nil, nil, nil); err != nil {
+	}, nil, nil, nil, nil); err != nil {
 		debugger.Debug(ctx, "JoinConversation: failed to apply membership update: %v", err)
 	}
 	// Send a message to the channel after joining
@@ -1023,6 +1023,8 @@ func (n *newConversationHelper) create(ctx context.Context) (res chat1.Conversat
 		switch n.membersType {
 		case chat1.ConversationMembersType_TEAM:
 			n.topicName = &globals.DefaultTeamTopic
+		default:
+			// Nothing to do for other member types.
 		}
 	}
 
@@ -1100,6 +1102,8 @@ func (n *newConversationHelper) create(ctx context.Context) (res chat1.Conversat
 				}
 				n.Debug(ctx, "failed to find previous conversation on second attempt: len(convs): %d err: %s",
 					len(convs), findErr)
+			default:
+				// Nothing to do for other error types.
 			}
 			return res, err
 		}
@@ -1119,7 +1123,10 @@ func (n *newConversationHelper) create(ctx context.Context) (res chat1.Conversat
 				n.Debug(ctx, "stale topic name state, trying again")
 				if !clearedCache {
 					n.Debug(ctx, "Send: clearing inbox cache to retry stale previous state")
-					n.G().InboxSource.Clear(ctx, n.uid)
+					err := n.G().InboxSource.Clear(ctx, n.uid)
+					if err != nil {
+						n.Debug(ctx, "Send: error clearing inbox: %+v", err)
+					}
 					clearedCache = true
 				}
 				continue
@@ -1285,9 +1292,9 @@ func CreateNameInfoSource(ctx context.Context, g *globals.Context, membersType c
 	case chat1.ConversationMembersType_TEAM:
 		return NewTeamsNameInfoSource(g)
 	case chat1.ConversationMembersType_IMPTEAMNATIVE:
-		return NewImplicitTeamsNameInfoSource(g, false)
+		return NewImplicitTeamsNameInfoSource(g, membersType)
 	case chat1.ConversationMembersType_IMPTEAMUPGRADE:
-		return NewImplicitTeamsNameInfoSource(g, true)
+		return NewImplicitTeamsNameInfoSource(g, membersType)
 	}
 	g.GetLog().CDebugf(ctx, "createNameInfoSource: unknown members type, using KBFS: %v", membersType)
 	return NewKBFSNameInfoSource(g)

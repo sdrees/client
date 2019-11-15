@@ -1,6 +1,7 @@
 import * as React from 'react'
 import * as Constants from '../../constants/chat2'
 import * as Chat2Gen from '../../actions/chat2-gen'
+import * as RouteTreeGen from '../../actions/route-tree-gen'
 import * as Types from '../../constants/types/chat2'
 import * as Kb from '../../common-adapters'
 import * as Container from '../../util/container'
@@ -17,6 +18,7 @@ type SwitchProps = {
   isFocused?: boolean
   selectConversation: () => void
   deselectConversation: () => void
+  onBack: () => void
   type: 'error' | 'noConvo' | 'rekey' | 'youAreReset' | 'normal' | 'rekey'
 }
 
@@ -41,14 +43,14 @@ class Conversation extends React.PureComponent<SwitchProps> {
       case 'error':
         return <Error conversationIDKey={this.props.conversationIDKey} />
       case 'noConvo':
-        // When navigating back to the inbox on mobile, we delelect
+        // When navigating back to the inbox on mobile, we deselect
         // conversationIDKey by called mobileChangeSelection. This results in
         // the conversation view rendering "NoConversation" as it is
         // transitioning back the the inbox.
-        // On android this is very noticable because transitions fade between
+        // On android this is very noticeable because transitions fade between
         // screens, so "NoConversation" will appear on top of the inbox for
         // approximately 150ms.
-        // On iOS it is less noticable because screen transitions slide away to
+        // On iOS it is less noticeable because screen transitions slide away to
         // the right, though it is visible for a small amount of time.
         // To solve this we render a blank screen on mobile conversation views with "noConvo"
         return Container.isMobile ? null : <NoConversation />
@@ -62,11 +64,11 @@ class Conversation extends React.PureComponent<SwitchProps> {
           </>
         )
       case 'youAreReset':
-        return <YouAreReset />
+        return <YouAreReset onBack={this.props.onBack} />
       case 'rekey':
         return <Rekey conversationIDKey={this.props.conversationIDKey} />
       default:
-        return <NoConversation />
+        return <NoConversation onBack={this.props.onBack} />
     }
   }
 }
@@ -90,6 +92,7 @@ export default Container.connect(
       dispatch(Chat2Gen.createDeselectConversation({ifConversationIDKey})),
     _selectConversation: conversationIDKey =>
       dispatch(Chat2Gen.createSelectConversation({conversationIDKey, reason: 'focused'})),
+    onBack: () => dispatch(RouteTreeGen.createNavigateUp()),
   }),
   (stateProps, dispatchProps, _: OwnProps) => {
     let type
@@ -115,6 +118,7 @@ export default Container.connect(
         stateProps._storeConvoIDKey !== stateProps.conversationIDKey
           ? () => {}
           : () => dispatchProps._deselectConversation(stateProps.conversationIDKey),
+      onBack: dispatchProps.onBack,
       selectConversation:
         stateProps._storeConvoIDKey === stateProps.conversationIDKey
           ? () => {} // ignore if already selected or pending

@@ -10,7 +10,6 @@ import (
 
 	"encoding/hex"
 
-	"github.com/keybase/client/go/badges"
 	"github.com/keybase/client/go/chat/commands"
 	"github.com/keybase/client/go/chat/globals"
 	"github.com/keybase/client/go/chat/search"
@@ -24,6 +23,7 @@ import (
 	"github.com/keybase/client/go/protocol/chat1"
 	"github.com/keybase/client/go/protocol/gregor1"
 	"github.com/keybase/client/go/protocol/keybase1"
+	"github.com/keybase/client/go/teambot"
 	"github.com/keybase/client/go/teams"
 	"github.com/stretchr/testify/require"
 	context "golang.org/x/net/context"
@@ -41,7 +41,9 @@ type chatListener struct {
 	failing        chan []chat1.OutboxRecord
 	identifyUpdate chan keybase1.CanonicalTLFNameAndIDWithBreaks
 	inboxStale     chan struct{}
+	convUpdate     chan chat1.ConversationID
 	threadsStale   chan []chat1.ConversationStaleUpdate
+
 	bgConvLoads    chan chat1.ConversationID
 	typingUpdate   chan []chat1.ConvTypingUpdate
 	inboxSynced    chan chat1.ChatSyncResult
@@ -58,6 +60,13 @@ func (n *chatListener) ChatInboxStale(uid keybase1.UID) {
 	case n.inboxStale <- struct{}{}:
 	case <-time.After(5 * time.Second):
 		panic("timeout on the inbox stale channel")
+	}
+}
+func (n *chatListener) ChatConvUpdate(uid keybase1.UID, convID chat1.ConversationID) {
+	select {
+	case n.convUpdate <- convID:
+	case <-time.After(5 * time.Second):
+		panic("timeout on the threads stale channel")
 	}
 }
 func (n *chatListener) ChatThreadsStale(uid keybase1.UID, updates []chat1.ConversationStaleUpdate) {
@@ -118,9 +127,7 @@ func (n *chatListener) NewChatActivity(uid keybase1.UID, activity chat1.ChatActi
 			}
 		case chat1.ChatActivityType_FAILED_MESSAGE:
 			var rmsg []chat1.OutboxRecord
-			for _, obr := range activity.FailedMessage().OutboxRecords {
-				rmsg = append(rmsg, obr)
-			}
+			rmsg = append(rmsg, activity.FailedMessage().OutboxRecords...)
 			select {
 			case n.failing <- rmsg:
 			case <-time.After(5 * time.Second):
@@ -139,6 +146,16 @@ func (n *chatListener) consumeEphemeralPurge(t *testing.T) chat1.EphemeralPurgeN
 	case <-time.After(20 * time.Second):
 		require.Fail(t, "failed to get ephemeralPurge notification")
 		return chat1.EphemeralPurgeNotifInfo{}
+	}
+}
+
+func (n *chatListener) consumeConvUpdate(t *testing.T) chat1.ConversationID {
+	select {
+	case x := <-n.convUpdate:
+		return x
+	case <-time.After(20 * time.Second):
+		require.Fail(t, "failed to get conv update notification")
+		return nil
 	}
 }
 
@@ -186,6 +203,9 @@ func NewChatMockWorld(t *testing.T, name string, numUsers int) (world *kbtest.Ch
 		teams.ServiceInit(w.G)
 		mctx := libkb.NewMetaContextTODO(w.G)
 		ephemeral.ServiceInit(mctx)
+		err := mctx.G().GetEKLib().KeygenIfNeeded(mctx)
+		require.NoError(t, err)
+		teambot.ServiceInit(mctx)
 		contacts.ServiceInit(w.G)
 	}
 	return res
@@ -231,6 +251,7 @@ func setupTest(t *testing.T, numUsers int) (context.Context, *kbtest.ChatMockWor
 		failing:        make(chan []chat1.OutboxRecord, 100),
 		identifyUpdate: make(chan keybase1.CanonicalTLFNameAndIDWithBreaks, 10),
 		inboxStale:     make(chan struct{}, 1),
+		convUpdate:     make(chan chat1.ConversationID, 10),
 		threadsStale:   make(chan []chat1.ConversationStaleUpdate, 10),
 		bgConvLoads:    make(chan chat1.ConversationID, 10),
 		typingUpdate:   make(chan []chat1.ConvTypingUpdate, 10),
@@ -242,7 +263,7 @@ func setupTest(t *testing.T, numUsers int) (context.Context, *kbtest.ChatMockWor
 	g.CtxFactory = NewCtxFactory(g)
 	g.ConvSource = NewHybridConversationSource(g, boxer, chatStorage, getRI)
 	chatStorage.SetAssetDeleter(g.ConvSource)
-	g.InboxSource = NewHybridInboxSource(g, badges.NewBadger(g.ExternalG()), getRI)
+	g.InboxSource = NewHybridInboxSource(g, getRI)
 	g.InboxSource.Start(context.TODO(), uid)
 	g.InboxSource.Connected(context.TODO())
 	g.ServerCacheVersions = storage.NewServerVersions(g)
@@ -295,13 +316,16 @@ func setupTest(t *testing.T, numUsers int) (context.Context, *kbtest.ChatMockWor
 	g.Indexer = indexer
 	g.AttachmentURLSrv = types.DummyAttachmentHTTPSrv{}
 	g.Unfurler = types.DummyUnfurler{}
+	g.AttachmentUploader = types.DummyAttachmentUploader{}
 	g.StellarLoader = types.DummyStellarLoader{}
 	g.StellarSender = types.DummyStellarSender{}
 	g.TeamMentionLoader = types.DummyTeamMentionLoader{}
+	g.JourneyCardManager = NewJourneyCardManager(g)
 	g.BotCommandManager = types.DummyBotCommandManager{}
 	g.CommandsSource = commands.NewSource(g)
 	g.CoinFlipManager = NewFlipManager(g, getRI)
 	g.CoinFlipManager.Start(context.TODO(), uid)
+	g.UIInboxLoader = types.DummyUIInboxLoader{}
 
 	return ctx, world, ri, sender, baseSender, &listener
 }
@@ -354,7 +378,7 @@ func checkThread(t *testing.T, thread chat1.ThreadView, ref []sentRecord) {
 			t.Logf("msgID: ref: %d actual: %d", *ref[rindex].msgID, thread.Messages[index].GetMessageID())
 			require.NotZero(t, msg.GetMessageID(), "missing message ID")
 			require.Equal(t, *ref[rindex].msgID, msg.GetMessageID(), "invalid message ID")
-		} else if ref[index].outboxID != nil {
+		} else if ref[rindex].outboxID != nil {
 			t.Logf("obID: ref: %s actual: %s",
 				hex.EncodeToString(*ref[rindex].outboxID),
 				hex.EncodeToString(msg.Outbox().OutboxID))
@@ -437,7 +461,6 @@ func TestNonblockTimer(t *testing.T) {
 		obid := obr.OutboxID
 		t.Logf("generated obid: %s prev: %d", hex.EncodeToString(obid), msgID)
 		require.NoError(t, err)
-		sentRef = append(sentRef, sentRecord{outboxID: &obid})
 		obids = append(obids, obid)
 	}
 
@@ -471,6 +494,12 @@ func TestNonblockTimer(t *testing.T) {
 		msgID := msgBoxed.GetMessageID()
 		t.Logf("generated msgID: %d", msgID)
 		sentRef = append(sentRef, sentRecord{msgID: &msgID})
+	}
+
+	// Push the outbox records to the front of the thread.
+	for _, o := range obids {
+		obid := o
+		sentRef = append(sentRef, sentRecord{outboxID: &obid})
 	}
 
 	// Check get thread, make sure it makes sense
@@ -1417,7 +1446,7 @@ func TestPairwiseMACChecker(t *testing.T) {
 		require.Error(t, err)
 		require.IsType(t, libkb.EphemeralPairwiseMACsMissingUIDsError{}, err)
 		merr := err.(libkb.EphemeralPairwiseMACsMissingUIDsError)
-		require.Equal(t, []keybase1.UID{keybase1.UID(uid2)}, merr.UIDs)
+		require.Equal(t, []keybase1.UID{uid2}, merr.UIDs)
 
 		// Bogus recipients, both uids are missing
 		pairwiseMACRecipients = []keybase1.KID{"012141487209e42c6b39f7d9bcbda02a8e8045e4bcab10b571a5fa250ae72012bd3f0a"}
@@ -1432,7 +1461,7 @@ func TestPairwiseMACChecker(t *testing.T) {
 		require.IsType(t, libkb.EphemeralPairwiseMACsMissingUIDsError{}, err)
 		merr = err.(libkb.EphemeralPairwiseMACsMissingUIDsError)
 		sortUIDs := func(uids []keybase1.UID) { sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] }) }
-		expectedUIDs := []keybase1.UID{keybase1.UID(uid1), keybase1.UID(uid2)}
+		expectedUIDs := []keybase1.UID{uid1, uid2}
 		sortUIDs(expectedUIDs)
 		sortUIDs(merr.UIDs)
 		require.Equal(t, expectedUIDs, merr.UIDs)
@@ -1477,8 +1506,10 @@ func TestPairwiseMACChecker(t *testing.T) {
 		require.NoError(t, users[0].Login(tc1.G))
 
 		// Nuke caches so we're forced to reload the deleted user
-		tc1.G.LocalDb.Nuke()
-		tc1.G.LocalChatDb.Nuke()
+		_, err = tc1.G.LocalDb.Nuke()
+		require.NoError(t, err)
+		_, err = tc1.G.LocalChatDb.Nuke()
+		require.NoError(t, err)
 
 		text3 := "hi3"
 		msg3 := textMsgWithSender(t, text3, uid1.ToBytes(), chat1.MessageBoxedVersion_V3)
@@ -1488,8 +1519,10 @@ func TestPairwiseMACChecker(t *testing.T) {
 		_, _, err = blockingSender1.Send(ctx1, conv.Id, msg3, 0, nil, nil, nil)
 		require.NoError(t, err)
 
-		tc1.G.LocalDb.Nuke()
-		tc1.G.LocalChatDb.Nuke()
+		_, err = tc1.G.LocalDb.Nuke()
+		require.NoError(t, err)
+		_, err = tc1.G.LocalChatDb.Nuke()
+		require.NoError(t, err)
 
 		tv, err = tc1.Context().ConvSource.Pull(ctx1, conv.Id, uid1.ToBytes(), chat1.GetThreadReason_GENERAL, nil, nil)
 		require.NoError(t, err)
@@ -1575,8 +1608,8 @@ func TestProcessDuplicateReactionMsgs(t *testing.T) {
 	txtMsg := texts[0]
 	expectedReactionMap := chat1.ReactionMap{
 		Reactions: map[string]map[string]chat1.Reaction{
-			":+1:": map[string]chat1.Reaction{
-				u.Username: chat1.Reaction{
+			":+1:": {
+				u.Username: {
 					ReactionMsgID: *sentRef[len(sentRef)-1].msgID,
 				},
 			},
@@ -1625,7 +1658,6 @@ func TestProcessDuplicateReactionMsgs(t *testing.T) {
 		obid := obr.OutboxID
 		t.Logf("generated obid: %s prev: %d", hex.EncodeToString(obid), msgID)
 		require.NoError(t, err)
-		sentRef = append(sentRef, sentRecord{outboxID: &obid})
 		obids = append(obids, obid)
 	}
 

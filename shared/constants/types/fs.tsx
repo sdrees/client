@@ -2,12 +2,10 @@ import * as I from 'immutable'
 import * as RPCTypes from './rpc-gen'
 import * as ChatTypes from './chat2'
 import * as Devices from './devices'
-import * as TeamsTypes from '../../constants/types/teams'
+import * as TeamsTypes from './teams'
 // TODO importing FsGen causes an import loop
 import * as FsGen from '../../actions/fs-gen'
 import * as EngineGen from '../../actions/engine-gen-gen'
-import {IconType} from '../../common-adapters/icon.constants'
-import {TextType} from '../../common-adapters/text'
 import {isWindows} from '../platform'
 import {memoize} from '../../util/memoize'
 // lets not create cycles in flow, lets discuss how to fix this
@@ -27,13 +25,12 @@ export enum ProgressType {
 }
 
 // not naming Error because it has meaning in js.
-export type _FsError = {
+export type FsError = {
   time: number
   errorMessage: string
   erroredAction: FsGen.Actions | EngineGen.Actions
-  retriableAction?: FsGen.Actions | EngineGen.Actions | null
+  retriableAction?: FsGen.Actions | EngineGen.Actions
 }
-export type FsError = I.RecordOf<_FsError>
 
 export type Device = {
   type: Devices.DeviceType
@@ -59,27 +56,46 @@ export enum TlfType {
   Team = 'team',
 }
 
+export const getTlfTypePathFromTlfType = (tlfType: TlfType): Path => {
+  switch (tlfType) {
+    case TlfType.Public:
+      return '/keybase/public'
+    case TlfType.Private:
+      return '/keybase/private'
+    case TlfType.Team:
+      return '/keybase/team'
+  }
+}
+
+export const getTlfTypeFromPath = (path: Path): undefined | TlfType => {
+  const str = pathToString(path)
+  return str.startsWith('/keybase/private')
+    ? TlfType.Private
+    : str.startsWith('/keybase/public')
+    ? TlfType.Public
+    : str.startsWith('/keybase/team')
+    ? TlfType.Team
+    : undefined
+}
+
 export enum TlfSyncMode {
   Enabled = 'enabled',
   Disabled = 'disabled',
   Partial = 'partial',
 }
 
-export type _TlfSyncEnabled = {
+export type TlfSyncEnabled = {
   mode: TlfSyncMode.Enabled
 }
-export type TlfSyncEnabled = I.RecordOf<_TlfSyncEnabled>
 
-export type _TlfSyncDisabled = {
+export type TlfSyncDisabled = {
   mode: TlfSyncMode.Disabled
 }
-export type TlfSyncDisabled = I.RecordOf<_TlfSyncDisabled>
 
-export type _TlfSyncPartial = {
+export type TlfSyncPartial = {
   mode: TlfSyncMode.Partial
-  enabledPaths: I.List<Path>
+  enabledPaths: Array<Path>
 }
-export type TlfSyncPartial = I.RecordOf<_TlfSyncPartial>
 
 export type TlfSyncConfig = TlfSyncEnabled | TlfSyncDisabled | TlfSyncPartial
 
@@ -88,31 +104,27 @@ export enum ConflictStateType {
   ManualResolvingLocalView = 'manual-resolving-local-view',
 }
 
-export type _ConflictStateNormalView = {
-  localViewTlfPaths: I.List<Path>
+export type ConflictStateNormalView = {
+  localViewTlfPaths: Array<Path>
   resolvingConflict: boolean
   stuckInConflict: boolean
   type: ConflictStateType.NormalView
 }
-export type ConflictStateNormalView = I.RecordOf<_ConflictStateNormalView>
 
-export type _ConflictStateManualResolvingLocalView = {
+export type ConflictStateManualResolvingLocalView = {
   normalViewTlfPath: Path
   type: ConflictStateType.ManualResolvingLocalView
 }
-export type ConflictStateManualResolvingLocalView = I.RecordOf<_ConflictStateManualResolvingLocalView>
 
 export type ConflictState = ConflictStateNormalView | ConflictStateManualResolvingLocalView
 
-export type _Tlf = {
+export type Tlf = {
   conflictState: ConflictState
   isFavorite: boolean
   isIgnored: boolean
   isNew: boolean
   name: string
-  resetParticipants: I.List<string> // usernames
-  // TODO: when we move this stuff into SimpleFS, this should no longer need
-  //  to be nullable
+  resetParticipants: Array<string> // usernames
   syncConfig: TlfSyncConfig
   teamId: RPCTypes.TeamID
   tlfMtime: number // tlf mtime stored in core db based on notification from mdserver
@@ -132,18 +144,27 @@ export type _Tlf = {
    * youCanUnlock?: I.List<Device>
    */
 }
-export type Tlf = I.RecordOf<_Tlf>
 
 // name -> Tlf
-export type TlfList = I.Map<string, Tlf>
+export type TlfList = Map<string, Tlf>
 
-export type _Tlfs = {
+export type Tlfs = {
+  // additionalTlfs includes Tlfs that we care about but are not in one of
+  // private, public, team. This could include Tlfs that are referenced by
+  // non-preferred paths, such as /keybase/private/me,z,a or
+  // /keybase/private/a,me, or /keybase/private/me@twitter.
+  //
+  // Note that this is orthogonal to the TLFs added to fav list that are just
+  // for conflict resolutions.
+  //
+  // additionalTlfs should always have lower-priority than the three lists
+  // (private, public, team). In other words, check those first.
+  additionalTlfs: Map<Path, Tlf>
   loaded: boolean
   private: TlfList
   public: TlfList
   team: TlfList
 }
-export type Tlfs = I.RecordOf<_Tlfs>
 
 export enum PathKind {
   Root = 'root',
@@ -215,24 +236,21 @@ export enum PrefetchState {
   Complete = 'complete',
 }
 
-export type _PrefetchNotStarted = {
+export type PrefetchNotStarted = {
   state: PrefetchState.NotStarted
 }
-export type PrefetchNotStarted = I.RecordOf<_PrefetchNotStarted>
 
-export type _PrefetchInProgress = {
+export type PrefetchInProgress = {
   state: PrefetchState.InProgress
   startTime: number
   endEstimate: number
   bytesTotal: number
   bytesFetched: number
 }
-export type PrefetchInProgress = I.RecordOf<_PrefetchInProgress>
 
-export type _PrefetchComplete = {
+export type PrefetchComplete = {
   state: PrefetchState.Complete
 }
-export type PrefetchComplete = I.RecordOf<_PrefetchComplete>
 
 export type PrefetchStatus = PrefetchNotStarted | PrefetchInProgress | PrefetchComplete
 
@@ -245,48 +263,44 @@ type _PathItemMetadata = {
   prefetchStatus: PrefetchStatus
 }
 
-export type _FolderPathItem = {
+export type FolderPathItem = {
   type: PathType.Folder
-  children: I.Set<string>
+  children: Set<string>
   progress: ProgressType
 } & _PathItemMetadata
-export type FolderPathItem = I.RecordOf<_FolderPathItem>
 
-export type _SymlinkPathItem = {
+export type SymlinkPathItem = {
   type: PathType.Symlink
   linkTarget: string
 } & _PathItemMetadata
-export type SymlinkPathItem = I.RecordOf<_SymlinkPathItem>
 
-export type _Mime = {
-  mimeType: string
-  displayPreview: boolean
-}
-export type Mime = I.RecordOf<_Mime>
-
-export type _FilePathItem = {
+export type FilePathItem = {
   type: PathType.File
-  mimeType: Mime | null
 } & _PathItemMetadata
-export type FilePathItem = I.RecordOf<_FilePathItem>
 
-export type _UnknownPathItem = {
+export type UnknownPathItem = {
   type: PathType.Unknown
 } & _PathItemMetadata
-export type UnknownPathItem = I.RecordOf<_UnknownPathItem>
 
 export type PathItem = FolderPathItem | SymlinkPathItem | FilePathItem | UnknownPathItem
 
-export enum SyncStatusStatic {
+export enum UploadIcon {
+  AwaitingToUpload = 'awaiting-to-upload', // has local changes but we're offline
+  Uploading = 'uploading', // flushing or writing into journal and we're online
+  UploadingStuck = 'uploading-stuck', // flushing or writing into journal but we are stuck in conflict resolution
+}
+
+export enum NonUploadStaticSyncStatus {
   Unknown = 'unknown', // trying to figure out what it is
   AwaitingToSync = 'awaiting-to-sync', // sync enabled but we're offline
-  AwaitingToUpload = 'awaiting-to-upload', // has local changes but we're offline
   OnlineOnly = 'online-only', // sync disabled
   Synced = 'synced', // sync enabled and fully synced
   SyncError = 'sync-error', // uh oh
-  Uploading = 'uploading', // flushing or writing into journal and we're online
 }
-export type SyncStatus = SyncStatusStatic | number // percentage<1. not uploading, and we're syncing down
+export type SyncStatusStatic = UploadIcon | NonUploadStaticSyncStatus
+export const LocalConflictStatus = 'local-conflict'
+export type LocalConflictStatus = typeof LocalConflictStatus
+export type PathStatusIcon = LocalConflictStatus | SyncStatusStatic | number // percentage<1. not uploading, and we're syncing down
 
 export type EditID = string
 export enum EditType {
@@ -298,14 +312,13 @@ export enum EditStatusType {
   Failed = 'failed',
 }
 
-export type _NewFolder = {
+export type NewFolder = {
   type: EditType.NewFolder
   parentPath: Path
   name: string
   hint: string
   status: EditStatusType
 }
-export type NewFolder = I.RecordOf<_NewFolder>
 
 export type Edit = NewFolder
 
@@ -316,10 +329,9 @@ export enum SortSetting {
   TimeDesc = 'time-desc',
 }
 
-export type _PathUserSetting = {
+export type PathUserSetting = {
   sort: SortSetting
 }
-export type PathUserSetting = I.RecordOf<_PathUserSetting>
 
 export type LocalPath = string
 
@@ -329,41 +341,35 @@ export enum DownloadIntent {
   Share = 'share',
 }
 
-export type _DownloadMeta = {
-  entryType: PathType
-  intent: DownloadIntent
-  path: Path
-  localPath: LocalPath
-  opID: RPCTypes.OpID
-}
-export type DownloadMeta = I.RecordOf<_DownloadMeta>
-
-export type _DownloadState = {
+export type DownloadState = {
   canceled: boolean
-  completePortion: number
-  endEstimate?: number
-  error?: FsError
-  isDone: boolean
-  startedAt: number
+  done: boolean
+  endEstimate: number
+  error: string
+  localPath: string
+  progress: number
 }
-export type DownloadState = I.RecordOf<_DownloadState>
 
-export type _Download = {
-  meta: DownloadMeta
-  state: DownloadState
+export type DownloadInfo = {
+  filename: string
+  isRegularDownload: boolean
+  path: Path
+  startTime: number
 }
-export type Download = I.RecordOf<_Download>
 
-export type Downloads = I.Map<string, Download>
+export type Downloads = {
+  info: Map<string, DownloadInfo>
+  regularDownloads: Array<string>
+  state: Map<string, DownloadState>
+}
 
-export type _Uploads = {
-  writingToJournal: I.Set<Path>
-  errors: I.Map<Path, FsError>
+export type Uploads = {
+  writingToJournal: Set<Path>
+  errors: Map<Path, FsError>
   totalSyncingBytes: number
   endEstimate?: number
-  syncingPaths: I.Set<Path>
+  syncingPaths: Set<Path>
 }
-export type Uploads = I.RecordOf<_Uploads>
 
 // 'both' is only supported on macOS
 export enum OpenDialogType {
@@ -377,12 +383,6 @@ export enum MobilePickType {
   Mixed = 'mixed',
 }
 
-export type _LocalHTTPServer = {
-  address: string
-  token: string
-}
-export type LocalHTTPServer = I.RecordOf<_LocalHTTPServer>
-
 export enum FileEditType {
   Created = 'created',
   Modified = 'modified',
@@ -391,28 +391,24 @@ export enum FileEditType {
   Unknown = 'unknown',
 }
 
-export type _TlfEdit = {
+export type TlfEdit = {
   filename: string
   serverTime: number
   editType: FileEditType
 }
 
-export type TlfEdit = I.RecordOf<_TlfEdit>
-
-export type _TlfUpdate = {
+export type TlfUpdate = {
   path: Path
   writer: string
   serverTime: number
-  history: I.List<TlfEdit>
+  history: Array<TlfEdit>
 }
 
-export type TlfUpdate = I.RecordOf<_TlfUpdate>
+export type UserTlfUpdates = Array<TlfUpdate>
 
-export type UserTlfUpdates = I.List<TlfUpdate>
+export type PathItems = Map<Path, PathItem>
 
-export type PathItems = I.Map<Path, PathItem>
-
-export type Edits = I.Map<EditID, Edit>
+export type Edits = Map<EditID, Edit>
 
 export enum DestinationPickerSource {
   None = 'none',
@@ -420,36 +416,29 @@ export enum DestinationPickerSource {
   IncomingShare = 'incoming-share',
 }
 
-export type _MoveOrCopySource = {
+export type MoveOrCopySource = {
   type: DestinationPickerSource.MoveOrCopy
   path: Path
 }
-export type MoveOrCopySource = I.RecordOf<_MoveOrCopySource>
 
-export type _IncomingShareSource = {
+export type IncomingShareSource = {
   type: DestinationPickerSource.IncomingShare
   localPath: LocalPath
 }
 
-export type IncomingShareSource = I.RecordOf<_IncomingShareSource>
-
-export type _NoSource = {
+export type NoSource = {
   type: DestinationPickerSource.None
 }
 
-export type NoSource = I.RecordOf<_NoSource>
-
-export type _DestinationPicker = {
+export type DestinationPicker = {
   // id -> Path mapping. This is useful for mobile when we have multiple layers
   // stacked on top of each other, and we need to keep track of them for the
   // back button. We don't put this in routeProps directly as that'd
   // complicate stuff for desktop because we don't have something like a
   // routeToSibling.
-  destinationParentPath: I.List<Path>
+  destinationParentPath: Array<Path>
   source: MoveOrCopySource | IncomingShareSource | NoSource
 }
-
-export type DestinationPicker = I.RecordOf<_DestinationPicker>
 
 export enum SendAttachmentToChatState {
   None = 'none',
@@ -458,38 +447,13 @@ export enum SendAttachmentToChatState {
   Sent = 'sent',
 }
 
-export type _SendAttachmentToChat = {
+export type SendAttachmentToChat = {
   convID: ChatTypes.ConversationIDKey
   filter: string
   path: Path
   state: SendAttachmentToChatState
   title: string
 }
-export type SendAttachmentToChat = I.RecordOf<_SendAttachmentToChat>
-
-export enum SendLinkToChatState {
-  None = 'none',
-  // when the modal is just shown and we don't know the convID(s) yet
-  LocatingConversation = 'locating-conversation',
-  // only applicable to big teams with multiple channels
-  PendingSelectConversation = 'pending-select-conversation',
-  // possibly without a convID, in which case we'll create it
-  ReadyToSend = 'ready-to-send',
-  Sending = 'sending',
-  Sent = 'sent',
-}
-
-export type _SendLinkToChat = {
-  // populated for teams only
-  channels: I.Map<ChatTypes.ConversationIDKey, string>
-  // This is the convID that we are sending into. So for group chats or small
-  // teams, this is the conversation. For big teams, this is the selected
-  // channel.
-  convID: ChatTypes.ConversationIDKey
-  path: Path
-  state: SendLinkToChatState
-}
-export type SendLinkToChat = I.RecordOf<_SendLinkToChat>
 
 export enum PathItemActionMenuView {
   Root = 'root',
@@ -497,33 +461,31 @@ export enum PathItemActionMenuView {
   ConfirmSaveMedia = 'confirm-save-media',
   ConfirmSendToOtherApp = 'confirm-send-to-other-app',
 }
-export type _PathItemActionMenu = {
-  view: PathItemActionMenuView
+export type PathItemActionMenu = {
+  downloadID: string | null
+  downloadIntent: DownloadIntent | null
   previousView: PathItemActionMenuView
-  downloadKey: string | null
+  view: PathItemActionMenuView
 }
-export type PathItemActionMenu = I.RecordOf<_PathItemActionMenu>
 
 export enum DriverStatusType {
   Unknown = 'unknown',
   Disabled = 'disabled',
   Enabled = 'enabled',
 }
-export type _DriverStatusUnknown = {
+export type DriverStatusUnknown = {
   type: DriverStatusType.Unknown
 }
-export type DriverStatusUnknown = I.RecordOf<_DriverStatusUnknown>
 
-export type _DriverStatusDisabled = {
+export type DriverStatusDisabled = {
   type: DriverStatusType.Disabled
   isEnabling: boolean
   isDismissed: boolean
   // macOS only
   kextPermissionError: boolean
 }
-export type DriverStatusDisabled = I.RecordOf<_DriverStatusDisabled>
 
-export type _DriverStatusEnabled = {
+export type DriverStatusEnabled = {
   type: DriverStatusType.Enabled
   isDisabling: boolean
   isNew: boolean
@@ -531,17 +493,17 @@ export type _DriverStatusEnabled = {
   dokanOutdated: boolean
   dokanUninstallExecPath?: string | null
 }
-export type DriverStatusEnabled = I.RecordOf<_DriverStatusEnabled>
 
 export type DriverStatus = DriverStatusUnknown | DriverStatusDisabled | DriverStatusEnabled
 
-export type _SystemFileManagerIntegration = {
+export type SystemFileManagerIntegration = {
+  directMountDir: string
   driverStatus: DriverStatus
+  preferredMountDirs: Array<string>
   // This only controls if system-file-manager-integration-banner is shown in
   // Folders view. The banner always shows in Settings/Files screen.
   showingBanner: boolean
 }
-export type SystemFileManagerIntegration = I.RecordOf<_SystemFileManagerIntegration>
 
 export enum KbfsDaemonRpcStatus {
   Unknown = 'unknown',
@@ -554,26 +516,24 @@ export enum KbfsDaemonOnlineStatus {
   Offline = 'offline',
   Online = 'online',
 }
-export type _KbfsDaemonStatus = {
+export type KbfsDaemonStatus = {
   rpcStatus: KbfsDaemonRpcStatus
   onlineStatus: KbfsDaemonOnlineStatus
 }
-export type KbfsDaemonStatus = I.RecordOf<_KbfsDaemonStatus>
 
-export type _SyncingFoldersProgress = {
+export type SyncingFoldersProgress = {
   bytesFetched: number
   bytesTotal: number
   endEstimate: number
   start: number
 }
-export type SyncingFoldersProgress = I.RecordOf<_SyncingFoldersProgress>
 
 export enum DiskSpaceStatus {
   Ok = 'ok',
   Warning = 'warning',
   Error = 'error',
 }
-export type _OverallSyncStatus = {
+export type OverallSyncStatus = {
   syncingFoldersProgress: SyncingFoldersProgress
   diskSpaceStatus: DiskSpaceStatus
   // showingBanner tracks whether we need to show the banner.
@@ -581,41 +541,49 @@ export type _OverallSyncStatus = {
   // in the state since the user can dismiss it.
   showingBanner: boolean
 }
-export type OverallSyncStatus = I.RecordOf<_OverallSyncStatus>
 
 export enum SoftError {
   NoAccess = 'no-access',
   Nonexistent = 'non-existent',
 }
 
-export type _SoftErrors = {
-  pathErrors: I.Map<Path, SoftError>
-  tlfErrors: I.Map<Path, SoftError>
+export type SoftErrors = {
+  pathErrors: Map<Path, SoftError>
+  tlfErrors: Map<Path, SoftError>
 }
-export type SoftErrors = I.RecordOf<_SoftErrors>
 
-export type _Settings = {
+export type Settings = {
   spaceAvailableNotificationThreshold: number
   isLoading: boolean
 }
 
-export type Settings = I.RecordOf<_Settings>
+export type PathInfo = {
+  deeplinkPath: string
+  platformAfterMountPath: string
+}
 
-export type _State = {
+export type FileContext = {
+  contentType: string
+  viewType: RPCTypes.GUIViewType
+  url: string
+}
+
+export type State = {
+  badge: RPCTypes.FilesTabBadge
   destinationPicker: DestinationPicker
   downloads: Downloads
   edits: Edits
-  errors: I.Map<string, FsError>
-  folderViewFilter: string
+  errors: Map<string, FsError>
+  fileContext: Map<Path, FileContext>
+  folderViewFilter: string | null // on mobile, '' is exapnded empty, null is unexpanded
   kbfsDaemonStatus: KbfsDaemonStatus
   lastPublicBannerClosedTlf: string
-  localHTTPServerInfo: LocalHTTPServer
   overallSyncStatus: OverallSyncStatus
   pathItemActionMenu: PathItemActionMenu
   pathItems: PathItems
-  pathUserSettings: I.Map<Path, PathUserSetting>
+  pathInfos: Map<Path, PathInfo>
+  pathUserSettings: Map<Path, PathUserSetting>
   sendAttachmentToChat: SendAttachmentToChat
-  sendLinkToChat: SendLinkToChat
   settings: Settings
   sfmi: SystemFileManagerIntegration
   softErrors: SoftErrors
@@ -623,7 +591,6 @@ export type _State = {
   tlfs: Tlfs
   uploads: Uploads
 }
-export type State = I.RecordOf<_State>
 
 export type Visibility = TlfType | null
 
@@ -761,38 +728,6 @@ export const getLocalPathDir = (p: LocalPath): string => p.slice(0, p.lastIndexO
 export const getNormalizedLocalPath = (p: LocalPath): LocalPath =>
   localSep === '\\' ? p.replace(/\\/g, '/') : p
 
-export enum PathItemIconType {
-  TeamAvatar = 'team-avatar',
-  Avatar = 'avatar',
-  Avatars = 'avatars',
-  Basic = 'basic',
-}
-
-export type PathItemIconSpec =
-  | {
-      type: PathItemIconType.TeamAvatar
-      teamName: string
-    }
-  | {
-      type: PathItemIconType.Avatar
-      username: string
-    }
-  | {
-      type: PathItemIconType.Avatars
-      usernames: Array<string>
-    }
-  | {
-      type: PathItemIconType.Basic
-      iconType: IconType
-      iconColor: string
-    }
-
-export type ItemStyles = {
-  iconSpec: PathItemIconSpec
-  textColor: string
-  textType: TextType
-}
-
 export type PathBreadcrumbItem = {
   isTeamTlf: boolean
   isLastItem: boolean
@@ -828,8 +763,7 @@ export type FavoriteFolder = {
 export enum FileViewType {
   Text = 'text',
   Image = 'image',
-  Audio = 'audio',
-  Video = 'video',
+  Av = 'av',
   Pdf = 'pdf',
   Default = 'default',
 }
@@ -841,13 +775,10 @@ export type ResetMetadata = {
   resetParticipants: Array<string>
 }
 
-export enum PathItemBadgeType {
-  Upload = 'upload',
+export enum NonUploadPathItemBadgeType {
   Download = 'download',
-  New = 'new',
-  Rekey = 'rekey',
 }
-export type PathItemBadge = PathItemBadgeType | number
+export type PathItemBadge = UploadIcon | NonUploadPathItemBadgeType | number
 
 export enum ResetBannerNoOthersType {
   None = 'none',

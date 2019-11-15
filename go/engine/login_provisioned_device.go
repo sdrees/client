@@ -73,7 +73,8 @@ func (e *LoginProvisionedDevice) loadMe(m libkb.MetaContext) (err error) {
 
 	var config *libkb.UserConfig
 	var nu libkb.NormalizedUsername
-	loadUserArg := libkb.NewLoadUserArgWithMetaContext(m).WithPublicKeyOptional().WithForcePoll(true)
+	loadUserArg := libkb.NewLoadUserArgWithMetaContext(m).
+		WithPublicKeyOptional().WithForcePoll(true).WithStaleOK(true)
 	if len(e.username) == 0 {
 		m.Debug("| using current username")
 		config, err = m.G().Env.GetConfig().GetUserConfig()
@@ -266,7 +267,10 @@ func (e *LoginProvisionedDevice) run(m libkb.MetaContext) (err error) {
 		return err
 	}
 
-	e.runBug3964Repairman(m)
+	err = e.runBug3964Repairman(m)
+	if err != nil {
+		m.Debug("couldn't run bug 3964 repairman: %+v", err)
+	}
 
 	success, err = e.reattemptUnlock(m)
 	if err != nil {

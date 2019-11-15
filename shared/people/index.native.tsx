@@ -3,7 +3,7 @@ import * as Kb from '../common-adapters/mobile.native'
 import {PeoplePageList} from './index.shared'
 import {Props} from '.'
 import {globalStyles, styleSheetCreate} from '../styles'
-import ProfileSearch from '../profile/search/bar-container'
+import ProfileSearch from '../profile/search/bar'
 import ff from '../util/feature-flags.native'
 
 export const Header = (props: Props) => (
@@ -29,16 +29,12 @@ export const Header = (props: Props) => (
 )
 
 const People = (props: Props) => (
-  <>
-    <Kb.ScrollView
-      style={styles.scrollView}
-      refreshControl={
-        <Kb.NativeRefreshControl refreshing={props.waiting} onRefresh={() => props.getData()} />
-      }
-    >
-      <PeoplePageList {...props} />
-    </Kb.ScrollView>
-  </>
+  <Kb.ScrollView
+    style={styles.scrollView}
+    refreshControl={<Kb.NativeRefreshControl refreshing={props.waiting} onRefresh={() => props.getData()} />}
+  >
+    <PeoplePageList {...props} />
+  </Kb.ScrollView>
 )
 
 const styles = styleSheetCreate(() => ({

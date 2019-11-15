@@ -72,7 +72,8 @@ func TestRotateWithBots(t *testing.T) {
 	err = SetRoleRestrictedBot(context.TODO(), tc.G, name, otherB.Username, keybase1.TeamBotSettings{})
 	require.NoError(t, err)
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherA.Login(tc.G))
 	team, err := GetForTestByStringName(context.TODO(), tc.G, name)
 	require.NoError(t, err)
@@ -85,7 +86,8 @@ func TestRotateWithBots(t *testing.T) {
 	err = team.Rotate(context.TODO(), keybase1.RotationType_VISIBLE)
 	require.Error(t, err)
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherB.Login(tc.G))
 	team, err = GetForTestByStringName(context.TODO(), tc.G, name)
 	require.NoError(t, err)
@@ -99,7 +101,8 @@ func TestRotateWithBots(t *testing.T) {
 	err = team.Rotate(context.TODO(), keybase1.RotationType_VISIBLE)
 	require.IsType(t, libkb.NotFoundError{}, err)
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, owner.Login(tc.G))
 	team, err = GetForTestByStringName(context.TODO(), tc.G, name)
 	require.NoError(t, err)
@@ -107,7 +110,8 @@ func TestRotateWithBots(t *testing.T) {
 	require.NoError(t, err)
 
 	// otherA has 2 seeds
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherA.Login(tc.G))
 	after, err := GetForTestByStringName(context.TODO(), tc.G, name)
 	require.NoError(t, err)
@@ -115,7 +119,8 @@ func TestRotateWithBots(t *testing.T) {
 	require.Len(t, after.Data.PerTeamKeySeedsUnverified, 2)
 
 	// otherB has none
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherB.Login(tc.G))
 	after, err = GetForTestByStringName(context.TODO(), tc.G, name)
 	require.NoError(t, err)
@@ -138,7 +143,8 @@ func setupRotateTest(t *testing.T, implicit bool, public bool) (tc libkb.TestCon
 	other, err := kbtest.CreateAndSignupFakeUser("team", tc.G)
 	require.NoError(t, err)
 	usernames = append(usernames, other.Username)
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 
 	owner, err = kbtest.CreateAndSignupFakeUser("team", tc.G)
 	require.NoError(t, err)
@@ -284,7 +290,8 @@ func TestImplicitAdminAfterRotateRequest(t *testing.T) {
 	// after the rotate
 
 	// switch to `otherA` user
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherA.Login(tc.G))
 
 	// otherA has the power to add otherB to the subteam
@@ -347,7 +354,8 @@ func testRotateTeamSweeping(t *testing.T, open bool) {
 
 	otherC, err := kbtest.CreateAndSignupFakeUser("team", tc.G)
 	require.NoError(t, err)
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 
 	t.Logf("Created team %q", name)
 	require.NoError(t, owner.Login(tc.G))
@@ -389,13 +397,15 @@ func testRotateTeamSweeping(t *testing.T, open bool) {
 	// Reset otherA (writer) and otherB (admin). otherA should be
 	// removed if the team is open.
 	for _, u := range []*kbtest.FakeUser{otherA, otherB} {
-		tc.G.Logout(context.TODO())
+		err := tc.Logout()
+		require.NoError(t, err)
 		require.NoError(t, u.Login(tc.G))
 
 		kbtest.ResetAccount(tc, u)
 	}
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	err = owner.Login(tc.G)
 	require.NoError(t, err)
 
@@ -408,7 +418,7 @@ func testRotateTeamSweeping(t *testing.T, open bool) {
 		// If the team is not open, team_rekeyd will not tell us about
 		// reset people.
 		params.ResetUsersUntrusted = []keybase1.TeamCLKRResetUser{
-			keybase1.TeamCLKRResetUser{
+			{
 				Uid:               otherA.User.GetUID(),
 				UserEldestSeqno:   keybase1.Seqno(0),
 				MemberEldestSeqno: keybase1.Seqno(1),
@@ -467,12 +477,14 @@ func TestRotateWithBadUIDs(t *testing.T) {
 	require.NoError(t, SetRoleAdmin(context.Background(), tc.G, name, otherB.Username))
 
 	// Logout and reset (admin member).
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherB.Login(tc.G))
 	kbtest.ResetAccount(tc, otherB)
 
 	// Re-login as owner, simulate CLKR message.
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	err = owner.Login(tc.G)
 	require.NoError(t, err)
 
@@ -520,7 +532,8 @@ func TestRotateResetMultipleUsers(t *testing.T) {
 
 	otherC, err := kbtest.CreateAndSignupFakeUser("team", tc.G)
 	require.NoError(t, err)
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, owner.Login(tc.G))
 
 	err = ChangeTeamSettings(context.Background(), tc.G, name, keybase1.TeamSettings{
@@ -542,7 +555,8 @@ func TestRotateResetMultipleUsers(t *testing.T) {
 	}
 
 	for _, u := range []*kbtest.FakeUser{otherA, otherB, otherC} {
-		tc.G.Logout(context.TODO())
+		err := tc.Logout()
+		require.NoError(t, err)
 		require.NoError(t, u.Login(tc.G))
 
 		if u != otherC {
@@ -559,7 +573,8 @@ func TestRotateResetMultipleUsers(t *testing.T) {
 			})
 	}
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	err = owner.Login(tc.G)
 	require.NoError(t, err)
 
@@ -595,13 +610,15 @@ func TestRotateResetSweepWithWriter(t *testing.T) {
 	require.NoError(t, SetRoleWriter(context.Background(), tc.G, name, otherB.Username))
 
 	// Login as otherB, reset account.
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherB.Login(tc.G))
 	kbtest.ResetAccount(tc, otherB)
 
 	// Login as otherA (writer), simulate CLKR with info about reset
 	// otherB.
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherA.Login(tc.G))
 
 	team, err := GetForTestByStringName(context.Background(), tc.G, name)
@@ -611,7 +628,7 @@ func TestRotateResetSweepWithWriter(t *testing.T) {
 		TeamID:     team.ID,
 		Generation: team.Generation(),
 		ResetUsersUntrusted: []keybase1.TeamCLKRResetUser{
-			keybase1.TeamCLKRResetUser{
+			{
 				Uid:               otherB.User.GetUID(),
 				UserEldestSeqno:   keybase1.Seqno(0),
 				MemberEldestSeqno: keybase1.Seqno(1),
@@ -674,7 +691,8 @@ func TestRotateAsSubteamWriter(t *testing.T) {
 	// otherB should now be a writer
 	assertRole(tc, sub, otherB.Username, keybase1.TeamRole_WRITER)
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherB.Login(tc.G))
 
 	params := keybase1.TeamCLKRMsg{
@@ -698,12 +716,14 @@ func TestDowngradeImplicitAdminAfterReset(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reset and reprovision implicit admin
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherA.Login(tc.G))
 	kbtest.ResetAccount(tc, otherA)
 	require.NoError(t, otherA.Login(tc.G))
 
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, owner.Login(tc.G))
 
 	_, err = GetForTestByStringName(context.Background(), tc.G, root)
@@ -746,13 +766,18 @@ func TestRotationWhenClosingOpenTeam(t *testing.T) {
 
 		currentGen := teamObj.Generation()
 		if rotateWithSettings {
-			err = teamObj.PostTeamSettings(context.Background(), keybase1.TeamSettings{
-				Open: false,
-			}, true /* rotate */)
-			require.NoError(t, err)
-		} else {
 			err = ChangeTeamSettings(context.Background(), tc.G, teamName, keybase1.TeamSettings{
 				Open: false,
+			})
+			require.NoError(t, err)
+		} else {
+			err = teamObj.PostTeamSettings(context.Background(), keybase1.TeamSettings{
+				Open: false,
+			}, false /* rotate */)
+			require.NoError(t, err)
+			err = RotateKey(context.Background(), tc.G, keybase1.TeamRotateKeyArg{
+				TeamID: teamObj.ID,
+				Rt:     keybase1.RotationType_VISIBLE,
 			})
 			require.NoError(t, err)
 		}
@@ -760,15 +785,24 @@ func TestRotationWhenClosingOpenTeam(t *testing.T) {
 		teamObj, err = GetForTestByStringName(context.Background(), tc.G, teamName)
 		require.NoError(t, err)                              // ensures team settings link did not break loading
 		require.Equal(t, currentGen+1, teamObj.Generation()) // and we got new per team key
+		if rotateWithSettings {
+			// Make sure we only posted one link to close.
+			require.EqualValues(t, 2, teamObj.CurrentSeqno())
+		} else {
+			// This one should have posted two links.
+			require.EqualValues(t, 3, teamObj.CurrentSeqno())
+		}
 	}
 
-	// Try to close team using PostTeamSettings(rotate=true) which posts
-	// TeamSettings link with per-team-key in it. So it closes team and rotates
-	// key in one link.
+	// Close team using ChangeTeamSettings service_helper API, which is the
+	// default used by RPC handler, and closes team by using PostTeamSettings
+	// with rotate=true. This should close team and rotate in one sigchain
+	// link.
 	tryCloseTeam(true)
 
-	// Close team using ChangeTeamSettings service_helper API, which posts two
-	// links, to stay compatible with older clients sigchain parsers.
+	// Try to close team "manually" using PostTeamSettings(rotate=false) and
+	// then calling RotateKey. Team will be closed and rotated in two links.
+	// This is what clients used to do prior to 2019-10-02.
 	tryCloseTeam(false)
 }
 
@@ -809,13 +843,15 @@ func TestOpenSweepHandler(t *testing.T) {
 	otherBUV := otherB.User.ToUserVersion()
 
 	// Login as otherB, reset account.
-	tc.G.Logout(context.TODO())
+	err := tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherB.Login(tc.G))
 	kbtest.ResetAccount(tc, otherB)
 
 	// Login as owner, try to simulate OPENSWEEP, should fail because it's a
 	// closed team.
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, owner.Login(tc.G))
 
 	team, err := GetForTestByStringName(context.Background(), tc.G, name)
@@ -828,7 +864,7 @@ func TestOpenSweepHandler(t *testing.T) {
 	params := keybase1.TeamOpenSweepMsg{
 		TeamID: team.ID,
 		ResetUsersUntrusted: []keybase1.TeamCLKRResetUser{
-			keybase1.TeamCLKRResetUser{
+			{
 				Uid:               otherB.User.GetUID(),
 				UserEldestSeqno:   keybase1.Seqno(0),
 				MemberEldestSeqno: otherBUV.EldestSeqno,
@@ -846,14 +882,16 @@ func TestOpenSweepHandler(t *testing.T) {
 
 	// Login as otherA (writer), simulate OPENSWEEP, should fail
 	// because it only works with admins.
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, otherA.Login(tc.G))
 
 	err = HandleOpenTeamSweepRequest(context.Background(), tc.G, params)
 	require.Error(t, err)
 
 	// Back to owner, should work now.
-	tc.G.Logout(context.TODO())
+	err = tc.Logout()
+	require.NoError(t, err)
 	require.NoError(t, owner.Login(tc.G))
 
 	err = HandleOpenTeamSweepRequest(context.Background(), tc.G, params)

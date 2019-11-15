@@ -15,8 +15,10 @@ export type Props<Item> = {
   keyboardShouldPersistTaps?: 'never' | 'always' | 'handled' // mobile only,
   windowSize?: number // Mobile only, has a non-RN default,
   onEndReached?: () => void
-  ListHeaderComponent?: React.ComponentType<any> | React.ReactElement | null // mobile only
+  ListHeaderComponent?: React.ComponentType<any> | React.ReactElement | null
   onEndReachedThreshold?: number // mobile only
+  onScroll?: (e: any) => void // mobile only
+  reAnimated?: boolean // mobile only, make list animated
 }
 
 export default class List<Item> extends React.Component<Props<Item>> {}

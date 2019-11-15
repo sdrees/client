@@ -281,7 +281,8 @@ func (r *root) Lookup(
 		"kbfs.error.txt", "kbfs.nologin.txt", ".kbfs_enable_auto_journals",
 		".kbfs_disable_auto_journals", ".kbfs_enable_block_prefetching",
 		".kbfs_disable_block_prefetching", ".kbfs_enable_debug_server",
-		".kbfs_disable_debug_server", ".kbfs_edit_history":
+		".kbfs_disable_debug_server", ".kbfs_edit_history",
+		".kbfs_open_file_count":
 		return symlink{filepath.Join(mountpoint, req.Name)}, nil
 	}
 	return nil, fuse.ENOENT
@@ -324,9 +325,11 @@ func main() {
 	// mountpoints.  TODO: Read a redirector mountpoint from a
 	// root-owned config file.
 	r := newRoot()
-	if os.Args[1] != fmt.Sprintf("/%s", r.runmodeStr) {
+	if os.Args[1] != fmt.Sprintf("/%s", r.runmodeStr) &&
+		os.Args[1] != fmt.Sprintf("/Volumes/%s", r.runmodeStrFancy) {
 		fmt.Fprintf(os.Stderr, "ERROR: The redirector may only mount at "+
-			"/%s; %s is an invalid mountpoint\n", r.runmodeStr, os.Args[1])
+			"/%s or /Volumes/%s; %s is an invalid mountpoint\n",
+			r.runmodeStr, r.runmodeStrFancy, os.Args[1])
 		os.Exit(1)
 	}
 

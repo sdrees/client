@@ -50,7 +50,7 @@ const DesktopSendAttachmentToChat = (props: Props) => (
           style={desktopStyles.pathItem}
           gap="tiny"
         >
-          <Kbfs.PathItemIcon size={48} path={props.path} badge={Types.PathItemBadgeType.Upload} />
+          <Kbfs.ItemIcon size={48} path={props.path} badgeOverride="iconfont-attachment" />
           <Kb.Text type="BodySmall">{Types.getPathName(props.path)}</Kb.Text>
         </Kb.Box2>
         <DesktopConversationDropdown dropdownButtonStyle={desktopStyles.dropdown} />
@@ -86,53 +86,59 @@ const SendAttachmentToChat = Styles.isMobile
 
 export default SendAttachmentToChat
 
-const mobileStyles = Styles.styleSheetCreate({
-  button: {
-    paddingBottom: Styles.globalMargins.tiny,
-    paddingLeft: Styles.globalMargins.small,
-    paddingRight: Styles.globalMargins.small,
-    paddingTop: Styles.globalMargins.tiny,
-  },
-  filename: {
-    textAlign: 'center',
-  },
-  headerContainer: {
-    minHeight: 44,
-  },
-  headerContent: {
-    flex: 1,
-    flexShrink: 1,
-    padding: Styles.globalMargins.xtiny,
-  },
-})
+const mobileStyles = Styles.styleSheetCreate(
+  () =>
+    ({
+      button: {
+        paddingBottom: Styles.globalMargins.tiny,
+        paddingLeft: Styles.globalMargins.small,
+        paddingRight: Styles.globalMargins.small,
+        paddingTop: Styles.globalMargins.tiny,
+      },
+      filename: {
+        textAlign: 'center',
+      },
+      headerContainer: {
+        minHeight: 44,
+      },
+      headerContent: {
+        flex: 1,
+        flexShrink: 1,
+        padding: Styles.globalMargins.xtiny,
+      },
+    } as const)
+)
 
-const desktopStyles = Styles.styleSheetCreate({
-  belly: {
-    ...Styles.globalStyles.flexGrow,
-    alignItems: 'center',
-    paddingLeft: Styles.globalMargins.large,
-    paddingRight: Styles.globalMargins.large,
-  },
-  container: Styles.platformStyles({
-    isElectron: {
-      height: 480,
-      width: 560,
-    },
-  }),
-  dropdown: {
-    marginBottom: Styles.globalMargins.small,
-    marginTop: Styles.globalMargins.mediumLarge,
-  },
-  footer: {
-    paddingBottom: Styles.globalMargins.large,
-  },
-  header: {
-    paddingTop: Styles.globalMargins.mediumLarge,
-  },
-  input: {
-    width: '100%',
-  },
-  pathItem: {
-    marginTop: Styles.globalMargins.mediumLarge,
-  },
-})
+const desktopStyles = Styles.styleSheetCreate(
+  () =>
+    ({
+      belly: {
+        ...Styles.globalStyles.flexGrow,
+        alignItems: 'center',
+        paddingLeft: Styles.globalMargins.large,
+        paddingRight: Styles.globalMargins.large,
+      },
+      container: Styles.platformStyles({
+        isElectron: {
+          height: 480,
+          width: 560,
+        },
+      }),
+      dropdown: {
+        marginBottom: Styles.globalMargins.small,
+        marginTop: Styles.globalMargins.mediumLarge,
+      },
+      footer: {
+        paddingBottom: Styles.globalMargins.large,
+      },
+      header: {
+        paddingTop: Styles.globalMargins.mediumLarge,
+      },
+      input: {
+        width: '100%',
+      },
+      pathItem: {
+        marginTop: Styles.globalMargins.mediumLarge,
+      },
+    } as const)
+)

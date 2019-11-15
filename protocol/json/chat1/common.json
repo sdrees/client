@@ -2,12 +2,12 @@
   "protocol": "common",
   "imports": [
     {
-      "path": "github.com/keybase/client/go/protocol/gregor1",
+      "path": "../gregor1",
       "type": "idl",
       "import_as": "gregor1"
     },
     {
-      "path": "github.com/keybase/client/go/protocol/keybase1",
+      "path": "../keybase1",
       "type": "idl",
       "import_as": "keybase1"
     }
@@ -160,7 +160,8 @@
         "SENDPAYMENT_14",
         "REQUESTPAYMENT_15",
         "UNFURL_16",
-        "FLIP_17"
+        "FLIP_17",
+        "PIN_18"
       ],
       "go": "nostring"
     },
@@ -290,6 +291,29 @@
       ]
     },
     {
+      "type": "record",
+      "name": "KBFSPath",
+      "fields": [
+        {
+          "type": "int",
+          "name": "startIndex"
+        },
+        {
+          "type": "string",
+          "name": "rawPath"
+        },
+        {
+          "type": "string",
+          "name": "standardPath"
+        },
+        {
+          "type": "keybase1.KBFSPathInfo",
+          "name": "pathInfo"
+        }
+      ],
+      "lint": "ignore"
+    },
+    {
       "type": "enum",
       "name": "ConversationMemberStatus",
       "symbols": [
@@ -307,11 +331,13 @@
       "fields": [
         {
           "type": "bytes",
-          "name": "next"
+          "name": "next",
+          "optional": true
         },
         {
           "type": "bytes",
-          "name": "previous"
+          "name": "previous",
+          "optional": true
         },
         {
           "type": "int",
@@ -319,11 +345,13 @@
         },
         {
           "type": "boolean",
-          "name": "last"
+          "name": "last",
+          "optional": true
         },
         {
           "type": "boolean",
-          "name": "forceFirstPage"
+          "name": "forceFirstPage",
+          "optional": true
         }
       ]
     },
@@ -463,6 +491,10 @@
         {
           "type": "boolean",
           "name": "skipBgLoads"
+        },
+        {
+          "type": "boolean",
+          "name": "allowUnseenQuery"
         }
       ]
     },
@@ -656,6 +688,10 @@
         {
           "type": "ConversationMemberStatus",
           "name": "status"
+        },
+        {
+          "type": "keybase1.TeamRole",
+          "name": "untrustedTeamRole"
         }
       ]
     },
@@ -758,6 +794,13 @@
             "ConversationCreatorInfo"
           ],
           "name": "creatorInfo"
+        },
+        {
+          "type": [
+            null,
+            "MessageID"
+          ],
+          "name": "pinnedMsg"
         },
         {
           "type": "Expunge",
@@ -1665,6 +1708,13 @@
         {
           "type": "int",
           "name": "height"
+        },
+        {
+          "type": {
+            "type": "array",
+            "items": "double"
+          },
+          "name": "audioAmps"
         }
       ]
     },
@@ -1683,16 +1733,10 @@
         {
           "type": "int",
           "name": "durationMs"
-        }
-      ]
-    },
-    {
-      "type": "record",
-      "name": "AssetMetadataAudio",
-      "fields": [
+        },
         {
-          "type": "int",
-          "name": "durationMs"
+          "type": "boolean",
+          "name": "isAudio"
         }
       ]
     },
@@ -1702,8 +1746,7 @@
       "symbols": [
         "NONE_0",
         "IMAGE_1",
-        "VIDEO_2",
-        "AUDIO_3"
+        "VIDEO_2"
       ],
       "go": "nostring"
     },
@@ -1728,13 +1771,6 @@
             "def": false
           },
           "body": "AssetMetadataVideo"
-        },
-        {
-          "label": {
-            "name": "AUDIO",
-            "def": false
-          },
-          "body": "AssetMetadataAudio"
         }
       ]
     },
@@ -1815,6 +1851,24 @@
         "PUBLIC_0",
         "TLFID_MEMBERS_1",
         "TLFID_CONVS_2"
+      ]
+    },
+    {
+      "type": "record",
+      "name": "TeamMember",
+      "fields": [
+        {
+          "type": "gregor1.UID",
+          "name": "uid"
+        },
+        {
+          "type": "keybase1.TeamRole",
+          "name": "role"
+        },
+        {
+          "type": "keybase1.TeamMemberStatus",
+          "name": "status"
+        }
       ]
     }
   ],

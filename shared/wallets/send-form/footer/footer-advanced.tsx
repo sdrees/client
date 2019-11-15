@@ -28,7 +28,11 @@ const FooterAdvanced = () => {
           type="Success"
           label="Send"
           children={
-            <Kb.Icon type="iconfont-stellar-send" color={Styles.globalColors.white} style={styles.icon} />
+            <Kb.Icon
+              type="iconfont-stellar-send"
+              color={Styles.globalColors.whiteOrWhite}
+              style={styles.icon}
+            />
           }
           waitingKey={Constants.sendPaymentAdvancedWaitingKey}
           onClick={onClickSendAdvanced}
@@ -42,7 +46,7 @@ const FooterAdvanced = () => {
   )
 }
 
-const styles = Styles.styleSheetCreate({
+const styles = Styles.styleSheetCreate(() => ({
   buttonBox: Styles.platformStyles({
     common: {
       backgroundColor: Styles.globalColors.blueLighter3,
@@ -56,6 +60,6 @@ const styles = Styles.styleSheetCreate({
   icon: {
     marginRight: Styles.globalMargins.tiny,
   },
-})
+}))
 
 export default FooterAdvanced

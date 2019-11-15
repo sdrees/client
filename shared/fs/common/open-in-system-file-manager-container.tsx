@@ -20,8 +20,8 @@ const mapDispatchToProps = (dispatch, {path}: OwnProps) => ({
 const connected = namedConnect(
   mapStateToProps,
   mapDispatchToProps,
-    (s, d, _: OwnProps) => ({...s, ...d}),
+  (s, d, _: OwnProps) => ({...s, ...d}),
   'ConnectedOpenInSystemFileManager'
 )(OpenInSystemFileManager)
 
-export default (isMobile ? () => null : connected)
+export default isMobile ? () => null : connected

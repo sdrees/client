@@ -3,7 +3,7 @@ import * as Styles from '../../styles'
 import {Box2} from '../../common-adapters'
 import {ImageViewProps} from './image-view'
 
-const ImageView = (props: ImageViewProps) => (
+const ImageView = ({url, onUrlError}: ImageViewProps) => (
   <Box2
     direction="vertical"
     fullWidth={true}
@@ -11,17 +11,25 @@ const ImageView = (props: ImageViewProps) => (
     centerChildren={true}
     style={styles.container}
   >
-    <img src={props.url} draggable={false} style={styles.image} />
+    <img
+      src={url}
+      draggable={false}
+      style={styles.image}
+      onError={onUrlError && (() => onUrlError('video loading error'))}
+    />
   </Box2>
 )
-const styles = Styles.styleSheetCreate({
-  container: {
-    padding: Styles.globalMargins.medium,
-  },
-  image: {
-    maxHeight: '100%',
-    maxWidth: '100%',
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      container: {
+        padding: Styles.globalMargins.medium,
+      },
+      image: {
+        maxHeight: '100%',
+        maxWidth: '100%',
+      },
+    } as const)
+)
 
 export default ImageView

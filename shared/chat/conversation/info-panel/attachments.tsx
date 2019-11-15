@@ -7,7 +7,7 @@ import * as Styles from '../../../styles'
 import {imgMaxWidthRaw} from '../messages/attachment/image/image-render'
 import {formatTimeForMessages} from '../../../util/timestamp'
 import MessagePopup from '../messages/message-popup'
-import {chunk} from 'lodash-es'
+import chunk from 'lodash/chunk'
 import {OverlayParentProps} from '../../../common-adapters/overlay/parent-hoc'
 import {Section} from '.'
 
@@ -126,7 +126,7 @@ const createLoadMoreSection = (
           />
         )
       } else if (status === 'loading') {
-        return <Kb.ProgressIndicator style={styles.loadMoreProgress} />
+        return <Kb.ProgressIndicator type="Small" style={styles.loadMoreProgress} />
       } else if (status === 'error') {
         return (
           <Kb.Button
@@ -205,7 +205,10 @@ export class MediaView {
   }
 
   _formRows = (thumbs: Array<Thumb>): Array<Array<ThumbSizing>> => {
-    return chunk(thumbs.map(thumb => ({sizing: this._resize(thumb), thumb})), rowSize)
+    return chunk(
+      thumbs.map(thumb => ({sizing: this._resize(thumb), thumb})),
+      rowSize
+    )
   }
 
   _monthToSection = (month: Month): Section => {
@@ -263,7 +266,7 @@ class _DocViewRow extends React.Component<DocViewRowProps> {
       <Kb.Box2 direction="vertical" fullWidth={true}>
         <Kb.ClickableBox onClick={item.onDownload} onLongPress={this.props.toggleShowingMenu}>
           <Kb.Box2 direction="horizontal" fullWidth={true} style={styles.docRowContainer} gap="xtiny">
-            <Kb.Icon type={'icon-file-32'} style={Kb.iconCastPlatformStyles(styles.docIcon)} />
+            <Kb.Icon type="icon-file-32" style={Kb.iconCastPlatformStyles(styles.docIcon)} />
             <Kb.Box2 direction="vertical" fullWidth={true} style={styles.docRowTitle}>
               <Kb.Text type="BodySemibold">{item.name}</Kb.Text>
               {item.name !== item.fileName && <Kb.Text type="BodyTiny">{item.fileName}</Kb.Text>}
@@ -472,129 +475,130 @@ export class AttachmentTypeSelector extends React.Component<SelectorProps> {
   }
 }
 
-const styles = Styles.styleSheetCreate({
-  avatar: {
-    marginRight: Styles.globalMargins.tiny,
-  },
-  container: {
-    flex: 1,
-    height: '100%',
-  },
-  docBottom: {
-    padding: Styles.globalMargins.tiny,
-  },
-  docIcon: {
-    height: 32,
-  },
-  docProgress: {
-    alignSelf: 'center',
-  },
-  docRowContainer: {
-    padding: Styles.globalMargins.tiny,
-  },
-  docRowTitle: Styles.platformStyles({
-    common: {
-      flex: 1,
-    },
-    isElectron: {
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    },
-  }),
-  durationContainer: {
-    alignSelf: 'flex-start',
-    bottom: Styles.globalMargins.xtiny,
-    position: 'absolute',
-    right: Styles.globalMargins.xtiny,
-  },
-  filmIcon: {
-    height: 16,
-    width: 16,
-  },
-  linkContainer: {
-    padding: Styles.globalMargins.tiny,
-  },
-  linkStyle: Styles.platformStyles({
-    common: {
-      color: Styles.globalColors.black_50,
-    },
-    isElectron: {
-      fontSize: 13,
-      lineHeight: 17,
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    },
-    isMobile: {
-      fontSize: 15,
-    },
-  }),
-  linkTime: {
-    alignSelf: 'center',
-  },
-  loadMore: {
-    margin: Styles.globalMargins.tiny,
-  },
-  loadMoreProgress: {
-    alignSelf: 'center',
-    height: 16,
-    marginTop: Styles.globalMargins.tiny,
-    width: 16,
-  },
-  loading: {
-    bottom: '50%',
-    left: '50%',
-    marginBottom: -12,
-    marginLeft: -12,
-    marginRight: -12,
-    marginTop: -12,
-    position: 'absolute',
-    right: '50%',
-    top: '50%',
-    width: 24,
-  },
-  selectorContainer: {
-    padding: Styles.globalMargins.small,
-  },
-  selectorDocContainer: {
-    borderColor: Styles.globalColors.blue,
-    borderLeftWidth: 1,
-    borderRadius: 0,
-    borderRightWidth: 1,
-  },
-  selectorItemContainer: Styles.platformStyles({
-    common: {
-      ...Styles.globalStyles.flexBoxColumn,
-      ...Styles.globalStyles.flexBoxCenter,
-      borderBottomWidth: 1,
-      borderColor: Styles.globalColors.blue,
-      borderStyle: 'solid',
-      borderTopWidth: 1,
-      flex: 1,
-      height: 32,
-    },
-    isMobile: {
-      paddingTop: Styles.globalMargins.xxtiny,
-    },
-  }),
-  selectorLinkContainer: {
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: Styles.borderRadius,
-    borderRightWidth: 1,
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: Styles.borderRadius,
-  },
-  selectorMediaContainer: {
-    borderBottomLeftRadius: Styles.borderRadius,
-    borderBottomRightRadius: 0,
-    borderLeftWidth: 1,
-    borderTopLeftRadius: Styles.borderRadius,
-    borderTopRightRadius: 0,
-  },
-  thumbContainer: {
-    overflow: 'hidden',
-    position: 'relative',
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      avatar: {
+        marginRight: Styles.globalMargins.tiny,
+      },
+      container: {
+        flex: 1,
+        height: '100%',
+      },
+      docBottom: {
+        padding: Styles.globalMargins.tiny,
+      },
+      docIcon: {
+        height: 32,
+      },
+      docProgress: {
+        alignSelf: 'center',
+      },
+      docRowContainer: {
+        padding: Styles.globalMargins.tiny,
+      },
+      docRowTitle: Styles.platformStyles({
+        common: {
+          flex: 1,
+        },
+        isElectron: {
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        } as const,
+      }),
+      durationContainer: {
+        alignSelf: 'flex-start',
+        bottom: Styles.globalMargins.xtiny,
+        position: 'absolute',
+        right: Styles.globalMargins.xtiny,
+      },
+      filmIcon: {
+        height: 16,
+        width: 16,
+      },
+      linkContainer: {
+        padding: Styles.globalMargins.tiny,
+      },
+      linkStyle: Styles.platformStyles({
+        common: {
+          color: Styles.globalColors.black_50,
+        },
+        isElectron: {
+          fontSize: 13,
+          lineHeight: 17,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        } as const,
+        isMobile: {
+          fontSize: 15,
+        },
+      }),
+      linkTime: {
+        alignSelf: 'center',
+      },
+      loadMore: {
+        margin: Styles.globalMargins.tiny,
+      },
+      loadMoreProgress: {
+        alignSelf: 'center',
+        marginTop: Styles.globalMargins.tiny,
+      },
+      loading: {
+        bottom: '50%',
+        left: '50%',
+        marginBottom: -12,
+        marginLeft: -12,
+        marginRight: -12,
+        marginTop: -12,
+        position: 'absolute',
+        right: '50%',
+        top: '50%',
+        width: 24,
+      },
+      selectorContainer: {
+        padding: Styles.globalMargins.small,
+      },
+      selectorDocContainer: {
+        borderColor: Styles.globalColors.blue,
+        borderLeftWidth: 1,
+        borderRadius: 0,
+        borderRightWidth: 1,
+      },
+      selectorItemContainer: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.flexBoxColumn,
+          ...Styles.globalStyles.flexBoxCenter,
+          borderBottomWidth: 1,
+          borderColor: Styles.globalColors.blue,
+          borderStyle: 'solid',
+          borderTopWidth: 1,
+          flex: 1,
+          height: 32,
+        },
+        isMobile: {
+          paddingTop: Styles.globalMargins.xxtiny,
+        },
+      }),
+      selectorLinkContainer: {
+        borderBottomLeftRadius: 0,
+        borderBottomRightRadius: Styles.borderRadius,
+        borderRightWidth: 1,
+        borderTopLeftRadius: 0,
+        borderTopRightRadius: Styles.borderRadius,
+      },
+      selectorMediaContainer: {
+        borderBottomLeftRadius: Styles.borderRadius,
+        borderBottomRightRadius: 0,
+        borderLeftWidth: 1,
+        borderTopLeftRadius: Styles.borderRadius,
+        borderTopRightRadius: 0,
+      },
+      thumbContainer: {
+        overflow: 'hidden',
+        position: 'relative',
+      },
+    } as const)
+)
 
 const linkStyleOverride = {
   link: Styles.collapseStyles([styles.linkStyle, {color: Styles.globalColors.blueDark}]),

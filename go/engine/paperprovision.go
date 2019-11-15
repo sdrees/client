@@ -53,8 +53,11 @@ func (e *PaperProvisionEngine) RequiredUIs() []libkb.UIKind {
 func (e *PaperProvisionEngine) Run(m libkb.MetaContext) (err error) {
 	defer m.Trace("PaperProvisionEngine#Run", func() error { return err })()
 
-	// clear out any existing session:
-	e.G().Logout(m.Ctx())
+	// clear out any existing session
+	err = m.LogoutKeepSecrets()
+	if err != nil {
+		m.Debug("error on logout: %+v", err)
+	}
 
 	m = m.WithNewProvisionalLoginContext()
 
@@ -137,7 +140,9 @@ func (e *PaperProvisionEngine) paper(m libkb.MetaContext, keys *libkb.DeviceWith
 	// a cached copy around for DeviceKeyGen, which requires it to be in memory.
 	// It also will establish a NIST so that API calls can proceed on behalf of the user.
 	m = m.WithProvisioningKeyActiveDevice(keys, uv)
-	m.LoginContext().SetUsernameUserVersion(nn, uv)
+	if err := m.LoginContext().SetUsernameUserVersion(nn, uv); err != nil {
+		return err
+	}
 
 	// need lksec to store device keys locally
 	if err := e.fetchLKS(m, keys.EncryptionKey()); err != nil {

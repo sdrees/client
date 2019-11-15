@@ -8,13 +8,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"testing"
+
 	"github.com/keybase/client/go/externalstest"
 	"github.com/keybase/client/go/libkb"
 	"github.com/keybase/client/go/protocol/keybase1"
 	insecureTriplesec "github.com/keybase/go-triplesec-insecure"
 	"github.com/stretchr/testify/require"
-	context "golang.org/x/net/context"
-	"testing"
 )
 
 func SetupEngineTest(tb libkb.TestingTB, name string) libkb.TestContext {
@@ -298,18 +298,6 @@ func AssertProvisioned(tc libkb.TestContext) error {
 	return nil
 }
 
-func AssertNotProvisioned(tc libkb.TestContext) error {
-	m := NewMetaContextForTest(tc)
-	prov, err := isLoggedInWithError(m)
-	if err != nil {
-		return err
-	}
-	if prov {
-		return errors.New("AssertNotProvisioned failed: user is provisioned")
-	}
-	return nil
-}
-
 func AssertLoggedIn(tc libkb.TestContext) error {
 	if !LoggedIn(tc) {
 		return libkb.LoginRequiredError{}
@@ -329,7 +317,8 @@ func LoggedIn(tc libkb.TestContext) bool {
 }
 
 func Logout(tc libkb.TestContext) {
-	if err := tc.G.Logout(context.TODO()); err != nil {
+	mctx := libkb.NewMetaContextForTest(tc)
+	if err := mctx.LogoutKillSecrets(); err != nil {
 		tc.T.Fatalf("logout error: %s", err)
 	}
 }
@@ -348,7 +337,7 @@ func testEngineWithSecretStore(
 	defer tc.Cleanup()
 
 	fu := SignupFakeUserStoreSecret(tc, "wss")
-	tc.SimulateServiceRestart()
+	simulateServiceRestart(t, tc, fu)
 
 	testSecretUI := libkb.TestSecretUI{
 		Passphrase:  fu.Passphrase,

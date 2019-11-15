@@ -88,19 +88,12 @@ func (h *KBFSHandler) FSFavoritesChangedEvent(_ context.Context) (err error) {
 }
 
 func (h *KBFSHandler) FSSubscriptionNotifyEvent(_ context.Context, arg keybase1.FSSubscriptionNotifyEventArg) error {
-	h.G().NotifyRouter.HandleFSSubscriptionNotify(keybase1.FSSubscriptionNotifyArg{
-		SubscriptionID: arg.SubscriptionID,
-		Topic:          arg.Topic,
-	})
+	h.G().NotifyRouter.HandleFSSubscriptionNotify(keybase1.FSSubscriptionNotifyArg(arg))
 	return nil
 }
 
 func (h *KBFSHandler) FSSubscriptionNotifyPathEvent(_ context.Context, arg keybase1.FSSubscriptionNotifyPathEventArg) error {
-	h.G().NotifyRouter.HandleFSSubscriptionNotifyPath(keybase1.FSSubscriptionNotifyPathArg{
-		SubscriptionID: arg.SubscriptionID,
-		Path:           arg.Path,
-		Topic:          arg.Topic,
-	})
+	h.G().NotifyRouter.HandleFSSubscriptionNotifyPath(keybase1.FSSubscriptionNotifyPathArg(arg))
 	return nil
 }
 
@@ -177,7 +170,7 @@ func (h *KBFSHandler) UpgradeTLF(ctx context.Context, arg keybase1.UpgradeTLFArg
 // favorites.
 func (h *KBFSHandler) getKeyFn() func(context.Context) ([32]byte, error) {
 	keyFn := func(ctx context.Context) ([32]byte, error) {
-		return encrypteddb.GetSecretBoxKey(ctx, h.G(), encrypteddb.DefaultSecretUI,
+		return encrypteddb.GetSecretBoxKey(ctx, h.G(),
 			libkb.EncryptionReasonKBFSFavorites, "encrypting kbfs favorites")
 	}
 	return keyFn

@@ -33,6 +33,11 @@
     "changeSendNotification": {
       "namespace": "'teams'",
       "sendNotification": "boolean"
+    },
+    "labelsSeen": {"namespace": "Types.AllowedNamespace"},
+    "tbResetStore": {
+        "namespace": "Types.AllowedNamespace",
+        "_description": "our own reset store so we don't have conflicts with parent reducers"
     }
   }
 }

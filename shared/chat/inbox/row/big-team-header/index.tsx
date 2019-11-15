@@ -4,11 +4,13 @@ import TeamMenu from '../../../conversation/info-panel/menu/container'
 import * as Styles from '../../../../styles'
 import * as RowSizes from '../sizes'
 import * as ChatTypes from '../../../../constants/types/chat2'
+import * as TeamTypes from '../../../../constants/types/teams'
 
 type Props = {
   badgeSubscribe: boolean
   onClick: () => void
   teamname: string
+  teamID: TeamTypes.TeamID
   conversationIDKey: ChatTypes.ConversationIDKey
 } & Kb.OverlayParentProps
 
@@ -22,8 +24,8 @@ class _BigTeamHeader extends React.PureComponent<Props> {
           attachTo={props.getAttachmentRef}
           visible={props.showingMenu}
           onHidden={props.toggleShowingMenu}
-          teamname={props.teamname}
           conversationIDKey={props.conversationIDKey}
+          teamID={props.teamID}
           isSmallTeam={false}
         />
         <Kb.Avatar onClick={props.onClick} teamname={props.teamname} size={32} />
@@ -41,15 +43,15 @@ class _BigTeamHeader extends React.PureComponent<Props> {
           </Kb.Box2>
         </Kb.BoxGrow>
         <Kb.ClickableBox
+          className="hover_container"
           onClick={props.toggleShowingMenu}
           ref={props.setAttachmentRef}
           style={styles.showMenu}
         >
           <Kb.Icon
-            className="Kb.icon"
+            className="hover_contained_color_black"
+            color={Styles.globalColors.black_35}
             type="iconfont-gear"
-            fontSize={iconFontSize}
-            color={Styles.globalColors.black_50}
           />
           <Kb.Box
             style={Styles.collapseStyles([styles.badge, props.badgeSubscribe && styles.badgeVisible])}
@@ -61,53 +63,56 @@ class _BigTeamHeader extends React.PureComponent<Props> {
 }
 
 const BigTeamHeader = Kb.OverlayParentHOC(_BigTeamHeader)
-const iconFontSize = Styles.isMobile ? 20 : 14
 
-const styles = Styles.styleSheetCreate(() => ({
-  badge: {
-    height: 8,
-    position: 'absolute',
-    right: Styles.isMobile ? 4 : 2,
-    top: Styles.isMobile ? 7 : 4,
-    width: 8,
-  },
-  badgeVisible: {
-    backgroundColor: Styles.globalColors.blue,
-    borderColor: Styles.globalColors.blueGrey,
-    borderRadius: Styles.borderRadius,
-    borderStyle: `solid`,
-    borderWidth: 1,
-  },
-  showMenu: {
-    ...Styles.globalStyles.flexBoxRow,
-    padding: 6,
-    position: 'relative',
-  },
-  team: Styles.platformStyles({
-    common: {
-      color: Styles.globalColors.black_50,
-      letterSpacing: 0.2,
-      marginLeft: Styles.globalMargins.tiny,
-      marginRight: Styles.globalMargins.tiny,
-    },
-    isMobile: {backgroundColor: Styles.globalColors.fastBlank},
-  }),
-  teamRowContainer: Styles.platformStyles({
-    common: {
-      ...Styles.globalStyles.flexBoxRow,
-      alignItems: 'center',
-      flexShrink: 0,
-      height: RowSizes.bigHeaderHeight,
-      paddingLeft: Styles.globalMargins.tiny,
-      paddingRight: Styles.globalMargins.tiny,
-    },
-    isElectron: Styles.desktopStyles.clickable,
-  }),
-  teamnameContainer: Styles.platformStyles({
-    isMobile: {
-      height: '100%',
-    },
-  }),
-}))
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      badge: {
+        height: 8,
+        position: 'absolute',
+        right: Styles.isMobile ? 4 : 2,
+        top: Styles.isMobile ? 7 : 4,
+        width: 8,
+      },
+      badgeVisible: {
+        backgroundColor: Styles.globalColors.blue,
+        borderColor: Styles.globalColors.blueGrey,
+        borderRadius: Styles.borderRadius,
+        borderStyle: `solid`,
+        borderWidth: 1,
+      },
+      showMenu: {
+        ...Styles.globalStyles.flexBoxRow,
+        padding: 6,
+        position: 'relative',
+        top: Styles.globalMargins.xxtiny,
+      },
+      team: Styles.platformStyles({
+        common: {
+          color: Styles.globalColors.black_50,
+          letterSpacing: 0.2,
+          marginLeft: Styles.globalMargins.tiny,
+          marginRight: Styles.globalMargins.tiny,
+        },
+        isMobile: {backgroundColor: Styles.globalColors.fastBlank},
+      }),
+      teamRowContainer: Styles.platformStyles({
+        common: {
+          ...Styles.globalStyles.flexBoxRow,
+          alignItems: 'center',
+          flexShrink: 0,
+          height: RowSizes.bigHeaderHeight,
+          paddingLeft: Styles.globalMargins.tiny,
+          paddingRight: Styles.globalMargins.tiny,
+        },
+        isElectron: Styles.desktopStyles.clickable,
+      }),
+      teamnameContainer: Styles.platformStyles({
+        isMobile: {
+          height: '100%',
+        },
+      }),
+    } as const)
+)
 
 export {BigTeamHeader}

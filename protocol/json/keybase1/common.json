@@ -67,6 +67,13 @@
     },
     {
       "type": "record",
+      "name": "VID",
+      "fields": [],
+      "typedef": "string",
+      "lint": "ignore"
+    },
+    {
+      "type": "record",
       "name": "DeviceID",
       "fields": [],
       "typedef": "string"
@@ -98,12 +105,6 @@
     {
       "type": "record",
       "name": "RawPhoneNumber",
-      "fields": [],
-      "typedef": "string"
-    },
-    {
-      "type": "record",
-      "name": "RegionCode",
       "fields": [],
       "typedef": "string"
     },
@@ -418,6 +419,10 @@
           "name": "deviceID"
         },
         {
+          "type": "int",
+          "name": "deviceNumberOfType"
+        },
+        {
           "type": "Time",
           "name": "cTime"
         },
@@ -486,6 +491,24 @@
         "GUI_HELPER_4"
       ],
       "go": "nostring"
+    },
+    {
+      "type": "record",
+      "name": "KBFSPathInfo",
+      "fields": [
+        {
+          "type": "string",
+          "name": "standardPath"
+        },
+        {
+          "type": "string",
+          "name": "deeplinkPath"
+        },
+        {
+          "type": "string",
+          "name": "platformAfterMountPath"
+        }
+      ]
     },
     {
       "type": "record",

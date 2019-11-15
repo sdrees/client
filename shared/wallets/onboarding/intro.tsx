@@ -1,7 +1,6 @@
 import * as React from 'react'
 import * as Kb from '../../common-adapters'
 import * as Styles from '../../styles'
-import {WalletPopup} from '../common'
 
 type IntroProps = {
   headerBody: string
@@ -11,31 +10,44 @@ type IntroProps = {
 }
 
 const Intro = (props: IntroProps) => {
-  const buttons = [
-    <Kb.Button
-      style={Styles.collapseStyles([styles.buttonStyle, {backgroundColor: Styles.globalColors.white}])}
-      fullWidth={true}
-      key={0}
-      type="Dim"
-      onClick={props.onSeenIntro}
-      label="Open your wallet"
-      labelStyle={styles.labelStyle}
-    />,
-  ]
   return (
-    <WalletPopup
-      bottomButtons={buttons}
-      backButtonType="close"
-      onExit={props.onClose}
-      buttonBarDirection="column"
-      containerStyle={styles.container}
+    <Kb.Modal
+      mobileStyle={styles.background}
+      header={
+        Styles.isMobile
+          ? {
+              leftButton: (
+                <Kb.Text style={styles.closeLabelStyle} type="BodyBigLink" onClick={props.onClose}>
+                  Close
+                </Kb.Text>
+              ),
+            }
+          : undefined
+      }
+      footer={{
+        content: (
+          <Kb.ButtonBar direction="column" fullWidth={true}>
+            <Kb.Button
+              style={styles.buttonStyle}
+              fullWidth={true}
+              key={0}
+              type="Dim"
+              onClick={props.onSeenIntro}
+              label="Open your wallet"
+              labelStyle={styles.labelStyle}
+            />
+          </Kb.ButtonBar>
+        ),
+        style: styles.background,
+      }}
+      onClose={props.onClose}
     >
-      <Kb.Box2 direction="vertical" fullWidth={true} centerChildren={true}>
+      <Kb.Box2 direction="vertical" fullWidth={true} centerChildren={true} style={styles.container}>
         <Kb.Text center={true} type="Header" style={styles.headerText}>
           {props.headerTitle || 'Keybase supports Stellar wallets.'}
         </Kb.Text>
 
-        <Kb.Markdown styleOverride={bodyOverride} style={styles.bodyText}>
+        <Kb.Markdown style={styles.bodyText} styleOverride={bodyOverride}>
           {props.headerBody ||
             'You can now send or request Stellar Lumens to any Keybase user on *Earth*. Transactions settle in seconds, and cost a fraction of a penny.\n\nWhen sending and receiving Lumens, we automatically do the conversion in your favorite currency. We went ahead and set it to *USD*.'}
         </Kb.Markdown>
@@ -46,39 +58,50 @@ const Intro = (props: IntroProps) => {
           type="icon-illustration-stellar-payments-200-188"
         />
       </Kb.Box2>
-    </WalletPopup>
+    </Kb.Modal>
   )
 }
 
-const bodyOverride = {
+const bodyOverride = Styles.styleSheetCreate(() => ({
   paragraph: {
     color: Styles.globalColors.white,
-    fontSize: Styles.isMobile ? 16 : 13,
+    fontSize: Styles.isMobile ? 16 : 14,
+    fontWeight: '600',
     textAlign: Styles.isMobile ? ('center' as const) : ('left' as const),
   },
   strong: Styles.globalStyles.fontExtrabold,
-}
+}))
 
-const styles = Styles.styleSheetCreate({
-  bodyText: {color: Styles.globalColors.white, marginBottom: Styles.globalMargins.xsmall},
-  buttonLabelStyle: {color: Styles.globalColors.purpleDark},
-  buttonStyle: {width: '100%'},
-  container: {backgroundColor: Styles.globalColors.purple, padding: Styles.globalMargins.medium},
-  headerText: {
-    color: Styles.globalColors.white,
-    marginBottom: Styles.globalMargins.small,
-    marginTop: Styles.globalMargins.medium,
-  },
-  icon: {
-    position: 'relative',
-    top: -10,
-  },
-  illustration: {
-    paddingBottom: Styles.globalMargins.mediumLarge,
-  },
-  labelStyle: {
-    color: Styles.globalColors.purpleDark,
-  },
-})
+const styles = Styles.styleSheetCreate(
+  () =>
+    ({
+      background: {backgroundColor: Styles.globalColors.purple},
+      bodyText: {
+        color: Styles.globalColors.white,
+        marginBottom: Styles.globalMargins.xsmall,
+        marginTop: Styles.globalMargins.small,
+      },
+      buttonStyle: {backgroundColor: Styles.globalColors.white},
+      closeLabelStyle: {color: Styles.globalColors.white},
+      container: {
+        backgroundColor: Styles.globalColors.purple,
+        paddingBottom: Styles.globalMargins.medium,
+        paddingLeft: Styles.globalMargins.medium,
+        paddingRight: Styles.globalMargins.medium,
+        paddingTop: 0,
+      },
+      headerText: {
+        color: Styles.globalColors.white,
+        marginBottom: Styles.globalMargins.small,
+        marginTop: Styles.globalMargins.medium,
+      },
+      icon: {
+        position: 'relative',
+        top: -10,
+      },
+      illustration: {marginTop: Styles.globalMargins.medium, paddingBottom: Styles.globalMargins.mediumLarge},
+      labelStyle: {color: Styles.globalColors.purpleDark},
+    } as const)
+)
 
 export default Intro

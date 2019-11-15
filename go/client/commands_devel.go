@@ -32,6 +32,7 @@ func getBuildSpecificCommands(cl *libcmdline.CommandLine, g *libkb.GlobalContext
 		newCmdScript(cl, g),
 		NwCmdContacts(cl, g),
 		NewCmdPeopleSearch(cl, g),
+		newCmdTestAirdropReg(cl, g),
 	}
 }
 
@@ -41,6 +42,17 @@ func getBuildSpecificChatCommands(cl *libcmdline.CommandLine, g *libkb.GlobalCon
 		newCmdChatSetRetentionDev(cl, g),
 		newCmdChatKBFSUpgrade(cl, g),
 		newCmdChatProfileSearchDev(cl, g),
+		newCmdChatAddBotMember(cl, g),
+		newCmdChatRemoveBotMember(cl, g),
+		newCmdChatEditBotMember(cl, g),
+		newCmdChatBotMemberSettings(cl, g),
+	}
+}
+
+func getBuildSpecificTeamCommands(cl *libcmdline.CommandLine, g *libkb.GlobalContext) []cli.Command {
+	return []cli.Command{
+		// TODO HOTPOT-599 move to production
+		newCmdTeamBotSettings(cl, g),
 	}
 }
 

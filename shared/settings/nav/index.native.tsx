@@ -1,11 +1,13 @@
 import * as React from 'react'
 import * as TabConstants from '../../constants/tabs'
 import * as Constants from '../../constants/settings'
+import {keybaseFM} from '../../constants/whats-new'
 import {globalStyles, globalColors, globalMargins, styleSheetCreate} from '../../styles'
 import {NativeSectionList, Text} from '../../common-adapters/mobile.native'
 import {isAndroid} from '../../constants/platform'
 import SettingsItem from './settings-item'
 import flags from '../../util/feature-flags'
+import WhatsNewIcon from '../../whats-new/icon/container'
 import {Props} from './index'
 
 const renderItem = ({item}) => {
@@ -13,6 +15,7 @@ const renderItem = ({item}) => {
 }
 
 function SettingsNav(props: Props) {
+  const {badgeNumbers} = props
   return (
     <NativeSectionList
       keyExtractor={(item, index) => item.text + index}
@@ -29,22 +32,28 @@ function SettingsNav(props: Props) {
         {
           data: [
             {
-              badgeNumber: props.badgeNumbers[TabConstants.gitTab],
+              badgeNumber: badgeNumbers.get(TabConstants.gitTab),
               icon: 'iconfont-nav-git',
               onClick: () => props.onTabChange(Constants.gitTab),
               text: 'Git',
             },
             {
-              badgeNumber: props.badgeNumbers[TabConstants.devicesTab],
+              badgeNumber: badgeNumbers.get(TabConstants.devicesTab),
               icon: 'iconfont-nav-devices',
               onClick: () => props.onTabChange(Constants.devicesTab),
               text: 'Devices',
             },
             {
-              badgeNumber: props.badgeNumbers[TabConstants.walletsTab],
+              badgeNumber: badgeNumbers.get(TabConstants.walletsTab),
               icon: 'iconfont-nav-wallets',
               onClick: () => props.onTabChange(Constants.walletsTab),
               text: 'Wallet',
+            },
+            {
+              iconComponent: WhatsNewIcon,
+              onClick: () => props.onTabChange(Constants.whatsNewTab),
+              subText: `What's new?`,
+              text: keybaseFM,
             },
           ],
           title: '',
@@ -52,7 +61,7 @@ function SettingsNav(props: Props) {
         {
           data: [
             {
-              badgeNumber: props.badgeNumbers[TabConstants.settingsTab],
+              badgeNumber: badgeNumbers.get(TabConstants.settingsTab),
               onClick: () => props.onTabChange(Constants.accountTab),
               text: 'Your account',
             },
@@ -76,6 +85,10 @@ function SettingsNav(props: Props) {
               badgeNumber: props.badgeNotifications ? 1 : 0,
               onClick: () => props.onTabChange(Constants.notificationsTab),
               text: 'Notifications',
+            },
+            {
+              onClick: () => props.onTabChange(Constants.displayTab),
+              text: 'Display',
             },
             ...(isAndroid
               ? [
@@ -106,7 +119,7 @@ function SettingsNav(props: Props) {
   )
 }
 
-const styles = styleSheetCreate({
+const styles = styleSheetCreate(() => ({
   sectionTitle: {
     backgroundColor: globalColors.blueLighter3,
     color: globalColors.black_50,
@@ -115,6 +128,6 @@ const styles = styleSheetCreate({
     paddingRight: globalMargins.small,
     paddingTop: 7,
   },
-})
+}))
 
 export default SettingsNav
